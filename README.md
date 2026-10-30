@@ -9,7 +9,7 @@
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-blue)
 ![Version 0.1 beta](https://img.shields.io/badge/version-0.1%20beta-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buymeacoffee)](https://www.buymeacoffee.com/BMC_USERNAME)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=kofi&logoColor=white)](https://ko-fi.com/kuhni)
 
 </div>
 
@@ -187,8 +187,10 @@ Bug reports, ideas and pull requests are welcome. Please read [CONTRIBUTING.md](
 
 ## Support the project
 
-Glint is free and always will be. If it saves you time and you'd like to say thanks, you can
-[buy me a coffee](https://www.buymeacoffee.com/BMC_USERNAME). It's completely voluntary and very much appreciated. ☕
+Glint is free and always will be. If it saves you time and you'd like to say thanks, you can support it on
+[Ko-fi](https://ko-fi.com/kuhni). It's completely voluntary and very much appreciated. ☕
+
+[![Support Glint on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kuhni)
 
 ## License
 
