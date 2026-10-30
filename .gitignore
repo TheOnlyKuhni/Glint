@@ -1,0 +1,9 @@
+.DS_Store
+build/
+DerivedData/
+releases/
+xcuserdata/
+*.xcuserstate
+
+# Local notes, not published
+HANDOFF.md

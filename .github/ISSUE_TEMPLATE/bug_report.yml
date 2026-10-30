@@ -1,0 +1,38 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Press ⇧⌘4
+        2. …
+  - type: input
+    id: glint
+    attributes:
+      label: Glint version
+      description: Settings → About
+      placeholder: "0.1 (1)"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      placeholder: "macOS 15.6, MacBook Air M2"
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log or screenshots
+      description: Optional. Glint's log is in ~/Library/Logs/Glint/glint.log (check it for anything private before pasting).
