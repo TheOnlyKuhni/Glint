@@ -5,5 +5,14 @@
     <link>https://github.com/TheOnlyKuhni/Glint</link>
     <description>Glint updates</description>
     <language>en</language>
+    <item>
+      <title>Version 0.1</title>
+      <pubDate>Fri, 30 Oct 2026 10:34:14 +0000</pubDate>
+      <sparkle:version>1</sparkle:version>
+      <sparkle:shortVersionString>0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/TheOnlyKuhni/Glint/releases/tag/v0.1</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/TheOnlyKuhni/Glint/releases/download/v0.1/Glint-0.1.zip" type="application/octet-stream" sparkle:edSignature="fNAIY76OFOMXyPyNNHbK0IoXRQS79wEVgPZfvpe4nlmCRQ0MBk/dvxxPsKzXvLGFClgdVT5YI17tHY1XyzQzCQ==" length="4428479"/>
+    </item>
   </channel>
 </rss>
