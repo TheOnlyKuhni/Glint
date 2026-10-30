@@ -13,11 +13,11 @@
 			</array>
 		</dict>
 	</array>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string></string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<string>buj7BQs9CE0mjl4zWwE+vv2PO57X/Uwg3uBzxMUUtk4=</string>
 </dict>
 </plist>
