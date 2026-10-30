@@ -1,0 +1,363 @@
+import AVFoundation
+import CoreImage
+import ImageIO
+import ScreenCaptureKit
+import UniformTypeIdentifiers
+
+/// Records a screen area to an H.264 movie with ScreenCaptureKit and AVAssetWriter.
+/// Pausing drops frames and shifts later timestamps back, so the movie has no gap.
+final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
+    struct Options {
+        /// Global CG coordinates, points.
+        var rect: CGRect
+        var screen: NSScreen
+        var frameRate: Int
+        var showsCursor: Bool
+        var systemAudio: Bool
+        /// Microphone device unique ID; empty = no microphone.
+        var microphone: String
+        /// GIFs are recorded silently, then converted.
+        var isGIF: Bool
+    }
+
+    let options: Options
+    let outputURL: URL
+    private var stream: SCStream?
+    private var writer: AVAssetWriter?
+    private var videoInput: AVAssetWriterInput?
+    private var audioInput: AVAssetWriterInput?
+    private var micInput: AVAssetWriterInput?
+    private let queue = DispatchQueue(label: "glint.recorder")
+    // Guarded by `queue`.
+    private var started = false
+    private var paused = false
+    private var pausedTotal = CMTime.zero
+    private var pauseBegan: CMTime?
+    private var lastVideoTime = CMTime.zero
+
+    init(options: Options) {
+        self.options = options
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("GlintRecording-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        outputURL = dir.appendingPathComponent("recording.mp4")
+    }
+
+    /// Pixel size of the movie: the area at the display's scale (or 1x), capped by "Max resolution"; always even.
+    var pixelSize: CGSize {
+        let scale = Defaults[Prefs.recScaleTo1x] || options.isGIF ? 1 : options.screen.backingScaleFactor
+        var size = CGSize(width: options.rect.width * scale, height: options.rect.height * scale)
+        let cap: CGFloat? = switch Defaults[Prefs.recMaxResolution] {
+        case .original: nil
+        case .p2160: 2160
+        case .p1440: 1440
+        case .p1080: 1080
+        case .p720: 720
+        }
+        if let cap, min(size.width, size.height) > cap {
+            let f = cap / min(size.width, size.height)
+            size = CGSize(width: size.width * f, height: size.height * f)
+        }
+        return CGSize(width: max(2, (size.width / 2).rounded() * 2), height: max(2, (size.height / 2).rounded() * 2))
+    }
+
+    func start() async throws {
+        let content = try await ScreenCapturer.content()
+        guard let display = content.displays.first(where: { $0.displayID == options.screen.displayID }) else { throw CaptureError.noDisplay }
+        // Glint's controls stay out of the movie; click highlights and keystrokes are meant to be recorded.
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let excluded = content.windows.filter { $0.owningApplication?.processID == pid && $0.title != RecordingOverlayTitle.recorded }
+        let filter = SCContentFilter(display: display, excludingWindows: excluded)
+        let size = pixelSize
+        let config = SCStreamConfiguration()
+        config.sourceRect = options.rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+        config.width = Int(size.width)
+        config.height = Int(size.height)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(options.frameRate, 1)))
+        config.showsCursor = options.showsCursor
+        config.queueDepth = 6
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.colorSpaceName = CGColorSpace.sRGB
+        if !options.isGIF {
+            config.capturesAudio = options.systemAudio
+            config.excludesCurrentProcessAudio = true
+            config.channelCount = Defaults[Prefs.recMono] ? 1 : 2
+            if #available(macOS 15.0, *), !options.microphone.isEmpty {
+                config.captureMicrophone = true
+                config.microphoneCaptureDeviceID = options.microphone
+            }
+        }
+
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: Int(size.width),
+            AVVideoHeightKey: Int(size.height),
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: Int(size.width * size.height * 6),
+                AVVideoExpectedSourceFrameRateKey: options.frameRate,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+            ],
+        ])
+        video.expectsMediaDataInRealTime = true
+        writer.add(video)
+        let audioSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: Defaults[Prefs.recMono] ? 1 : 2, AVEncoderBitRateKey: 160_000,
+        ]
+        if config.capturesAudio {
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            input.expectsMediaDataInRealTime = true
+            writer.add(input)
+            audioInput = input
+        }
+        if !options.isGIF, !options.microphone.isEmpty {
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            input.expectsMediaDataInRealTime = true
+            writer.add(input)
+            micInput = input
+        }
+        self.writer = writer
+        videoInput = video
+
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        if config.capturesAudio { try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue) }
+        if #available(macOS 15.0, *), micInput != nil { try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue) }
+        self.stream = stream
+        try await stream.startCapture()
+    }
+
+    func setPaused(_ value: Bool) {
+        queue.async { [self] in
+            guard paused != value else { return }
+            paused = value
+            if value { pauseBegan = lastVideoTime }
+        }
+    }
+
+    /// Finishes the movie. Returns nil if nothing was recorded.
+    func stop() async -> URL? {
+        try? await stream?.stopCapture()
+        stream = nil
+        return await withCheckedContinuation { cont in
+            queue.async { [self] in
+                guard let writer, started else { cont.resume(returning: nil); return }
+                videoInput?.markAsFinished()
+                audioInput?.markAsFinished()
+                micInput?.markAsFinished()
+                writer.finishWriting { [outputURL] in cont.resume(returning: writer.status == .completed ? outputURL : nil) }
+            }
+        }
+    }
+
+    func discard() {
+        Task {
+            try? await stream?.stopCapture()
+            queue.async { [self] in
+                writer?.cancelWriting()
+                try? FileManager.default.removeItem(at: outputURL.deletingLastPathComponent())
+            }
+        }
+    }
+
+    // MARK: SCStreamOutput
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard buffer.isValid, let writer else { return }
+        let time = buffer.presentationTimeStamp
+        if type == .screen {
+            // Only complete frames carry new pixels.
+            guard let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+                  let raw = attachments.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete else { return }
+            if !started {
+                guard writer.startWriting() else { glintLog("recorder: \(String(describing: writer.error))"); return }
+                writer.startSession(atSourceTime: time)
+                started = true
+            }
+            if paused { return }
+            if let began = pauseBegan {
+                pausedTotal = pausedTotal + (time - began)
+                pauseBegan = nil
+            }
+            lastVideoTime = time
+            append(buffer, to: videoInput)
+        } else {
+            guard started, !paused else { return }
+            append(buffer, to: type == .audio ? audioInput : micInput)
+        }
+    }
+
+    private func append(_ buffer: CMSampleBuffer, to input: AVAssetWriterInput?) {
+        guard let input, input.isReadyForMoreMediaData else { return }
+        if pausedTotal == .zero { input.append(buffer); return }
+        var timing = CMSampleTimingInfo(duration: buffer.duration, presentationTimeStamp: buffer.presentationTimeStamp - pausedTotal,
+                                        decodeTimeStamp: .invalid)
+        var shifted: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: 1,
+                                              sampleTimingArray: &timing, sampleBufferOut: &shifted)
+        if let shifted { input.append(shifted) }
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: any Error) {
+        glintLog("recorder stopped: \(error.localizedDescription)")
+    }
+}
+
+/// Window titles: Glint windows with this title are recorded (click highlights, keystrokes, webcam).
+enum RecordingOverlayTitle {
+    static let recorded = "GlintRecorded"
+}
+
+/// Converts a recorded movie to a GIF with the GIF settings (frame rate, width, quality).
+/// Movie → GIF: GIF frame rate and width from the settings. "Optimize GIFs" merges repeated frames into longer ones and stores only the pixels that changed
+/// since the previous frame (the rest transparent), which makes screen recordings several times smaller.
+/// "Quality" below High reduces the colors (posterize) for smaller files.
+enum GIFEncoder {
+    /// `width`: the GIF's width (default: the GIF Resolution setting), never wider than the movie.
+    static func encode(movie: URL, to output: URL, range: CMTimeRange? = nil, width maxWidth: Int? = nil) async -> Bool {
+        let asset = AVURLAsset(url: movie)
+        guard let duration = try? await asset.load(.duration), duration.seconds > 0,
+              let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let natural = try? await track.load(.naturalSize) else { return false }
+        let fps = Double(max(Defaults[Prefs.gifFrameRate], 1))
+        let width = min(CGFloat(maxWidth ?? Defaults[Prefs.gifResolution]), natural.width)
+        let size = CGSize(width: width.rounded(), height: (natural.height * width / natural.width).rounded())
+        let optimize = Defaults[Prefs.gifOptimize]
+        let quality = Defaults[Prefs.gifQuality]
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.maximumSize = size
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let start = range?.start.seconds ?? 0
+        let length = range?.duration.seconds ?? duration.seconds
+        let count = max(1, Int(length * fps))
+        guard let dest = CGImageDestinationCreateWithURL(output as CFURL, UTType.gif.identifier as CFString, count, nil) else { return false }
+        CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        let times = (0..<count).map { CMTime(seconds: start + Double($0) / fps, preferredTimescale: 600) }
+        let frameTime = 1 / fps
+        let writer = GIFFrameWriter(destination: dest, size: size, optimize: optimize,
+                                    posterizeLevels: quality >= 0.75 ? nil : Int(6 + quality * 24))
+        for await result in generator.images(for: times) {
+            guard let image = try? result.image else { continue }
+            writer.add(image, duration: frameTime)
+        }
+        writer.flush()
+        guard CGImageDestinationFinalize(dest) else { return false }
+        if optimize { GIFDisposal.keepPreviousFrames(in: output) }
+        return true
+    }
+}
+
+/// ImageIO writes every frame with "restore to background", so frames that store only the changed pixels would show
+/// holes. This walks the GIF's blocks and sets each frame's disposal to "do not dispose" (draw over the previous).
+nonisolated enum GIFDisposal {
+    static func keepPreviousFrames(in url: URL) {
+        guard var bytes = try? [UInt8](Data(contentsOf: url)), bytes.count > 13 else { return }
+        var i = 13
+        let flags = bytes[10]
+        if flags & 0x80 != 0 { i += 3 * (1 << (Int(flags & 0x07) + 1)) }  // global color table
+        func skipSubBlocks(_ j: inout Int) {
+            while j < bytes.count {
+                let n = Int(bytes[j]); j += 1
+                if n == 0 { return }
+                j += n
+            }
+        }
+        while i < bytes.count {
+            switch bytes[i] {
+            case 0x21:  // extension
+                guard i + 2 < bytes.count else { return }
+                if bytes[i + 1] == 0xF9, bytes[i + 2] == 0x04, i + 3 < bytes.count {
+                    bytes[i + 3] = (bytes[i + 3] & ~0x1C) | (1 << 2)
+                }
+                var j = i + 2
+                skipSubBlocks(&j)
+                i = j
+            case 0x2C:  // image descriptor
+                guard i + 9 < bytes.count else { return }
+                let packed = bytes[i + 9]
+                var j = i + 10
+                if packed & 0x80 != 0 { j += 3 * (1 << (Int(packed & 0x07) + 1)) }  // local color table
+                j += 1  // LZW minimum code size
+                skipSubBlocks(&j)
+                i = j
+            default:
+                i = bytes.count  // trailer (0x3B) or unknown
+            }
+        }
+        try? Data(bytes).write(to: url)
+    }
+}
+
+/// Buffers one frame so repeats can extend its delay; writes changed-pixels-only frames when optimizing.
+nonisolated private final class GIFFrameWriter {
+    private let destination: CGImageDestination
+    private let size: CGSize
+    private let optimize: Bool
+    private let posterizeLevels: Int?
+    private let ciContext = CIContext()
+    private var pending: (pixels: [UInt32], delay: Double)?
+    private var previousWritten: [UInt32]?
+
+    init(destination: CGImageDestination, size: CGSize, optimize: Bool, posterizeLevels: Int?) {
+        self.destination = destination
+        self.size = size
+        self.optimize = optimize
+        self.posterizeLevels = posterizeLevels
+    }
+
+    func add(_ image: CGImage, duration: Double) {
+        guard let pixels = pixels(of: prepared(image)) else { return }
+        if let p = pending, optimize, p.pixels == pixels {
+            pending?.delay += duration
+            return
+        }
+        flush()
+        pending = (pixels, duration)
+    }
+
+    func flush() {
+        guard let p = pending else { return }
+        pending = nil
+        var out = p.pixels
+        if optimize, let previous = previousWritten {
+            // Unchanged pixels become transparent: the previous frame shows through.
+            for i in out.indices where out[i] == previous[i] { out[i] = 0 }
+        }
+        previousWritten = p.pixels
+        guard let image = makeImage(out) else { return }
+        let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: p.delay, kCGImagePropertyGIFUnclampedDelayTime: p.delay]] as CFDictionary
+        CGImageDestinationAddImage(destination, image, props)
+    }
+
+    private func prepared(_ image: CGImage) -> CGImage {
+        guard let levels = posterizeLevels else { return image }
+        let ci = CIImage(cgImage: image).applyingFilter("CIColorPosterize", parameters: ["inputLevels": levels])
+        return ciContext.createCGImage(ci, from: ci.extent) ?? image
+    }
+
+    private var w: Int { Int(size.width) }
+    private var h: Int { Int(size.height) }
+
+    /// Opaque RGBA pixels (alpha forced to 255) at the GIF size.
+    private func pixels(of image: CGImage) -> [UInt32]? {
+        var buffer = [UInt32](repeating: 0, count: w * h)
+        let ok = buffer.withUnsafeMutableBytes { raw -> Bool in
+            guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return ok ? buffer : nil
+    }
+
+    private func makeImage(_ pixels: [UInt32]) -> CGImage? {
+        let data = pixels.withUnsafeBytes { Data($0) } as CFData
+        guard let provider = CGDataProvider(data: data) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider, decode: nil,
+                       shouldInterpolate: false, intent: .defaultIntent)
+    }
+}

@@ -1,0 +1,226 @@
+import AppKit
+
+/// What should happen after a capture, either from settings or forced by a shortcut like "Capture Area & Save".
+struct AfterCaptureOptions {
+    var showQuickAccess: Bool
+    var copyToClipboard: Bool
+    var save: Bool
+    var openAnnotate: Bool
+    var pin: Bool
+
+    static func fromSettings(_ kind: CaptureKind = .screenshot) -> AfterCaptureOptions {
+        AfterCaptureOptions(showQuickAccess: Defaults[Prefs.afterCapture(.showQuickAccess, kind)],
+                            copyToClipboard: Defaults[Prefs.afterCapture(.copyToClipboard, kind)],
+                            save: Defaults[Prefs.afterCapture(.save, kind)],
+                            openAnnotate: Defaults[Prefs.afterCapture(.openAnnotate, kind)],
+                            pin: Defaults[Prefs.afterCapture(.pin, kind)])
+    }
+
+    static let copyOnly = AfterCaptureOptions(showQuickAccess: false, copyToClipboard: true, save: false, openAnnotate: false, pin: false)
+    static let saveOnly = AfterCaptureOptions(showQuickAccess: false, copyToClipboard: false, save: true, openAnnotate: false, pin: false)
+    static let annotateOnly = AfterCaptureOptions(showQuickAccess: false, copyToClipboard: false, save: false, openAnnotate: true, pin: false)
+    static let pinOnly = AfterCaptureOptions(showQuickAccess: false, copyToClipboard: false, save: false, openAnnotate: false, pin: true)
+}
+
+enum CaptureOutput {
+    /// Encodes, stores in history and runs the after-capture actions.
+    /// `screenRect`: the captured area in CG (top-left) screen coordinates, when known.
+    static func deliver(_ image: CGImage, scale: CGFloat, options: AfterCaptureOptions? = nil,
+                        windowImage: CGImage? = nil, windowOnWallpaper: Bool = false, windowPadding: CGFloat = 0,
+                        screenRect: CGRect? = nil) {
+        let sourceApp = NSWorkspace.shared.frontmostApplication.flatMap { $0 == .current ? nil : $0.bundleIdentifier }
+        var scale = scale
+        var processed = ImageProcessing.applyOutputSettings(image, scale: &scale)
+        // Background preset from Screenshots settings (hold Shift to skip).
+        let presetIndex = Defaults[Prefs.backgroundPreset], presets = BackgroundStyle.presets
+        if presets.indices.contains(presetIndex), !NSEvent.modifierFlags.contains(.shift) {
+            let size = CGSize(width: CGFloat(processed.width) / scale, height: CGFloat(processed.height) / scale)
+            if let framed = AnnotationRenderer.export(base: processed, imageSize: size, effects: nil, annotations: [],
+                                                      background: presets[presetIndex]) { processed = framed }
+        }
+        let format = Defaults[Prefs.fileFormat]
+        let date = Date()
+        guard let data = ImageEncoder.data(for: processed, format: format, scale: scale) else {
+            glintLog("encoding failed (\(processed.width)x\(processed.height), bpc \(processed.bitsPerComponent), \(String(describing: processed.colorSpace?.name)))")
+            NSSound.beep()
+            return
+        }
+        var name = FileNaming.name(for: date)
+        if Defaults[Prefs.askForName], let asked = FileNaming.askForName(defaultName: name) { name = asked }
+        if Defaults[Prefs.add2xSuffix], scale > 1 { name += "@2x" }
+        let url = HistoryStore.shared.newFileURL(name: name, ext: format.fileExtension, sourceApp: sourceApp)
+        do { try data.write(to: url) } catch {
+            glintLog("failed writing capture: \(error)")
+            NSSound.beep()
+            return
+        }
+        let item = CaptureItem(image: processed, scale: scale, date: date, fileURL: url, kind: .screenshot)
+        item.windowImage = windowImage
+        item.windowOnWallpaper = windowOnWallpaper
+        item.windowPadding = windowPadding
+        item.screenRect = screenRect.map(Geometry.appKitRect(fromCG:))
+        HistoryStore.shared.lastCapture = item
+        SoundPlayer.playShutter()
+
+        let opts = options ?? .fromSettings()
+        glintLog("delivered \(url.lastPathComponent) quickAccess=\(opts.showQuickAccess)")
+        if opts.copyToClipboard { Clipboard.copy(item) }
+        if opts.save { _ = FileSaver.saveToExportLocation(item) }
+        if opts.openAnnotate { AnnotateWindowController.open(item: item) }
+        if opts.pin { PinManager.shared.pin(item) }
+        if opts.showQuickAccess { QuickAccessManager.shared.show(item) }
+    }
+}
+
+extension CaptureOutput {
+    /// A finished recording (movie or GIF): into the history, then the recording after-capture actions.
+    static func deliverRecording(_ file: URL, duration: Double, screenRect: CGRect?) {
+        let sourceApp = NSWorkspace.shared.frontmostApplication.flatMap { $0 == .current ? nil : $0.bundleIdentifier }
+        let date = Date()
+        var name = FileNaming.name(for: date)
+        if Defaults[Prefs.askForName], let asked = FileNaming.askForName(defaultName: name) { name = asked }
+        let url = HistoryStore.shared.newFileURL(name: name, ext: file.pathExtension, sourceApp: sourceApp)
+        do { try FileManager.default.moveItem(at: file, to: url) } catch {
+            glintLog("failed storing recording: \(error)")
+            NSSound.beep()
+            return
+        }
+        guard let item = CaptureItem.loadRecording(url, date: date) else { NSSound.beep(); return }
+        if duration > 0 { item.duration = duration }
+        HistoryStore.shared.lastCapture = item
+        let opts = AfterCaptureOptions.fromSettings(.recording)
+        glintLog("delivered recording \(url.lastPathComponent)")
+        if opts.copyToClipboard { Clipboard.copy(item) }
+        if opts.save { _ = FileSaver.saveToExportLocation(item) }
+        if Defaults[Prefs.afterCapture(.openVideoEditor, .recording)] { VideoEditorWindowController.open(url: url) }
+        if opts.showQuickAccess { QuickAccessManager.shared.show(item) }
+    }
+}
+
+enum FileNaming {
+    /// Expands the "File name format" template: {yyyy} {MM} {dd} {HH} {mm} {ss} are date fields.
+    static func name(for date: Date, template: String = Defaults[Prefs.fileNameFormat]) -> String {
+        var result = template
+        let cal = Calendar.current
+        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        let fields: [String: String] = [
+            "{yyyy}": String(format: "%04d", c.year ?? 0), "{MM}": String(format: "%02d", c.month ?? 0),
+            "{dd}": String(format: "%02d", c.day ?? 0), "{HH}": String(format: "%02d", c.hour ?? 0),
+            "{mm}": String(format: "%02d", c.minute ?? 0), "{ss}": String(format: "%02d", c.second ?? 0),
+        ]
+        for (k, v) in fields { result = result.replacingOccurrences(of: k, with: v) }
+        return result.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+    }
+
+    static func askForName(defaultName: String) -> String? {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "Name your capture"
+        let field = NSTextField(string: defaultName)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Use Default")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+}
+
+enum Clipboard {
+    static func copy(_ item: CaptureItem) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        let entry = NSPasteboardItem()
+        let mode = Defaults[Prefs.clipboardMode]
+        // Recordings are copied as files (a GIF also as GIF data, so it pastes animated).
+        if item.isRecording {
+            entry.setString(item.fileURL.absoluteString, forType: .fileURL)
+            if item.isGIF, let data = try? Data(contentsOf: item.fileURL) { entry.setData(data, forType: NSPasteboard.PasteboardType("com.compuserve.gif")) }
+            pb.writeObjects([entry])
+            return
+        }
+        if mode != .image { entry.setString(item.fileURL.absoluteString, forType: .fileURL) }
+        if mode != .file {
+            if let png = ImageEncoder.data(for: item.image, format: .png, scale: item.scale) { entry.setData(png, forType: .png) }
+            if let tiff = item.nsImage.tiffRepresentation { entry.setData(tiff, forType: .tiff) }
+        }
+        pb.writeObjects([entry])
+    }
+}
+
+enum FileSaver {
+    static var exportDirectory: URL {
+        let path = Defaults[Prefs.exportLocation]
+        if !path.isEmpty, FileManager.default.fileExists(atPath: path) { return URL(fileURLWithPath: path, isDirectory: true) }
+        return FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+    }
+
+    @discardableResult
+    static func saveToExportLocation(_ item: CaptureItem) -> URL? {
+        save(item, to: exportDirectory)
+    }
+
+    static func saveWithPanel(_ item: CaptureItem) -> URL? {
+        NSApp.activate()
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = item.fileURL.lastPathComponent
+        panel.directoryURL = exportDirectory
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return copy(item.fileURL, to: url)
+    }
+
+    static func save(_ item: CaptureItem, to directory: URL) -> URL? {
+        let target = uniqueURL(directory.appendingPathComponent(item.fileURL.lastPathComponent))
+        return copy(item.fileURL, to: target)
+    }
+
+    private static func copy(_ source: URL, to target: URL) -> URL? {
+        do {
+            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            try FileManager.default.copyItem(at: source, to: target)
+            return target
+        } catch {
+            glintLog("save failed: \(error)")
+            NSSound.beep()
+            return nil
+        }
+    }
+
+    static func uniqueURL(_ url: URL) -> URL {
+        var candidate = url
+        var n = 1
+        let base = url.deletingPathExtension().lastPathComponent, ext = url.pathExtension
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = url.deletingLastPathComponent().appendingPathComponent("\(base) (\(n)).\(ext)")
+            n += 1
+        }
+        return candidate
+    }
+}
+
+enum SoundPlayer {
+    private static let systemDir = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/"
+    private static var cache: [ShutterSound: NSSound] = [:]
+
+    static func playShutter() {
+        guard Defaults[Prefs.playSounds] else { return }
+        play(Defaults[Prefs.shutterSound])
+    }
+
+    static func play(_ sound: ShutterSound) {
+        if cache[sound] == nil {
+            let path = switch sound {
+            case .systemDefault: systemDir + "Screen Capture.aif"
+            case .grab: systemDir + "Grab.aif"
+            case .shutter: systemDir + "Shutter.aif"
+            case .pop: "/System/Library/Sounds/Pop.aiff"
+            case .tink: "/System/Library/Sounds/Tink.aiff"
+            }
+            cache[sound] = NSSound(contentsOfFile: path, byReference: true)
+        }
+        cache[sound]?.stop()
+        cache[sound]?.play()
+    }
+}
