@@ -290,6 +290,9 @@ struct AboutSettingsView: View {
                 link("chevron.left.forwardslash.chevron.right", "Source Code on GitHub") {
                     NSWorkspace.shared.open(URL(string: "https://github.com/TheOnlyKuhni/Glint")!)
                 }
+                link("cup.and.saucer", "Support Glint on Ko-fi") {
+                    NSWorkspace.shared.open(URL(string: "https://ko-fi.com/kuhni")!)
+                }
                 link("doc.text", "Acknowledgements") {
                     if let url = Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt") { NSWorkspace.shared.open(url) }
                 }
