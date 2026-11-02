@@ -26,7 +26,7 @@ final class RecordPanelModel: ObservableObject {
 }
 
 struct RecordPanelActions {
-    var record: (_ gif: Bool) -> Void
+    var record: (RecordMode) -> Void
     var resize: (CGSize) -> Void
     var fullScreen: () -> Void
     var ratioChanged: () -> Void
@@ -102,15 +102,15 @@ struct RecordPanel: View {
             .overlay(RoundedRectangle(cornerRadius: Self.corner, style: .continuous).strokeBorder(Self.line, lineWidth: 0.5))
 
             VStack(spacing: 0) {
-                recordRow(gif: true, title: "Record GIF", keys: "⌥↩") { model.actions?.record(true) }
+                recordRow(gif: true, title: "Record GIF", keys: "⌥↩") { model.actions?.record(.gif) }
                 Rectangle().fill(Self.line).frame(height: 1)
-                recordRow(gif: false, title: "Record Video", keys: "↩") { model.actions?.record(false) }
+                recordRow(gif: false, title: "Record Video", keys: "↩") { model.actions?.record(.video) }
             }
             .background(Self.fill)
             .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Self.corner, style: .continuous).strokeBorder(Self.line, lineWidth: 0.5))
 
-            StudioButton()
+            StudioButton(model: model)
         }
         .frame(width: 253)
         .padding(10)
@@ -299,25 +299,43 @@ struct SizeField: View {
     }
 }
 
-/// "Record in Studio Mode": a capsule with a soft pink glow travelling around its edge (one loop ≈ 4 s).
+/// "Record in Studio Mode": a capsule with a soft pink glow travelling around its edge (one loop ≈ 4 s). The "?"
+/// explains what Studio Mode is.
 private struct StudioButton: View {
+    @ObservedObject var model: RecordPanelModel
+    @State private var showsInfo = false
+
     var body: some View {
-        Button { ComingSoon.show("Studio Mode") } label: {
-            HStack(spacing: 13) {
-                Image(systemName: "movieclapper.fill").font(.system(size: 13)).frame(width: 24)
-                Text("Record in Studio Mode").font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
-                Spacer()
-                Image(systemName: "questionmark.circle.fill").font(.system(size: 14)).foregroundStyle(Color.white, Color.white.opacity(0.25))
+        // Two buttons side by side on one capsule: if the "?" sat on top of the record button, accessibility
+        // (which finds controls by position) pressed the record button instead and started a recording.
+        HStack(spacing: 0) {
+            Button { model.actions?.record(.studio) } label: {
+                HStack(spacing: 13) {
+                    Image(systemName: "movieclapper.fill").font(.system(size: 13)).frame(width: 24)
+                    Text("Record in Studio Mode").font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-            .background(Capsule().fill(RecordPanel.fill))
-            .overlay(Capsule().strokeBorder(RecordPanel.line, lineWidth: 0.5))
-            .overlay(glow)
-            .contentShape(Capsule())
+            .buttonStyle(PanelPressStyle())
+            .help("Record the screen as an editable project: zooms, cursor, clicks, keystrokes and camera can all be changed afterwards")
+            Button { showsInfo.toggle() } label: {
+                Image(systemName: "questionmark.circle.fill").font(.system(size: 14)).foregroundStyle(Color.white, Color.white.opacity(0.25))
+                    .frame(width: 30, height: 40).contentShape(Rectangle())
+            }
+            .buttonStyle(PanelPressStyle())
+            .help("What is Studio Mode?")
+            .accessibilityLabel("What is Studio Mode?")
+            .padding(.trailing, 6)
+            .popover(isPresented: $showsInfo, arrowEdge: .bottom) { StudioInfo() }
         }
-        .buttonStyle(PanelPressStyle())
+        .foregroundStyle(.white)
+        .frame(height: 40)
+        .background(Capsule().fill(RecordPanel.fill))
+        .overlay(Capsule().strokeBorder(RecordPanel.line, lineWidth: 0.5))
+        .overlay(glow)
     }
 
     private var glow: some View {
@@ -330,6 +348,37 @@ private struct StudioButton: View {
                                               center: .center, angle: angle), lineWidth: 2)
                 .blur(radius: 3)
                 .allowsHitTesting(false)
+        }
+    }
+}
+
+/// "What is Studio Mode?": what it records and what can be changed afterwards.
+private struct StudioInfo: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "movieclapper.fill").font(.system(size: 15)).foregroundStyle(.pink)
+                Text("What is Studio Mode?").font(.system(size: 14, weight: .semibold))
+            }
+            Text("Studio Mode records your screen as an editable project, so you keep full control after recording. "
+                 + "Add smooth zooms that follow the cursor, change the cursor and click effects, show keystrokes and place your camera — "
+                 + "then export a polished video.")
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 7) {
+                row("plus.magnifyingglass", "Automatic zooms that follow your cursor")
+                row("cursorarrow.motionlines", "Smooth cursor, size, style and click effects")
+                row("command.square", "Keystrokes, styled after recording")
+                row("video", "Camera size, shape and position")
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+
+    private func row(_ symbol: String, _ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .medium)).frame(width: 18)
+            Text(text).font(.system(size: 12.5))
         }
     }
 }

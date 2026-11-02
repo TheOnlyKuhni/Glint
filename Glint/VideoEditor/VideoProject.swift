@@ -7,17 +7,26 @@ struct VideoClip: Equatable, Identifiable, Codable {
     var id = UUID()
     var start: Double
     var end: Double
-    var duration: Double { end - start }
+    nonisolated var duration: Double { end - start }
 }
 
 /// A zoom on the output timeline (seconds): it eases in, holds `scale` around `center` (0…1, top-left origin) and
-/// eases out again before `end`.
+/// eases out again before `end`. `follow` (Studio Mode recordings): it looks where the cursor is instead.
 struct VideoZoom: Equatable, Identifiable, Codable {
-    let id = UUID()
+    var id = UUID()
     var start: Double
     var end: Double
     var scale: Double = 1.5
     var center = CGPoint(x: 0.5, y: 0.5)
+    var follow = false
+}
+
+extension VideoZoom {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: c.value(.id, or: UUID()), start: try c.decode(Double.self, forKey: .start), end: try c.decode(Double.self, forKey: .end),
+                  scale: c.value(.scale, or: 1.5), center: c.value(.center, or: CGPoint(x: 0.5, y: 0.5)), follow: c.value(.follow, or: false))
+    }
 }
 
 /// The Background section: the screenshot editor's fills around the video, with padding, shadow and corners.
@@ -49,6 +58,21 @@ struct VideoEdit: Equatable, Codable {
     var volume: Double = 1
     /// "Include audio": off plays and exports the video silent.
     var includeAudio = true
+    /// Studio Mode recordings: how the cursor, keystrokes and camera are drawn.
+    var cursor = CursorSettings()
+    var keystrokes = KeystrokeSettings()
+    var camera = CameraSettings()
+}
+
+extension VideoEdit {
+    /// Settings saved by older versions miss the newer fields: those take their defaults.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = VideoEdit()
+        self.init(clips: c.value(.clips, or: d.clips), zooms: c.value(.zooms, or: d.zooms), background: c.value(.background, or: d.background),
+                  zoomAnimation: c.value(.zoomAnimation, or: d.zoomAnimation), motionBlur: c.value(.motionBlur, or: d.motionBlur),
+                  volume: c.value(.volume, or: d.volume), includeAudio: c.value(.includeAudio, or: d.includeAudio),
+                  cursor: c.value(.cursor, or: d.cursor), keystrokes: c.value(.keystrokes, or: d.keystrokes), camera: c.value(.camera, or: d.camera))
+    }
 }
 
 /// One editing session: the source movie and every edit, from which the preview and the export are built.
@@ -61,6 +85,12 @@ final class VideoProject: ObservableObject {
     private(set) var hasAudio = false
 
     @Published var edit = VideoEdit() { didSet { if edit != oldValue { changed() } } }
+    /// A Studio Mode recording's pointer, keys and camera (nil for ordinary recordings).
+    private(set) var studio: StudioRecording?
+    private(set) var cursorImages: [CGImage?] = []
+    private(set) var cameraAsset: AVURLAsset?
+    var isStudio: Bool { studio != nil }
+    var hasCamera: Bool { cameraAsset != nil }
     var clips: [VideoClip] { get { edit.clips } set { edit.clips = newValue } }
     var zooms: [VideoZoom] { get { edit.zooms } set { edit.zooms = newValue } }
     var background: VideoBackground { get { edit.background } set { edit.background = newValue } }
@@ -96,6 +126,32 @@ final class VideoProject: ObservableObject {
         generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 30)
         generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 30)
         return try? await generator.image(at: CMTime(seconds: source, preferredTimescale: 600)).image
+    }
+
+    /// Loads a Studio Mode recording's data from its folder (pictures of the cursors, the camera movie).
+    func attachStudio(_ studio: StudioRecording, folder: URL) {
+        self.studio = studio
+        cursorImages = studio.cursors.map { cursor in
+            guard let source = CGImageSourceCreateWithURL(folder.appendingPathComponent(cursor.file) as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        if let camera = studio.camera, FileManager.default.fileExists(atPath: folder.appendingPathComponent(camera).path) {
+            cameraAsset = AVURLAsset(url: folder.appendingPathComponent(camera), options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        }
+    }
+
+    /// A Studio Mode recording opened for the first time: automatic zooms, and the cursor, keystroke and camera
+    /// settings the recorder had.
+    func applyStudioDefaults() {
+        guard let studio else { return }
+        var next = edit
+        next.zooms = StudioZooms.make(studio, duration: sourceDuration)
+        next.cursor.ripple = studio.highlightedClicks
+        next.keystrokes.show = studio.showedKeystrokes && !studio.keys.isEmpty
+        next.camera.shape = min(max(studio.cameraShape, 0), 3)
+        next.camera.size = [0.65, 1, 1.3, 1.95][min(max(studio.cameraSize, 0), 3)]
+        next.camera.flip = studio.cameraFlipped
+        restoreSaved(next)
     }
 
     /// A saved edit reopened: its settings come back (undo starts from here).
@@ -279,7 +335,59 @@ final class VideoProject: ObservableObject {
         return VideoRenderSettings(sourceSize: sourceSize, canvasSize: canvas.size, card: canvas.card, backdrop: backdrop,
                                    shadow: background.isVisible ? background.shadow : 0,
                                    cornerRadius: background.corners * VideoBackground.maxCornerFraction * min(canvas.card.width, canvas.card.height),
-                                   zooms: zooms, animation: zoomAnimation, motionBlur: Double(motionBlur) / 3, outputScale: outputScale)
+                                   zooms: zooms, animation: zoomAnimation, motionBlur: Double(motionBlur) / 3, outputScale: outputScale,
+                                   overlay: makeOverlay())
+    }
+
+    // MARK: Studio Mode
+
+    private var pathCache: (key: String, path: CursorPath)?
+
+    /// The cursor's smoothed path over the source (cached until the movement or hiding settings change).
+    private func cursorPath() -> CursorPath? {
+        guard let studio else { return nil }
+        let c = edit.cursor
+        let key = "\(c.movement)|\(c.hideWhenIdle)|\(c.hideWhenTyping)"
+        if let pathCache, pathCache.key == key { return pathCache.path }
+        let path = CursorPath.make(studio, mouse: studio.mouse.sorted { $0.t < $1.t }, duration: sourceDuration, settings: c)
+        pathCache = (key, path)
+        return path
+    }
+
+    private func makeOverlay() -> StudioOverlay? {
+        guard let studio, let path = cursorPath() else { return nil }
+        var follow: [UUID: FollowPath] = [:]
+        for zoom in zooms where zoom.follow { follow[zoom.id] = followPath(zoom, cursor: path) }
+        return StudioOverlay(studio: studio, cursorImages: cursorImages, path: path, edit: edit, follow: follow)
+    }
+
+    /// Where a follow-cursor zoom looks: it keeps the cursor inside the zoomed view, panning only once the cursor
+    /// comes within 20% of the view's edge, and glides there smoothly.
+    private func followPath(_ zoom: VideoZoom, cursor: CursorPath) -> FollowPath {
+        let view = 1 / max(zoom.scale, 1)
+        let half = view / 2, margin = view * 0.2
+        let steps = max(Int((zoom.end - zoom.start) * 60) + 2, 2)
+        func cursorAt(_ t: Double) -> CGPoint {
+            let source = locate(t)?.source ?? t
+            return cursor.at(source)?.point ?? CGPoint(x: 0.5, y: 0.5)
+        }
+        func clamp(_ v: Double) -> Double { min(max(v, half), 1 - half) }
+        let first = cursorAt(zoom.start)
+        var cx = clamp(first.x), cy = clamp(first.y)
+        var centers: [CGPoint] = []
+        centers.reserveCapacity(steps)
+        let follow = 1 - exp(-6.0 / 60)
+        for i in 0..<steps {
+            let p = cursorAt(zoom.start + Double(i) / 60)
+            let reach = half - margin
+            var tx = cx, ty = cy
+            if p.x > cx + reach { tx = p.x - reach } else if p.x < cx - reach { tx = p.x + reach }
+            if p.y > cy + reach { ty = p.y - reach } else if p.y < cy - reach { ty = p.y + reach }
+            cx = clamp(cx + (tx - cx) * follow)
+            cy = clamp(cy + (ty - cy) * follow)
+            centers.append(CGPoint(x: cx, y: cy))
+        }
+        return FollowPath(start: zoom.start, centers: centers)
     }
 
     /// The backdrop for the editor preview (cached per fill; shown aspect-filled behind the video).
@@ -336,12 +444,26 @@ final class VideoProject: ObservableObject {
         video.preferredTransform = try await source.load(.preferredTransform)
         let audio = audioTracks.compactMap { _ in composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) }
         var at = CMTime.zero
+        var starts: [CMTime] = []
         for clip in clips {
             let range = CMTimeRange(start: CMTime(seconds: clip.start, preferredTimescale: 600),
                                     end: CMTime(seconds: clip.end, preferredTimescale: 600))
             try video.insertTimeRange(range, of: source, at: at)
             for (track, sourceAudio) in zip(audio, audioTracks) { try? track.insertTimeRange(range, of: sourceAudio, at: at) }
+            starts.append(at)
             at = at + range.duration
+        }
+        // Studio Mode: the camera as a second video track, lined up with the same clips.
+        if let cameraAsset, let cameraSource = try await cameraAsset.loadTracks(withMediaType: .video).first,
+           let camera = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            let length = try await cameraAsset.load(.duration).seconds
+            let offset = studio?.cameraOffset ?? 0
+            for (clip, start) in zip(clips, starts) {
+                let a = max(clip.start, offset), b = min(clip.end, offset + length)
+                guard b - a > 0.02 else { continue }
+                let range = CMTimeRange(start: CMTime(seconds: a - offset, preferredTimescale: 600), end: CMTime(seconds: b - offset, preferredTimescale: 600))
+                try? camera.insertTimeRange(range, of: cameraSource, at: start + CMTime(seconds: a - clip.start, preferredTimescale: 600))
+            }
         }
         return (composition, audio.isEmpty ? nil : audioMix(for: audio))
     }
@@ -373,6 +495,8 @@ struct VideoRenderSettings: @unchecked Sendable {
     var motionBlur: Double
     /// Export at a lower resolution than the canvas.
     var outputScale: CGFloat
+    /// Studio Mode: cursor, clicks, keystrokes, camera and the follow-cursor zoom paths.
+    var overlay: StudioOverlay?
 }
 
 /// Draws one output frame: zoom into the video, then place it on the background (corners, shadow).
@@ -422,9 +546,10 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
 
     /// What a zoom shows (unit rect, top-left origin): a rectangle 1/scale in size centered on the
     /// focus point, pushed back inside the frame per axis when the point is near an edge (x and y independently).
-    static func zoomTarget(_ z: VideoZoom) -> CGRect {
+    static func zoomTarget(_ z: VideoZoom, at t: Double = 0, follow: [UUID: FollowPath] = [:]) -> CGRect {
         let size = 1 / max(z.scale, 1)
-        return CGRect(x: min(max(z.center.x - size / 2, 0), 1 - size), y: min(max(z.center.y - size / 2, 0), 1 - size),
+        let center = z.follow ? follow[z.id]?.center(at: t) ?? z.center : z.center
+        return CGRect(x: min(max(center.x - size / 2, 0), 1 - size), y: min(max(center.y - size / 2, 0), 1 - size),
                       width: size, height: size)
     }
 
@@ -440,7 +565,8 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
     /// ~0.55 s ramps at the start and end of a zoom block (Smooth: nearly linear; Dynamic: a
     /// quicker steep ease-in-out). Zooms that touch (e.g. after "Split") glide from one view to the next instead of
     /// zooming out and back in.
-    static func zoomRect(at t: Double, zooms: [VideoZoom], animation: ZoomAnimation) -> (rect: CGRect, velocity: Double) {
+    static func zoomRect(at t: Double, zooms: [VideoZoom], animation: ZoomAnimation,
+                         follow: [UUID: FollowPath] = [:]) -> (rect: CGRect, velocity: Double) {
         let sorted = zooms.sorted { $0.start < $1.start }
         let full = CGRect(x: 0, y: 0, width: 1, height: 1)
         func ease(_ p: Double) -> Double {
@@ -454,8 +580,8 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
             let ramp = min(animation == .smooth ? 0.55 : 0.32, (z.end - z.start) / 2)
             let touchesPrevious = i > 0 && abs(sorted[i - 1].end - z.start) < 0.05
             let next = i + 1 < sorted.count && abs(sorted[i + 1].start - z.end) < 0.05 ? sorted[i + 1] : nil
-            let target = zoomTarget(z)
-            if let next, t > z.end - ramp { return blend(target, zoomTarget(next), ease((t - (z.end - ramp)) / ramp)) }
+            let target = zoomTarget(z, at: t, follow: follow)
+            if let next, t > z.end - ramp { return blend(target, zoomTarget(next, at: t, follow: follow), ease((t - (z.end - ramp)) / ramp)) }
             if !touchesPrevious, t < z.start + ramp { return blend(full, target, ease((t - z.start) / ramp)) }
             if next == nil, t > z.end - ramp { return blend(full, target, ease((z.end - t) / ramp)) }
             return target
@@ -464,7 +590,7 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
         return (now, Double(abs(next.width - now.width) + abs(next.minX - now.minX) + abs(next.minY - now.minY)) * 60)
     }
 
-    func render(_ source: CIImage, time: Double) -> CIImage {
+    func render(_ source: CIImage, camera: CIImage? = nil, time: Double) -> CIImage {
         lock.lock()
         let s = settings
         if base == nil { makeLayers(s) }
@@ -474,7 +600,8 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
         // Zoom: crop around the center and scale back up to the video's size.
         var video = source.transformed(by: CGAffineTransform(translationX: -source.extent.minX, y: -source.extent.minY))
         let w = s.sourceSize.width, h = s.sourceSize.height
-        let zoom = Self.zoomRect(at: time, zooms: s.zooms, animation: s.animation)
+        let follow = s.overlay?.follow ?? [:]
+        let zoom = Self.zoomRect(at: time, zooms: s.zooms, animation: s.animation, follow: follow)
         func zoomed(_ rect: CGRect) -> CIImage {
             guard rect.width < 0.999 else { return video }
             let scale = 1 / rect.width
@@ -494,7 +621,7 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
             var average: CIImage?
             for k in 0..<samples {
                 let dt = (Double(k) / Double(samples - 1) - 0.5) * shutter
-                let layer = zoomed(Self.zoomRect(at: time + dt, zooms: s.zooms, animation: s.animation).rect)
+                let layer = zoomed(Self.zoomRect(at: time + dt, zooms: s.zooms, animation: s.animation, follow: follow).rect)
                 average = average.map {
                     $0.applyingFilter("CIDissolveTransition", parameters: [kCIInputTargetImageKey: layer, kCIInputTimeKey: 1.0 / Double(k + 1)])
                 } ?? layer
@@ -502,6 +629,11 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
             video = (average ?? zoomed(zoom.rect)).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
         } else {
             video = zoomed(zoom.rect)
+        }
+
+        if let overlay = s.overlay {
+            video = overlay.draw(on: video, size: CGSize(width: w, height: h), zoom: zoom.rect, time: time, camera: camera)
+                .cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
         }
 
         var output = video
@@ -543,12 +675,16 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
         return ctx.makeImage().map { CIImage(cgImage: $0) }
     }
 
-    /// The preview/export composition: every frame goes through `render`.
+    /// The preview/export composition: every frame goes through `render` (`GlintVideoCompositor`), with the camera
+    /// track of a Studio Mode recording when there is one.
     static func videoComposition(for asset: AVAsset, renderer: VideoFrameRenderer, renderSize: CGSize, frameRate: Double) async throws -> AVMutableVideoComposition {
-        let composition = try await AVMutableVideoComposition.videoComposition(with: asset) { request in
-            let image = renderer.render(request.sourceImage, time: request.compositionTime.seconds)
-            request.finish(with: image, context: nil)
-        }
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        guard let screen = tracks.first else { throw CocoaError(.fileReadCorruptFile) }
+        let duration = try await asset.load(.duration)
+        let composition = AVMutableVideoComposition()
+        composition.customVideoCompositorClass = GlintVideoCompositor.self
+        composition.instructions = [GlintCompositionInstruction(timeRange: CMTimeRange(start: .zero, duration: duration), renderer: renderer,
+                                                                screenTrack: screen.trackID, cameraTrack: tracks.count > 1 ? tracks[1].trackID : nil)]
         composition.renderSize = renderSize
         // At most 60 fps: variable-rate screen recordings report up to 120.
         composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(min(max(frameRate, 1), 60).rounded()))

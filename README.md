@@ -54,6 +54,8 @@ names are trademarks of their respective owners.
 - **Record:** screen or window as video or GIF, with microphone and system audio, camera overlay, highlighted clicks
   and keystrokes, and Do Not Disturb while recording.
 - **Video editor:** trim and cut, zooms, background, padding, corners and shadow, export to video or GIF.
+- **Studio Mode:** record the screen as an editable project: automatic zooms that follow the cursor, cursor size,
+  style, smoothing and click effects, keystrokes and the camera, all adjustable after recording.
 - **Quick Access:** a floating stack of your latest captures to copy, save, annotate, pin or drag anywhere.
 - **Pin to the Screen** and **Capture History** to restore earlier captures.
 - **URL scheme** (`glint://capture-area`, `glint://open-annotate?filepath=…`, …) for automation.

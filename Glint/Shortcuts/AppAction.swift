@@ -8,7 +8,7 @@ enum AppAction: String, CaseIterable, Identifiable {
     case captureArea, capturePreviousArea, captureFullscreen, captureWindow, selfTimer
     case captureAreaCopy, captureAreaSave, captureAreaAnnotate, captureAreaPin
     // Screen Recording
-    case recordScreen, pauseRecording, restartRecording, toggleCameraFullscreen
+    case recordScreen, recordStudio, pauseRecording, restartRecording, toggleCameraFullscreen
     // Scrolling Capture
     case scrollingCapture
     // OCR
@@ -38,6 +38,7 @@ enum AppAction: String, CaseIterable, Identifiable {
         case .captureAreaAnnotate: "Capture Area & Annotate"
         case .captureAreaPin: "Capture Area & Pin to the Screen"
         case .recordScreen: "Record Screen / Stop Recording"
+        case .recordStudio: "Start Studio Mode Recording"
         case .pauseRecording: "Pause/Resume Recording"
         case .restartRecording: "Restart Recording"
         case .toggleCameraFullscreen: "Toggle Camera Fullscreen"
@@ -90,7 +91,7 @@ struct ShortcutSection: Identifiable {
               groups: [[.captureArea, .capturePreviousArea, .captureFullscreen, .captureWindow, .selfTimer],
                        [.captureAreaCopy, .captureAreaSave, .captureAreaAnnotate, .captureAreaPin]]),
         .init(title: "Screen Recording", symbol: "video.fill",
-              groups: [[.recordScreen, .pauseRecording, .restartRecording, .toggleCameraFullscreen]]),
+              groups: [[.recordScreen, .recordStudio, .pauseRecording, .restartRecording, .toggleCameraFullscreen]]),
         .init(title: "Scrolling Capture", symbol: "computermouse.fill", groups: [[.scrollingCapture]]),
         .init(title: "OCR", symbol: "text.viewfinder",
               groups: [[.captureText, .captureTextWithLineBreaks, .captureTextWithoutLineBreaks]]),

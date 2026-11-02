@@ -300,7 +300,16 @@ final class VideoTimelineView: NSView {
                                                         .foregroundColor: selected ? NSColor.white : NSColor(white: 0.7, alpha: 1)]
             let text = "Zoom \(Int((z.scale * 100).rounded()))%" as NSString
             let size = text.size(withAttributes: attrs)
-            if size.width + 12 < r.width { text.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attrs) }
+            // Follow-cursor zooms carry a cursor symbol before the level.
+            let icon = z.follow ? Self.followIcon(selected: selected) : nil
+            let iconWidth: CGFloat = icon == nil ? 0 : 16
+            if size.width + iconWidth + 12 < r.width {
+                let x = r.midX - (size.width + iconWidth) / 2
+                icon?.draw(in: CGRect(x: x, y: r.midY - 6.5, width: 12, height: 13))
+                text.draw(at: CGPoint(x: x + iconWidth, y: r.midY - size.height / 2), withAttributes: attrs)
+            } else if let icon, r.width > 18 {
+                icon.draw(in: CGRect(x: r.midX - 6, y: r.midY - 6.5, width: 12, height: 13))
+            }
         }
     }
 
@@ -717,7 +726,7 @@ final class VideoTimelineView: NSView {
                 project.zooms[i].start = z0
                 project.zooms[i].end = z1
             } else if z1 - z0 > 0.15 {
-                let zoom = VideoZoom(start: z0, end: z1)
+                let zoom = VideoZoom(start: z0, end: z1, follow: project.isStudio)
                 project.zooms.append(zoom)
                 state.selectedZoom = zoom.id
                 drag = .createZoom(start: start, id: zoom.id)
@@ -760,7 +769,7 @@ final class VideoTimelineView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         if case .createZoom(let start, let id) = drag, id == nil, let ghost = ghostZoom(at: CGPoint(x: x(start), y: p.y)) ?? hoverZoom {
             // A click adds the zoom the ghost showed.
-            let zoom = VideoZoom(start: ghost.start, end: ghost.end)
+            let zoom = VideoZoom(start: ghost.start, end: ghost.end, follow: project.isStudio)
             project.zooms.append(zoom)
             state.selectedZoom = zoom.id
         }
@@ -796,6 +805,12 @@ final class VideoTimelineView: NSView {
 
     // MARK: Context menu and keys
 
+    private static func followIcon(selected: Bool) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+            .applying(.init(paletteColors: [selected ? .white : NSColor(white: 0.7, alpha: 1)]))
+        return NSImage(systemSymbolName: "cursorarrow", accessibilityDescription: "Follows the cursor")?.withSymbolConfiguration(config)
+    }
+
     /// Right-click: Remove on a zoom; Split / Delete on a clip.
     override func menu(for event: NSEvent) -> NSMenu? {
         let p = convert(event.locationInWindow, from: nil)
@@ -827,6 +842,10 @@ final class VideoTimelineView: NSView {
             menu.addItem(levels)
             menu.addItem(.separator())
             menu.addItem(ClosureMenuItem(title: "Remove") { [weak self] in self?.removeZoom(zoom.id) })
+            menu.addItem(ClosureMenuItem(title: "Remove All Zooms") { [weak self] in
+                self?.state.selectedZoom = nil
+                self?.project.zooms = []
+            })
         } else if p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight, let (i, _) = project.locate(t) {
             let id = project.clips[i].id
             state.selectedClip = id
@@ -849,7 +868,7 @@ final class VideoTimelineView: NSView {
             start = other.end
         }
         guard start + length <= project.duration + 0.001 else { NSSound.beep(); return }
-        var copy = VideoZoom(start: start, end: start + length, scale: zoom.scale, center: zoom.center)
+        var copy = VideoZoom(start: start, end: start + length, scale: zoom.scale, center: zoom.center, follow: zoom.follow)
         copy.end = min(copy.end, project.duration)
         project.zooms.append(copy)
         state.selectedZoom = copy.id
@@ -862,7 +881,7 @@ final class VideoTimelineView: NSView {
         guard t > zoom.start + 0.3, t < zoom.end - 0.3 else { return }
         var edit = project.edit
         edit.zooms[i].end = t
-        edit.zooms.append(VideoZoom(start: t, end: zoom.end, scale: zoom.scale, center: zoom.center))
+        edit.zooms.append(VideoZoom(start: t, end: zoom.end, scale: zoom.scale, center: zoom.center, follow: zoom.follow))
         project.edit = edit
     }
 

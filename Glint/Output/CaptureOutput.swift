@@ -95,6 +95,28 @@ extension CaptureOutput {
         if Defaults[Prefs.afterCapture(.openVideoEditor, .recording)] { VideoEditorWindowController.open(url: url) }
         if opts.showQuickAccess { QuickAccessManager.shared.show(item) }
     }
+
+    /// A Studio Mode recording: the video (without the cursor) goes into the history with its `Studio` folder next to
+    /// it, and the video editor opens (its Save puts the finished video into Quick Access).
+    static func deliverStudioRecording(_ file: URL, studio folder: URL, duration: Double) {
+        let sourceApp = NSWorkspace.shared.frontmostApplication.flatMap { $0 == .current ? nil : $0.bundleIdentifier }
+        let date = Date()
+        let url = HistoryStore.shared.newFileURL(name: FileNaming.name(for: date), ext: file.pathExtension, sourceApp: sourceApp)
+        do {
+            try FileManager.default.moveItem(at: file, to: url)
+            try FileManager.default.moveItem(at: folder, to: StudioRecording.folder(for: url))
+        } catch {
+            glintLog("failed storing studio recording: \(error)")
+            NSSound.beep()
+            return
+        }
+        if let item = CaptureItem.loadRecording(url, date: date) {
+            if duration > 0 { item.duration = duration }
+            HistoryStore.shared.lastCapture = item
+        }
+        glintLog("delivered studio recording \(url.lastPathComponent)")
+        VideoEditorWindowController.open(url: url)
+    }
 }
 
 enum FileNaming {

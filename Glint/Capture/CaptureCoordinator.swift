@@ -34,6 +34,7 @@ final class CaptureCoordinator {
             if let last = HistoryStore.shared.lastCapture { QuickAccessManager.shared.show(last) } else { NSSound.beep() }
         case .openHistory: CaptureHistory.shared.show()
         case .recordScreen: RecordingController.shared.toggle()
+        case .recordStudio: RecordingController.shared.toggle(studio: true)
         case .pauseRecording: RecordingController.shared.togglePause()
         case .restartRecording: RecordingController.shared.restart()
         case .scrollingCapture: ScrollingCapture.shared.start()

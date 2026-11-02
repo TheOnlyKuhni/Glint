@@ -22,6 +22,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     let options: Options
     let outputURL: URL
+    /// Video time for event timestamps (Studio Mode lines the pointer, keys and camera up with it).
+    let clock: RecordingClock
     private var stream: SCStream?
     private var writer: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
@@ -35,8 +37,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var pauseBegan: CMTime?
     private var lastVideoTime = CMTime.zero
 
-    init(options: Options) {
+    init(options: Options, clock: RecordingClock = RecordingClock()) {
         self.options = options
+        self.clock = clock
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("GlintRecording-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         outputURL = dir.appendingPathComponent("recording.mp4")
@@ -131,7 +134,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.async { [self] in
             guard paused != value else { return }
             paused = value
-            if value { pauseBegan = lastVideoTime }
+            if value {
+                pauseBegan = lastVideoTime
+                clock.paused(at: lastVideoTime.seconds)
+            }
         }
     }
 
@@ -173,11 +179,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 guard writer.startWriting() else { glintLog("recorder: \(String(describing: writer.error))"); return }
                 writer.startSession(atSourceTime: time)
                 started = true
+                clock.started(at: time.seconds)
             }
             if paused { return }
             if let began = pauseBegan {
                 pausedTotal = pausedTotal + (time - began)
                 pauseBegan = nil
+                clock.resumed(at: time.seconds)
             }
             lastVideoTime = time
             append(buffer, to: videoInput)

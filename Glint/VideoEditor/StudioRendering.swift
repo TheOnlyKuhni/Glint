@@ -1,0 +1,698 @@
+import AppKit
+import AVFoundation
+import CoreImage
+
+// MARK: - Settings (part of `VideoEdit`, so undoable and saved with the edit)
+
+enum CursorStyle: String, Codable, CaseIterable {
+    /// The cursors exactly as they looked while recording.
+    case system, bold, light, touch
+    var title: String {
+        switch self {
+        case .system: "macOS"
+        case .bold: "Bold"
+        case .light: "Light"
+        case .touch: "Touch"
+        }
+    }
+}
+
+enum CursorMovement: String, Codable { case natural, smooth }
+
+enum RippleColor: String, Codable, CaseIterable {
+    case blue, purple, pink, orange, yellow, green, gray
+    var title: String { rawValue.capitalized }
+    nonisolated var color: NSColor {
+        switch self {
+        case .blue: .systemBlue
+        case .purple: .systemPurple
+        case .pink: .systemPink
+        case .orange: .systemOrange
+        case .yellow: .systemYellow
+        case .green: .systemGreen
+        case .gray: .systemGray
+        }
+    }
+}
+
+/// Where keystrokes or the camera sit in the video.
+enum OverlayCorner: String, Codable, CaseIterable {
+    case topLeft, topRight, bottomLeft, bottom, bottomRight
+    var title: String {
+        switch self {
+        case .topLeft: "Top left"
+        case .topRight: "Top right"
+        case .bottomLeft: "Bottom left"
+        case .bottom: "Bottom"
+        case .bottomRight: "Bottom right"
+        }
+    }
+    nonisolated var isTop: Bool { self == .topLeft || self == .topRight }
+}
+
+struct CursorSettings: Equatable, Codable {
+    var show = true
+    /// 0.5…3 (100% = as recorded).
+    var size: Double = 1.5
+    var style: CursorStyle = .system
+    var movement: CursorMovement = .smooth
+    /// The cursor shrinks a little while a button is held.
+    var pressEffect = true
+    var ripple = false
+    var rippleColor: RippleColor = .blue
+    var rippleFilled = false
+    var hideWhenIdle = false
+    var hideWhenTyping = false
+}
+
+struct KeystrokeSettings: Equatable, Codable {
+    var show = false
+    /// 0.5…2.
+    var size: Double = 1
+    var light = false
+    var position: OverlayCorner = .bottom
+    /// Off: only shortcuts (with ⌘, ⌥ or ⌃) and special keys.
+    var allKeys = false
+}
+
+struct CameraSettings: Equatable, Codable {
+    var show = true
+    /// 0.5…2 (relative to the recorder's Medium).
+    var size: Double = 1
+    /// Circle, square, rectangle, vertical (the recorder's shapes).
+    var shape = 0
+    var position: OverlayCorner = .bottomRight
+    var flip = true
+    var shrinkOnZoom = true
+}
+
+extension KeyedDecodingContainer {
+    /// The value, or `fallback` when it's missing (edits saved by older versions) or unreadable.
+    func value<T: Decodable>(_ key: Key, or fallback: T) -> T { ((try? decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback }
+}
+
+extension CursorSettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = CursorSettings()
+        self.init(show: c.value(.show, or: d.show), size: c.value(.size, or: d.size), style: c.value(.style, or: d.style),
+                  movement: c.value(.movement, or: d.movement), pressEffect: c.value(.pressEffect, or: d.pressEffect),
+                  ripple: c.value(.ripple, or: d.ripple), rippleColor: c.value(.rippleColor, or: d.rippleColor),
+                  rippleFilled: c.value(.rippleFilled, or: d.rippleFilled), hideWhenIdle: c.value(.hideWhenIdle, or: d.hideWhenIdle),
+                  hideWhenTyping: c.value(.hideWhenTyping, or: d.hideWhenTyping))
+    }
+}
+
+extension KeystrokeSettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = KeystrokeSettings()
+        self.init(show: c.value(.show, or: d.show), size: c.value(.size, or: d.size), light: c.value(.light, or: d.light),
+                  position: c.value(.position, or: d.position), allKeys: c.value(.allKeys, or: d.allKeys))
+    }
+}
+
+extension CameraSettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = CameraSettings()
+        self.init(show: c.value(.show, or: d.show), size: c.value(.size, or: d.size), shape: c.value(.shape, or: d.shape),
+                  position: c.value(.position, or: d.position), flip: c.value(.flip, or: d.flip),
+                  shrinkOnZoom: c.value(.shrinkOnZoom, or: d.shrinkOnZoom))
+    }
+}
+
+// MARK: - Automatic zooms
+
+/// The zooms a Studio Mode recording opens with: one around every burst of activity (clicks inside the area, typing),
+/// following the cursor. Close bursts share one zoom.
+enum StudioZooms {
+    static let scale = 1.8
+
+    static func make(_ studio: StudioRecording, duration: Double) -> [VideoZoom] {
+        var windows: [(Double, Double)] = []
+        for m in studio.mouse where m.k == .down && (0...1).contains(m.x) && (0...1).contains(m.y) {
+            windows.append((m.t - 0.6, m.t + 1.6))
+        }
+        // Typing: keys less than 1.2 s apart, at least three of them.
+        var run: [Double] = []
+        func flush() {
+            if run.count >= 3, let a = run.first, let b = run.last { windows.append((a - 0.5, b + 1.0)) }
+            run = []
+        }
+        for key in studio.keys.sorted(by: { $0.t < $1.t }) {
+            if let last = run.last, key.t - last > 1.2 { flush() }
+            run.append(key.t)
+        }
+        flush()
+        var merged: [(Double, Double)] = []
+        for w in windows.sorted(by: { $0.0 < $1.0 }) {
+            if let last = merged.last, w.0 - last.1 < 1.0 { merged[merged.count - 1].1 = max(last.1, w.1) } else { merged.append(w) }
+        }
+        return merged.compactMap { w in
+            let start = max(w.0, 0)
+            let end = min(max(w.1, start + 2), duration)
+            guard end - start >= 1 else { return nil }
+            return VideoZoom(start: start, end: end, scale: scale, follow: true)
+        }
+    }
+}
+
+// MARK: - The overlay data for one render settings snapshot
+
+/// Where a follow-cursor zoom looks over its time (output timeline, 60 samples a second).
+nonisolated struct FollowPath: Sendable {
+    let start: Double
+    let centers: [CGPoint]
+    func center(at t: Double) -> CGPoint {
+        guard !centers.isEmpty else { return CGPoint(x: 0.5, y: 0.5) }
+        let f = max((t - start) * 60, 0)
+        let i = min(Int(f), centers.count - 1), j = min(i + 1, centers.count - 1)
+        let k = CGFloat(min(f - Double(i), 1))
+        return CGPoint(x: centers[i].x + (centers[j].x - centers[i].x) * k, y: centers[i].y + (centers[j].y - centers[i].y) * k)
+    }
+}
+
+/// The cursor over source time, sampled 120× a second: smoothed position, how visible it is.
+nonisolated struct CursorPath: Sendable {
+    static let rate = 120.0
+    var xs: [Float] = []
+    var ys: [Float] = []
+    var alpha: [Float] = []
+
+    func at(_ t: Double) -> (point: CGPoint, alpha: Double)? {
+        guard !xs.isEmpty else { return nil }
+        let f = max(t * Self.rate, 0)
+        let i = min(Int(f), xs.count - 1), j = min(i + 1, xs.count - 1)
+        let k = Float(min(f - Double(i), 1))
+        return (CGPoint(x: CGFloat(xs[i] + (xs[j] - xs[i]) * k), y: CGFloat(ys[i] + (ys[j] - ys[i]) * k)),
+                Double(alpha[i] + (alpha[j] - alpha[i]) * k))
+    }
+
+    static func make(_ studio: StudioRecording, mouse: [StudioRecording.Mouse], duration: Double, settings: CursorSettings) -> CursorPath {
+        guard !mouse.isEmpty else { return CursorPath() }
+        let n = Int(duration * rate) + 2
+        let dt = 1 / rate
+        var path = CursorPath()
+        path.xs.reserveCapacity(n)
+        path.ys.reserveCapacity(n)
+        path.alpha.reserveCapacity(n)
+        // Natural keeps the motion as recorded (only jitter goes); Smooth glides behind it.
+        let omega = settings.movement == .smooth ? 9.0 : 40.0
+        var i = 0
+        var x = mouse[0].x, y = mouse[0].y, vx = 0.0, vy = 0.0
+        var lastRaw = (mouse[0].x, mouse[0].y)
+        var lastMove = 0.0
+        var typingHidden = false
+        var keyIndex = 0
+        let keys = studio.keys.map(\.t).sorted()
+        var visible = 1.0
+        var held = false
+        // Presses, so the cursor can be on the spot when each one happens (the spring alone trails the pointer and
+        // reached a click only after its ripple had appeared beside it).
+        let presses = mouse.filter { $0.k == .down || $0.k == .rightDown }
+        var pressIndex = 0
+        var lastRelease = 0.0
+        for step in 0..<n {
+            let t = Double(step) * dt
+            while i + 1 < mouse.count, mouse[i + 1].t <= t {
+                i += 1
+                switch mouse[i].k {
+                case .down, .rightDown: held = true; lastMove = t
+                case .up, .rightUp: held = false; lastMove = t; lastRelease = t
+                default: break
+                }
+            }
+            // The recorded position: straight between close samples, held across gaps.
+            var raw = (mouse[i].x, mouse[i].y)
+            if i + 1 < mouse.count, t > mouse[i].t {
+                let a = mouse[i], b = mouse[i + 1], span = b.t - a.t
+                if span > 0, span < 0.25 { let k = (t - a.t) / span; raw = (a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k) }
+            }
+            if abs(raw.0 - lastRaw.0) + abs(raw.1 - lastRaw.1) > 0.0005 { lastMove = t; typingHidden = false }
+            lastRaw = raw
+            while keyIndex < keys.count, keys[keyIndex] <= t {
+                keyIndex += 1
+                if settings.hideWhenTyping { typingHidden = true }
+            }
+            // A critically damped spring towards the recorded position. In the last 0.35 s before a press (not reaching
+            // back past the previous release) it heads for the press point instead, tighter, so it arrives in time;
+            // while a button is held the cursor is exactly on the pointer (clicks and drags land where they did).
+            while pressIndex < presses.count, presses[pressIndex].t <= t { pressIndex += 1 }
+            var target = raw
+            var w = omega
+            if !held, pressIndex < presses.count, presses[pressIndex].t - t < 0.35, t >= lastRelease {
+                target = (presses[pressIndex].x, presses[pressIndex].y)
+                w = max(omega, 25)
+            }
+            vx += (w * w * (target.0 - x) - 2 * w * vx) * dt
+            vy += (w * w * (target.1 - y) - 2 * w * vy) * dt
+            x += vx * dt
+            y += vy * dt
+            if step == 0 || held { x = raw.0; y = raw.1; vx = 0; vy = 0 }
+            let shows = !(settings.hideWhenIdle && !held && t - lastMove > 1.5) && !typingHidden
+            visible = shows ? min(1, visible + dt / 0.15) : max(0, visible - dt / 0.3)
+            path.xs.append(Float(x))
+            path.ys.append(Float(y))
+            path.alpha.append(Float(visible))
+        }
+        return path
+    }
+}
+
+/// A keystroke label on screen from `start` to `end` (source time).
+nonisolated struct KeyLabel: Sendable {
+    var start: Double
+    var end: Double
+    var text: String
+
+    static func make(_ keys: [StudioRecording.Key], allKeys: Bool) -> [KeyLabel] {
+        var labels: [KeyLabel] = []
+        var typing: KeyLabel?
+        func endTyping() { if let t = typing { labels.append(t) }; typing = nil }
+        for key in keys.sorted(by: { $0.t < $1.t }) {
+            let flags = NSEvent.ModifierFlags(rawValue: key.flags)
+            let shortcut = flags.contains(.command) || flags.contains(.control) || flags.contains(.option)
+            let special = Self.special(key.code)
+            if !shortcut, special == nil, allKeys {
+                // Plain typing becomes one growing label (its last 24 characters).
+                if var t = typing, key.t - t.end < 0.2 {
+                    t.text = String((t.text + key.chars).suffix(24))
+                    t.end = key.t + 1.2
+                    typing = t
+                } else {
+                    endTyping()
+                    typing = KeyLabel(start: key.t, end: key.t + 1.2, text: key.chars)
+                }
+                continue
+            }
+            guard shortcut || (allKeys && special != nil) || (special != nil && !flags.isDisjoint(with: [.command, .control, .option])) else { continue }
+            endTyping()
+            var parts: [String] = []
+            if flags.contains(.control) { parts.append("⌃") }
+            if flags.contains(.option) { parts.append("⌥") }
+            if flags.contains(.shift) { parts.append("⇧") }
+            if flags.contains(.command) { parts.append("⌘") }
+            parts.append(special ?? key.chars.uppercased())
+            labels.append(KeyLabel(start: key.t, end: key.t + 1.2, text: parts.joined(separator: " ")))
+        }
+        endTyping()
+        // A new label replaces the one before it.
+        for i in labels.indices.dropLast() where labels[i].end > labels[i + 1].start { labels[i].end = labels[i + 1].start }
+        return labels
+    }
+
+    private static func special(_ code: Int) -> String? {
+        switch code {
+        case 36, 76: "↩"
+        case 48: "⇥"
+        case 49: "Space"
+        case 51: "⌫"
+        case 117: "⌦"
+        case 53: "esc"
+        case 123: "←"
+        case 124: "→"
+        case 125: "↓"
+        case 126: "↑"
+        case 115: "↖"
+        case 119: "↘"
+        case 116: "⇞"
+        case 121: "⇟"
+        default: nil
+        }
+    }
+}
+
+/// Everything the renderer needs to draw a Studio Mode recording's cursor, clicks, keystrokes and camera, plus the
+/// follow-cursor zoom paths. Made on the main thread for each look change; read from rendering threads.
+nonisolated final class StudioOverlay: @unchecked Sendable {
+    struct Click { var t: Double; var x: Double; var y: Double; var up: Double }
+
+    let cursor: CursorSettings
+    let keystrokes: KeystrokeSettings
+    let camera: CameraSettings
+    /// The recorded area in points.
+    let area: CGSize
+    let path: CursorPath
+    let mouse: [StudioRecording.Mouse]
+    let clicks: [Click]
+    let cursors: [StudioRecording.Cursor]
+    let cursorImages: [CGImage?]
+    let labels: [KeyLabel]
+    let clips: [VideoClip]
+    private let clipStarts: [Double]
+    let follow: [UUID: FollowPath]
+
+    private let lock = NSLock()
+    private var labelCache: [String: CIImage] = [:]
+    private var maskCache: [String: CIImage] = [:]
+    private static let styled: [CursorStyle: (image: CGImage, hot: CGPoint, size: CGSize)] = {
+        var result: [CursorStyle: (CGImage, CGPoint, CGSize)] = [:]
+        for style in [CursorStyle.bold, .light, .touch] { if let c = StyledCursor.make(style) { result[style] = c } }
+        return result
+    }()
+
+    init(studio: StudioRecording, cursorImages: [CGImage?], path: CursorPath, edit: VideoEdit, follow: [UUID: FollowPath]) {
+        cursor = edit.cursor
+        keystrokes = edit.keystrokes
+        camera = edit.camera
+        area = CGSize(width: max(studio.areaWidth, 1), height: max(studio.areaHeight, 1))
+        self.path = path
+        mouse = studio.mouse.sorted { $0.t < $1.t }
+        var clicks: [Click] = []
+        for (i, m) in mouse.enumerated() where m.k == .down || m.k == .rightDown {
+            let upKind: StudioRecording.Kind = m.k == .down ? .up : .rightUp
+            let up = mouse[(i + 1)...].first { $0.k == upKind }?.t ?? m.t + 0.1
+            clicks.append(Click(t: m.t, x: m.x, y: m.y, up: up))
+        }
+        self.clicks = clicks
+        cursors = studio.cursors
+        self.cursorImages = cursorImages
+        labels = KeyLabel.make(studio.keys, allKeys: edit.keystrokes.allKeys)
+        clips = edit.clips
+        var t = 0.0
+        clipStarts = edit.clips.map { clip in defer { t += clip.duration }; return t }
+        self.follow = follow
+    }
+
+    /// The source time shown at an output time.
+    func sourceTime(_ t: Double) -> Double {
+        for (i, clip) in clips.enumerated() where t <= clipStarts[i] + clip.duration || i == clips.count - 1 {
+            return clip.start + min(max(t - clipStarts[i], 0), clip.duration)
+        }
+        return t
+    }
+
+    // MARK: Drawing
+
+    /// Draws the overlays onto the zoomed video (`size` pixels, y-up), `zoom` being the visible part of the frame.
+    func draw(on video: CIImage, size: CGSize, zoom: CGRect, time: Double, camera frame: CIImage?) -> CIImage {
+        var output = video
+        let src = sourceTime(time)
+        if cursor.show { output = drawCursor(on: output, size: size, zoom: zoom, source: src) }
+        if keystrokes.show { output = drawKeys(on: output, size: size, source: src) }
+        if camera.show, let frame { output = drawCamera(frame, on: output, size: size, zoom: zoom) }
+        return output
+    }
+
+    private func lastIndex<T>(_ items: [T], before t: Double, time: (T) -> Double) -> Int? {
+        var lo = 0, hi = items.count - 1, found: Int?
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if time(items[mid]) <= t { found = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return found
+    }
+
+    private func drawCursor(on video: CIImage, size: CGSize, zoom: CGRect, source t: Double) -> CIImage {
+        guard let state = path.at(t) else { return video }
+        var output = video
+        let ppp = size.width / area.width
+        let zoomScale = 1 / max(zoom.width, 0.01)
+        func place(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: (p.x - zoom.minX) / zoom.width * size.width, y: size.height - (p.y - zoom.minY) / zoom.height * size.height)
+        }
+        // Click ripples, under the cursor.
+        if cursor.ripple {
+            let first = lastIndex(clicks, before: t - 0.5) { $0.t } .map { $0 + 1 } ?? 0
+            for click in clicks[min(first, clicks.count)...] where click.t <= t {
+                let p = min((t - click.t) / 0.5, 1)
+                guard p < 1 else { continue }
+                let base = 18 * ppp * cursor.size * zoomScale
+                let ease = 1 - (1 - p) * (1 - p)
+                let radius = base * (0.45 + 0.95 * ease)
+                let alpha = (1 - p) * (cursor.rippleFilled ? 0.35 : 0.8)
+                if let ring = Ripple.image(radius: radius, width: max(1, (3 - 2 * p) * ppp * zoomScale * 0.6), color: cursor.rippleColor.color,
+                                           filled: cursor.rippleFilled, alpha: alpha) {
+                    let c = place(CGPoint(x: click.x, y: click.y))
+                    output = ring.transformed(by: CGAffineTransform(translationX: c.x - ring.extent.width / 2, y: c.y - ring.extent.height / 2))
+                        .composited(over: output)
+                }
+            }
+        }
+        guard state.alpha > 0.01 else { return output }
+        // The cursor shape at that moment, or the styled one.
+        let index = lastIndex(mouse, before: t) { $0.t }.map { mouse[$0].c } ?? 0
+        let info = index < cursors.count ? cursors[index] : nil
+        var image: CGImage?
+        var hot = CGPoint.zero
+        var points = CGSize(width: 17, height: 23)
+        if let styled = Self.styled[cursor.style], cursor.style == .touch || info?.type ?? .arrow == .arrow {
+            (image, hot, points) = styled
+        } else if let info, index < cursorImages.count, let picture = cursorImages[index] {
+            image = picture
+            hot = CGPoint(x: info.hotX, y: info.hotY)
+            points = CGSize(width: info.width, height: info.height)
+        } else if let styled = Self.styled[.bold] {
+            (image, hot, points) = styled
+        }
+        guard let image else { return output }
+        // Pressing shrinks it a little.
+        var press = 0.0
+        if cursor.pressEffect, cursor.style != .touch, let i = lastIndex(clicks, before: t, time: { $0.t }) {
+            let c = clicks[i]
+            press = t < c.up ? min(1, (t - c.t) / 0.08) : max(0, 1 - (t - c.up) / 0.12)
+        }
+        let scale = ppp * cursor.size * zoomScale * (1 - 0.18 * press)
+        let k = scale * points.width / CGFloat(image.width)
+        let tip = place(state.point)
+        var picture = CIImage(cgImage: image).transformed(by: CGAffineTransform(scaleX: k, y: k))
+        picture = picture.transformed(by: CGAffineTransform(translationX: tip.x - hot.x * scale, y: tip.y - (points.height - hot.y) * scale))
+        if state.alpha < 0.999 {
+            picture = picture.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(state.alpha))])
+        }
+        return picture.composited(over: output)
+    }
+
+    private func drawKeys(on video: CIImage, size: CGSize, source t: Double) -> CIImage {
+        guard let i = lastIndex(labels, before: t, time: { $0.start }) else { return video }
+        let label = labels[i]
+        let fade = 0.15
+        guard t < label.end + fade else { return video }
+        let alpha = min(1, (t - label.start) / fade, (label.end + fade - t) / fade)
+        let short = min(size.width, size.height)
+        let fontSize = max(12, (short * 0.042 * keystrokes.size).rounded())
+        guard var pill = labelImage(label.text, fontSize: fontSize) else { return video }
+        let margin = short * 0.045
+        let w = pill.extent.width, h = pill.extent.height
+        let x: CGFloat = switch keystrokes.position {
+        case .topLeft, .bottomLeft: margin
+        case .topRight, .bottomRight: size.width - margin - w
+        case .bottom: (size.width - w) / 2
+        }
+        let y = keystrokes.position.isTop ? size.height - margin - h : margin
+        pill = pill.transformed(by: CGAffineTransform(translationX: x, y: y))
+        if alpha < 0.999 { pill = pill.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(alpha))]) }
+        return pill.composited(over: video)
+    }
+
+    /// The keystroke pill: dark (75% black, white text) or light (white, dark text), rounded.
+    private func labelImage(_ text: String, fontSize: CGFloat) -> CIImage? {
+        let key = "\(text)|\(fontSize)|\(keystrokes.light)"
+        lock.lock()
+        if let cached = labelCache[key] { lock.unlock(); return cached }
+        lock.unlock()
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let color = keystrokes.light ? NSColor(white: 0.1, alpha: 1) : .white
+        let string = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        let line = CTLineCreateWithAttributedString(string)
+        let bounds = CTLineGetBoundsWithOptions(line, .useOpticalBounds)
+        let height = (fontSize * 2).rounded(), width = (bounds.width + fontSize * 1.5).rounded()
+        guard let ctx = CGContext(data: nil, width: Int(width), height: Int(height), bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        ctx.addPath(CGPath(roundedRect: rect, cornerWidth: fontSize * 0.55, cornerHeight: fontSize * 0.55, transform: nil))
+        ctx.setFillColor(keystrokes.light ? CGColor(gray: 1, alpha: 0.94) : CGColor(gray: 0, alpha: 0.75))
+        ctx.fillPath()
+        let ascent = font.ascender, descent = -font.descender
+        ctx.textPosition = CGPoint(x: (width - bounds.width) / 2 - bounds.minX, y: (height - ascent - descent) / 2 + descent)
+        CTLineDraw(line, ctx)
+        guard let image = ctx.makeImage() else { return nil }
+        let result = CIImage(cgImage: image)
+        lock.lock()
+        if labelCache.count > 80 { labelCache.removeAll() }
+        labelCache[key] = result
+        lock.unlock()
+        return result
+    }
+
+    /// The camera bubble in its corner, as big as the recorder showed it (Medium = 68 + 0.1625 × the area's shorter
+    /// side), shrinking while zoomed in when that's on.
+    private func drawCamera(_ frame: CIImage, on video: CIImage, size: CGSize, zoom: CGRect) -> CIImage {
+        let ppp = size.width / area.width
+        let short = min(area.width, area.height)
+        var side = min(68.4 + 0.1625 * short, 0.8 * short) * camera.size * ppp
+        if camera.shrinkOnZoom {
+            let zoomed = min(max((1 / max(zoom.width, 0.01) - 1) / 0.5, 0), 1)
+            side *= 1 - 0.35 * zoomed
+        }
+        let box: CGSize = switch camera.shape {
+        case 2: CGSize(width: side * 4 / 3, height: side)
+        case 3: CGSize(width: side * 3 / 4, height: side)
+        default: CGSize(width: side, height: side)
+        }
+        let bw = box.width.rounded(), bh = box.height.rounded()
+        guard bw > 4, bh > 4 else { return video }
+        let radius = camera.shape == 0 ? min(bw, bh) / 2 : 22 * bh / 166
+        // Aspect-fill the frame into the box, mirrored if wanted.
+        var picture = frame.transformed(by: CGAffineTransform(translationX: -frame.extent.minX, y: -frame.extent.minY))
+        let fw = picture.extent.width, fh = picture.extent.height
+        guard fw > 0, fh > 0 else { return video }
+        if camera.flip { picture = picture.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -fw, y: 0)) }
+        let s = max(bw / fw, bh / fh)
+        picture = picture.transformed(by: CGAffineTransform(scaleX: s, y: s))
+        picture = picture.transformed(by: CGAffineTransform(translationX: -(fw * s - bw) / 2, y: -(fh * s - bh) / 2))
+            .cropped(to: CGRect(x: 0, y: 0, width: bw, height: bh))
+        guard let mask = mask(width: bw, height: bh, radius: radius) else { return video }
+        let clear = CIImage(color: .clear).cropped(to: mask.extent)
+        var bubble = picture.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: clear, kCIInputMaskImageKey: mask])
+        // A soft shadow under it.
+        let blur = bw * 0.035
+        let shadow = mask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.35),
+        ]).applyingGaussianBlur(sigma: blur).cropped(to: mask.extent.insetBy(dx: -blur * 3, dy: -blur * 3))
+            .transformed(by: CGAffineTransform(translationX: 0, y: -bw * 0.012))
+        bubble = bubble.composited(over: shadow)
+        let gap = (6.5 + 0.018 * short) * ppp
+        let x: CGFloat = switch camera.position {
+        case .topLeft, .bottomLeft: gap
+        case .bottom: (size.width - bw) / 2
+        default: size.width - gap - bw
+        }
+        let y = camera.position.isTop ? size.height - gap - bh : gap
+        return bubble.transformed(by: CGAffineTransform(translationX: x.rounded(), y: y.rounded())).composited(over: video)
+    }
+
+    private func mask(width: CGFloat, height: CGFloat, radius: CGFloat) -> CIImage? {
+        let key = "\(width)x\(height)r\(radius)"
+        lock.lock()
+        if let cached = maskCache[key] { lock.unlock(); return cached }
+        lock.unlock()
+        guard let ctx = CGContext(data: nil, width: Int(width), height: Int(height), bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: width, height: height), cornerWidth: radius, cornerHeight: radius, transform: nil))
+        ctx.fillPath()
+        guard let image = ctx.makeImage() else { return nil }
+        let result = CIImage(cgImage: image)
+        lock.lock()
+        if maskCache.count > 40 { maskCache.removeAll() }
+        maskCache[key] = result
+        lock.unlock()
+        return result
+    }
+}
+
+/// Click ripple rings, drawn per frame (they're small).
+nonisolated enum Ripple {
+    static func image(radius: CGFloat, width: CGFloat, color: NSColor, filled: Bool, alpha: Double) -> CIImage? {
+        let side = Int((radius + width) * 2 + 4)
+        guard side > 2, side < 2000, let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let c = CGFloat(side) / 2
+        let rect = CGRect(x: c - radius, y: c - radius, width: radius * 2, height: radius * 2)
+        let cg = color.withAlphaComponent(CGFloat(alpha)).cgColor
+        if filled {
+            ctx.setFillColor(cg)
+            ctx.fillEllipse(in: rect)
+        } else {
+            ctx.setStrokeColor(cg)
+            ctx.setLineWidth(width)
+            ctx.strokeEllipse(in: rect.insetBy(dx: width / 2, dy: width / 2))
+        }
+        return ctx.makeImage().map { CIImage(cgImage: $0) }
+    }
+}
+
+/// Glint's own cursor drawings: Bold (black arrow, white outline), Light (white arrow, dark outline) and Touch (a
+/// soft gray dot). 2× pictures, the hot spot in points from the top left.
+nonisolated enum StyledCursor {
+    static func make(_ style: CursorStyle) -> (image: CGImage, hot: CGPoint, size: CGSize)? {
+        let scale: CGFloat = 4
+        let size = style == .touch ? CGSize(width: 28, height: 28) : CGSize(width: 20, height: 26)
+        guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        // Top-left based drawing.
+        ctx.translateBy(x: 0, y: size.height)
+        ctx.scaleBy(x: 1, y: -1)
+        if style == .touch {
+            let rect = CGRect(x: 3, y: 3, width: 22, height: 22)
+            ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 2, color: CGColor(gray: 0, alpha: 0.3))
+            ctx.setFillColor(CGColor(gray: 0.15, alpha: 0.45))
+            ctx.fillEllipse(in: rect)
+            ctx.setShadow(offset: .zero, blur: 0, color: nil)
+            ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.9))
+            ctx.setLineWidth(1.5)
+            ctx.strokeEllipse(in: rect.insetBy(dx: 0.75, dy: 0.75))
+            return ctx.makeImage().map { ($0, CGPoint(x: 14, y: 14), size) }
+        }
+        // The classic pointer, tip at (3, 2).
+        let arrow = CGMutablePath()
+        let points: [CGPoint] = [(3, 2), (3, 20.5), (7.6, 16.2), (10.6, 23.2), (13.6, 21.9), (10.7, 15.1), (16.8, 15.1)]
+            .map { CGPoint(x: $0.0, y: $0.1) }
+        arrow.addLines(between: points)
+        arrow.closeSubpath()
+        let fill = style == .bold ? CGColor(gray: 0, alpha: 1) : CGColor(gray: 1, alpha: 1)
+        let line = style == .bold ? CGColor(gray: 1, alpha: 1) : CGColor(gray: 0.12, alpha: 1)
+        ctx.setLineJoin(.round)
+        ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 2.5, color: CGColor(gray: 0, alpha: 0.35))
+        ctx.addPath(arrow)
+        ctx.setStrokeColor(line)
+        ctx.setLineWidth(3)
+        ctx.strokePath()
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+        ctx.addPath(arrow)
+        ctx.setFillColor(fill)
+        ctx.fillPath()
+        return ctx.makeImage().map { ($0, CGPoint(x: 3, y: 2), size) }
+    }
+}
+
+// MARK: - Compositing (screen + camera tracks)
+
+/// One instruction for the whole timeline: which tracks hold the screen and the camera, and the renderer.
+nonisolated final class GlintCompositionInstruction: NSObject, AVVideoCompositionInstructionProtocol {
+    let timeRange: CMTimeRange
+    let enablePostProcessing = false
+    let containsTweening = true
+    let requiredSourceTrackIDs: [NSValue]?
+    let passthroughTrackID = kCMPersistentTrackID_Invalid
+    let renderer: VideoFrameRenderer
+    let screenTrack: CMPersistentTrackID
+    let cameraTrack: CMPersistentTrackID?
+
+    init(timeRange: CMTimeRange, renderer: VideoFrameRenderer, screenTrack: CMPersistentTrackID, cameraTrack: CMPersistentTrackID?) {
+        self.timeRange = timeRange
+        self.renderer = renderer
+        self.screenTrack = screenTrack
+        self.cameraTrack = cameraTrack
+        requiredSourceTrackIDs = ([screenTrack] + (cameraTrack.map { [$0] } ?? [])).map { NSNumber(value: $0) }
+    }
+}
+
+/// Renders each frame through `VideoFrameRenderer` with the screen and (when there is one at that moment) the
+/// camera frame. Used for the preview and the export alike.
+nonisolated final class GlintVideoCompositor: NSObject, AVVideoCompositing {
+    private let context = CIContext(options: [.cacheIntermediates: false])
+    private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+
+    let sourcePixelBufferAttributes: [String: any Sendable]? = [kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
+    let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
+
+    func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {}
+
+    func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
+        guard let instruction = request.videoCompositionInstruction as? GlintCompositionInstruction,
+              let screen = request.sourceFrame(byTrackID: instruction.screenTrack),
+              let output = request.renderContext.newPixelBuffer() else {
+            request.finish(with: NSError(domain: "Glint", code: 1))
+            return
+        }
+        let camera = instruction.cameraTrack.flatMap { request.sourceFrame(byTrackID: $0) }.map { CIImage(cvPixelBuffer: $0) }
+        let image = instruction.renderer.render(CIImage(cvPixelBuffer: screen), camera: camera, time: request.compositionTime.seconds)
+        let bounds = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(output), height: CVPixelBufferGetHeight(output))
+        context.render(image.composited(over: CIImage(color: .black).cropped(to: bounds)), to: output, bounds: bounds, colorSpace: colorSpace)
+        request.finish(withComposedVideoFrame: output)
+    }
+}
