@@ -2,6 +2,10 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
+/// What the recorder makes: a video, a GIF, or a Studio Mode project (video without the cursor, plus the pointer,
+/// keys and camera kept separately for the video editor).
+enum RecordMode { case video, gif, studio }
+
 /// "Record Screen": pick an area (or a window), choose the options in the panel and start a GIF (⌥↩)
 /// or video (↩) recording. While recording the rest of the screen can be dimmed, a control bar under the area
 /// stops, pauses, restarts or deletes, and the menu bar shows the time. The result goes through the recording
@@ -17,7 +21,8 @@ final class RecordingController {
 
     /// Shortcut / menu: starts the selection, or stops a running recording. `initial` (from All-In-One) starts with
     /// that area instead of the remembered one.
-    func toggle(initial: CGRect? = nil) {
+    /// `studio` ("Start Studio Mode Recording"): Return starts a Studio Mode recording.
+    func toggle(initial: CGRect? = nil, studio: Bool = false) {
         if let session { session.stop(); return }
         guard selector == nil, Permissions.ensureScreenRecording() else { return }
         let selector = RegionSelector(hint: "Drag to record a part of the screen. Press Space to select a window.")
@@ -34,14 +39,14 @@ final class RecordingController {
             self?.selector = nil
             WebcamOverlay.shared.hide()
         }
-        selector.onConfirm = { [weak self] option in self?.start(gif: option) }
+        selector.onConfirm = { [weak self] option in self?.start(option ? .gif : studio ? .studio : .video) }
         // Without "Remember last selection" every recording starts freeform with no area (the other options —
         // microphone, camera, clicks… — always keep their last state).
         let remember = Defaults[Prefs.recRememberSelection]
         if !remember { Defaults[Prefs.recRatio] = "" }
         selector.ratio = RecordRatio.value(Defaults[Prefs.recRatio])
         model.actions = RecordPanelActions(
-            record: { [weak self] gif in self?.start(gif: gif) },
+            record: { [weak self] mode in self?.start(mode) },
             resize: { [weak selector] size in selector?.resize(to: size) },
             fullScreen: { [weak self, weak selector] in
                 guard let self, let selector else { return }
@@ -75,10 +80,10 @@ final class RecordingController {
     func togglePause() { session?.togglePause() }
     func restart() { session?.restart() }
 
-    private func start(gif: Bool) {
+    private func start(_ mode: RecordMode) {
         guard let selector, !selector.rect.isEmpty else { return }
         // A camera without a microphone records a silent face, so it asks first.
-        if !gif, !Defaults[Prefs.recCamera].isEmpty, Defaults[Prefs.recMicDevice].isEmpty {
+        if mode != .gif, !Defaults[Prefs.recCamera].isEmpty, Defaults[Prefs.recMicDevice].isEmpty {
             let alert = NSAlert()
             alert.messageText = "No microphone selected"
             alert.informativeText = "You’ve enabled camera recording, but no microphone is selected. Select a mic to include sound in your video."
@@ -88,10 +93,10 @@ final class RecordingController {
         }
         let rect = selector.rect, screen = selector.screen
         Defaults[Prefs.recLastArea] = rect.storageString
-        let session = RecordingSession(rect: rect, screen: screen, isGIF: gif)
+        let session = RecordingSession(rect: rect, screen: screen, mode: mode)
         // The session's dim window is up before the selection (panel, brackets) fades away.
         session.prepare()
-        WebcamOverlay.shared.beginRecording(area: Geometry.appKitRect(fromCG: rect))
+        WebcamOverlay.shared.beginRecording(area: Geometry.appKitRect(fromCG: rect), studio: session.studioClock, folder: session.studioFolder)
         selector.end(animated: true)
         self.selector = nil
         session.onFinish = { [weak self] in
@@ -117,8 +122,13 @@ extension Notification.Name {
 final class RecordingSession {
     let rect: CGRect
     let screen: NSScreen
-    let isGIF: Bool
+    let mode: RecordMode
+    var isGIF: Bool { mode == .gif }
     var onFinish: (() -> Void)?
+    /// Studio Mode: the clock events are timed with, and the folder the pointer, keys and camera go into.
+    private(set) var studioClock: RecordingClock?
+    private(set) var studioFolder: URL?
+    private var tracker: StudioTracker?
 
     private var recorder: ScreenRecorder?
     private var dimWindow: NSWindow?
@@ -132,10 +142,16 @@ final class RecordingSession {
     private var keystrokes: KeystrokeOverlay?
     private var finished = false
 
-    init(rect: CGRect, screen: NSScreen, isGIF: Bool) {
+    init(rect: CGRect, screen: NSScreen, mode: RecordMode) {
         self.rect = rect
         self.screen = screen
-        self.isGIF = isGIF
+        self.mode = mode
+        if mode == .studio {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("GlintStudio-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            studioFolder = folder
+            studioClock = RecordingClock()
+        }
     }
 
     private var appKitRect: CGRect { Geometry.appKitRect(fromCG: rect) }
@@ -155,15 +171,18 @@ final class RecordingSession {
         try? await Task.sleep(for: .milliseconds(450))
         guard !finished else { return }
         showControls()
+        // Studio Mode records clicks and keys as data; the editor draws them.
+        guard mode != .studio else { return }
         if Defaults[Prefs.recHighlightClicks] { startClickHighlights() }
         if Defaults[Prefs.recShowKeystrokes] { keystrokes = KeystrokeOverlay(area: appKitRect) }
     }
 
     private func startRecorder() async {
         let options = ScreenRecorder.Options(rect: rect, screen: screen, frameRate: isGIF ? Defaults[Prefs.gifFrameRate] : Defaults[Prefs.recFrameRate],
-                                             showsCursor: Defaults[Prefs.recShowCursor], systemAudio: Defaults[Prefs.recSystemAudio],
+                                             showsCursor: mode != .studio && Defaults[Prefs.recShowCursor],
+                                             systemAudio: Defaults[Prefs.recSystemAudio],
                                              microphone: Defaults[Prefs.recMicDevice], isGIF: isGIF)
-        let recorder = ScreenRecorder(options: options)
+        let recorder = studioClock.map { ScreenRecorder(options: options, clock: $0) } ?? ScreenRecorder(options: options)
         do {
             try await recorder.start()
         } catch {
@@ -173,6 +192,11 @@ final class RecordingSession {
             return
         }
         self.recorder = recorder
+        if let studioClock, let studioFolder, tracker == nil {
+            let tracker = StudioTracker(area: rect, folder: studioFolder, clock: studioClock)
+            tracker.start()
+            self.tracker = tracker
+        }
         started = Date()
         pausedTime = 0
         state.elapsed = 0
@@ -206,19 +230,35 @@ final class RecordingSession {
     func restart() {
         recorder?.discard()
         recorder = nil
+        studioClock?.reset()
+        tracker?.reset()
+        WebcamOverlay.shared.restartFileRecording()
         Task { await startRecorder() }
     }
 
     func delete() {
         recorder?.discard()
         recorder = nil
+        discardStudio()
         cleanUp()
     }
 
+    private func discardStudio() {
+        guard let studioFolder else { return }
+        _ = tracker?.finish()
+        tracker = nil
+        let camera = WebcamOverlay.shared.detachFileRecorder()
+        Task {
+            _ = await camera?.finish()
+            try? FileManager.default.removeItem(at: studioFolder)
+        }
+    }
+
     func stop() {
-        guard let recorder else { cleanUp(); return }
+        guard let recorder else { discardStudio(); cleanUp(); return }
         self.recorder = nil
         let duration = Double(state.elapsed)
+        if mode == .studio { stopStudio(recorder, duration: duration); return }
         cleanUp()
         let isGIF = isGIF, rect = rect
         Task {
@@ -233,6 +273,33 @@ final class RecordingSession {
                 file = gif
             }
             CaptureOutput.deliverRecording(file, duration: duration, screenRect: rect)
+            try? FileManager.default.removeItem(at: movie.deletingLastPathComponent())
+        }
+    }
+
+    /// Studio Mode: the video, the pointer and keys, and the camera movie become one project in the history, which
+    /// opens in the video editor.
+    private func stopStudio(_ recorder: ScreenRecorder, duration: Double) {
+        guard let folder = studioFolder, let tracker else { cleanUp(); return }
+        var data = tracker.finish()
+        self.tracker = nil
+        let camera = WebcamOverlay.shared.detachFileRecorder()
+        cleanUp()
+        Task {
+            guard let movie = await recorder.stop() else {
+                _ = await camera?.finish()
+                try? FileManager.default.removeItem(at: folder)
+                NSSound.beep()
+                return
+            }
+            var file = movie
+            if Defaults[Prefs.recAudioTracks] == .single, let mixed = await AudioMixdown.singleTrack(movie) { file = mixed }
+            if let camera, let offset = await camera.finish() {
+                data.camera = camera.url.lastPathComponent
+                data.cameraOffset = offset
+            }
+            do { try data.write(to: folder) } catch { glintLog("studio: can't save the recording data: \(error)") }
+            CaptureOutput.deliverStudioRecording(file, studio: folder, duration: duration)
             try? FileManager.default.removeItem(at: movie.deletingLastPathComponent())
         }
     }

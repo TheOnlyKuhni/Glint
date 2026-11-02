@@ -167,7 +167,7 @@ private struct VideoRail: View {
     var body: some View {
         VStack(spacing: 20) {
             ForEach(VideoEditorState.Section.allCases, id: \.self) { section in
-                railButton(selected: state.section == section && state.selectedZoom == nil, help: section.title) {
+                railButton(selected: state.section == section && state.selectedZoom == nil, title: section.title, help: section.title) {
                     section.icon
                 } action: {
                     state.selectedZoom = nil
@@ -175,7 +175,7 @@ private struct VideoRail: View {
                 }
             }
             Spacer()
-            railButton(selected: state.scissors, help: "Cut (C): click the clip to split it, drag across it to cut that part out") {
+            railButton(selected: state.scissors, title: "Cut", help: "Cut (C): click the clip to split it, drag across it to cut that part out") {
                 Image(systemName: "scissors").font(.system(size: 15, weight: .medium))
             } action: { state.scissors.toggle() }
             .padding(.bottom, 14)
@@ -183,7 +183,7 @@ private struct VideoRail: View {
         .padding(.top, 10)
     }
 
-    private func railButton(selected: Bool, help: String, @ViewBuilder icon: () -> some View, action: @escaping () -> Void) -> some View {
+    private func railButton(selected: Bool, title: String, help: String, @ViewBuilder icon: () -> some View, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             icon()
                 .foregroundStyle(selected ? Color.white : Color(white: 0.55))
@@ -193,6 +193,7 @@ private struct VideoRail: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(title)
     }
 }
 
@@ -250,9 +251,15 @@ private struct VideoInspector: View {
                     ZoomInspector(project: project, state: state, zoom: zoom, actions: actions)
                 } else {
                     switch state.section {
-                    case .cursor: studioOnly("Cursor", "Cursor settings are only available for videos recorded in Studio Mode. In this recording the cursor is part of the video.")
-                    case .keystrokes: studioOnly("Keystrokes", "Keystroke settings are only available for videos recorded in Studio Mode. In this recording, shown keystrokes are part of the video.")
-                    case .camera: studioOnly("Camera", "Camera settings are only available for videos recorded in Studio Mode. In this recording the camera is part of the video.")
+                    case .cursor:
+                        if project.isStudio { CursorInspector(project: project) }
+                        else { studioOnly("Cursor", "Cursor settings are only available for videos recorded in Studio Mode. In this recording the cursor is part of the video.") }
+                    case .keystrokes:
+                        if project.isStudio { KeystrokesInspector(project: project) }
+                        else { studioOnly("Keystrokes", "Keystroke settings are only available for videos recorded in Studio Mode. In this recording, shown keystrokes are part of the video.") }
+                    case .camera:
+                        if project.isStudio { CameraInspector(project: project) }
+                        else { studioOnly("Camera", "Camera settings are only available for videos recorded in Studio Mode. In this recording the camera is part of the video.") }
                     case .audio: AudioInspector(project: project)
                     case .background: VideoBackgroundInspector(project: project)
                     case .animation: AnimationInspector(project: project)
@@ -287,7 +294,7 @@ struct InspectorHeader: View {
 }
 
 /// A rounded #2A2A2A box with light text.
-private struct InfoBox<Content: View>: View {
+struct InfoBox<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
         // The notice: gray 14pt text in a #2A2A2A box with 16pt corners.
@@ -303,7 +310,7 @@ private struct InfoBox<Content: View>: View {
 }
 
 /// The switch: blue when on, also while the window is inactive (the system switch turns gray then).
-private struct BlueSwitch: ToggleStyle {
+struct BlueSwitch: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
             Capsule().fill(configuration.isOn ? W.blue : Color.white.opacity(0.15))
@@ -319,7 +326,7 @@ private struct BlueSwitch: ToggleStyle {
 }
 
 /// Two-choice segmented buttons (blue = selected), 30pt tall.
-private struct ChoiceButtons: View {
+struct ChoiceButtons: View {
     let titles: [String]
     let selected: Int
     var disabled: Set<Int> = []
@@ -345,7 +352,7 @@ private struct ChoiceButtons: View {
 
 /// The inspector slider: a 6pt track, blue up to the knob and dark gray after it, a light
 /// 20×15pt rounded knob, and small dots under the track (the ends, or each snap step).
-private struct StepSlider: View {
+struct StepSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     var step: Double? = nil
@@ -459,13 +466,20 @@ private struct ZoomInspector: View {
             .help("Give every zoom this zoom level")
             InspectorHeader("Zoom mode").padding(.top, 14)
             // Following the cursor needs the pointer positions a Studio Mode recording keeps.
-            ChoiceButtons(titles: ["Follow Cursor", "Manual"], selected: 1, disabled: [0],
-                          helps: ["Follow Cursor needs a video recorded in Studio Mode", "Zoom into the spot you pick below"]) { _ in }
-            ZoomFocusPicker(zoom: zoom, project: project) { center in
-                edit { $0.center = center }
+            ChoiceButtons(titles: ["Follow Cursor", "Manual"], selected: zoom.follow && project.isStudio ? 0 : 1,
+                          disabled: project.isStudio ? [] : [0],
+                          helps: [project.isStudio ? "The zoom keeps the cursor in view and pans with it" : "Follow Cursor needs a video recorded in Studio Mode",
+                                  "Zoom into the spot you pick below"]) { i in edit { $0.follow = i == 0 } }
+            if zoom.follow && project.isStudio {
+                InfoBox { Text("The zoom follows the cursor and pans when the cursor comes close to its edge.") }
+                    .padding(.top, 4)
+            } else {
+                ZoomFocusPicker(zoom: zoom, project: project) { center in
+                    edit { $0.center = center }
+                }
+                .padding(.top, 4)
+                .help("Drag the dot to choose where the zoom looks")
             }
-            .padding(.top, 4)
-            .help("Drag the dot to choose where the zoom looks")
             InspectorHeader("Animation").padding(.top, 14)
             Button {
                 state.selectedZoom = nil
@@ -698,7 +712,8 @@ private struct VideoTransport: View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: size)).foregroundStyle(.white).frame(width: 28, height: 28).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).help(help)
+        // The symbols' built-in names read "Go To End" for backward.end and vice versa.
+        .buttonStyle(.plain).help(help).accessibilityLabel(help)
     }
 
     static func format(_ t: Double) -> String {

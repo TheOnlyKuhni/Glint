@@ -23,6 +23,7 @@ final class WebcamOverlay {
     private weak var selector: RegionSelector?
     private var window: NSPanel?
     private var recording = false
+    private var fileRecorder: CameraFileRecorder?
     /// The recording area in global AppKit coordinates.
     private var area: CGRect = .zero
     /// Where the user dragged the bubble: its bottom-right corner relative to the area's (nil = the default spot).
@@ -62,18 +63,39 @@ final class WebcamOverlay {
         layout()
     }
 
-    /// Recording starts: the bubble moves from the overlay into its own window, which is recorded.
-    func beginRecording(area: CGRect) {
+    /// Recording starts: the bubble moves from the overlay into its own window, which is recorded. In Studio Mode
+    /// (`clock` set) the window stays out of the screen recording and the camera goes into its own movie in `folder`.
+    func beginRecording(area: CGRect, studio clock: RecordingClock? = nil, folder: URL? = nil) {
         self.area = area
         recording = true
         selector = nil
         bubble.removeFromSuperview()
-        guard isEnabled, session != nil else { return }
+        guard isEnabled, let session else { return }
         let window = self.window ?? makeWindow()
+        window.title = clock == nil ? RecordingOverlayTitle.recorded : "GlintStudioCamera"
+        if let clock, let folder {
+            let recorder = CameraFileRecorder(url: folder.appendingPathComponent("camera.mov"), clock: clock)
+            session.beginConfiguration()
+            if session.canAddOutput(recorder.output) {
+                session.addOutput(recorder.output)
+                fileRecorder = recorder
+            }
+            session.commitConfiguration()
+        }
         window.contentView?.addSubview(bubble)
         layout()
         window.orderFrontRegardless()
     }
+
+    /// Studio Mode: the camera's own movie, taken off the camera (finish it with `CameraFileRecorder.finish`).
+    func detachFileRecorder() -> CameraFileRecorder? {
+        defer { fileRecorder = nil }
+        if let fileRecorder, let session { queue.async { session.removeOutput(fileRecorder.output) } }
+        return fileRecorder
+    }
+
+    /// Restart of a Studio Mode recording: the camera movie starts over.
+    func restartFileRecording() { fileRecorder?.reset() }
 
     /// Applies the camera settings: starts, switches or stops the camera and lays the bubble out.
     func update() {

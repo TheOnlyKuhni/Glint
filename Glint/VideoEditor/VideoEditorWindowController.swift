@@ -74,8 +74,10 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
                 NSSound.beep()
                 return
             }
+            // Studio Mode: the pointer, keys and camera recorded next to the video.
+            if let studio = StudioRecording.load(for: url) { project.attachStudio(studio, folder: StudioRecording.folder(for: url)) }
             // The settings apply to the original when Save kept one, else to the file itself (a closed project).
-            if let saved { project.restoreSaved(saved) }
+            if let saved { project.restoreSaved(saved) } else if project.isStudio { project.applyStudioDefaults() }
             let controller = VideoEditorWindowController(project: project, sourceFile: url)
             controller.onClose = onClose
             open.append(controller)
@@ -84,6 +86,8 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
             controller.window?.center()
             controller.showWindow(nil)
             controller.rebuild(force: true)
+            // A Studio Mode recording opens on the cursor settings.
+            if project.isStudio { controller.state.section = .cursor }
         }
     }
 
@@ -240,7 +244,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         let settings = project.renderSettings(outputScale: previewScale, includeBackground: false)
         let renderSize = CGSize(width: (source.width * previewScale / 2).rounded() * 2, height: (source.height * previewScale / 2).rounded() * 2)
         let key = "\(project.clips.map { "\($0.start)-\($0.end)" })"
-        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)"
+        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)"
         if !force, key == structureKey, let renderer, let item = player.currentItem, let composition = item.videoComposition {
             if look != renderKey {
                 renderKey = look
