@@ -9,6 +9,7 @@ import ScreenCaptureKit
 ///     glint://debug-click?x=100&y=40[&count=2][&mods=…][&closeMenu=1.5]   (closes a menu it opens after 1.5 s)
 ///     glint://debug-click?x=…&y=…&pick=Curved   (chooses the menu item with that title or tooltip)
 ///     glint://debug-click?x=…&y=…&queue=1   (through the app's event queue, so event monitors see it)
+///     glint://debug-click?x=…&y=…&right=1&pick=Remove   (a right-click; `pick` chooses from its menu)
 ///     glint://debug-drag?x1=…&y1=…&x2=…&y2=…[&mods=…]
 ///     glint://debug-move?x=…&y=…   (the pointer moves there: hover effects)
 ///     glint://debug-resize?w=…&h=…   (the window's size; "min" for its minimum)
@@ -121,9 +122,10 @@ enum DebugHooks {
             if let title = query["pick"] { closeNextMenu(after: 0.3, picking: title) }
             let p = point("x", "y")
             let count = Int(query["count"] ?? "") ?? 1
+            let right = query["right"] == "1"
             for n in 1...count {
-                mouse(.leftMouseDown, p, mods, n, window, queued: query["queue"] == "1")
-                mouse(.leftMouseUp, p, mods, n, window, queued: query["queue"] == "1")
+                mouse(right ? .rightMouseDown : .leftMouseDown, p, mods, n, window, queued: query["queue"] == "1")
+                mouse(right ? .rightMouseUp : .leftMouseUp, p, mods, n, window, queued: query["queue"] == "1")
             }
         case "debug-move":
             let p = point("x", "y")
@@ -151,27 +153,33 @@ enum DebugHooks {
         return true
     }
 
-    /// Menus run their own tracking loop, so the close is scheduled in the common run loop modes.
+    /// Menus run their own tracking loop, so the close is scheduled in the common run loop modes. Menus without
+    /// the item (AppKit sometimes tracks an empty one first) are skipped; the watch ends after 5 s.
     private static func closeNextMenu(after delay: Double, picking title: String? = nil) {
         var token: NSObjectProtocol?
+        func matches(_ item: NSMenuItem) -> Bool {
+            guard let title else { return true }
+            return item.title == title || item.toolTip == title || item.title.hasPrefix(title)
+        }
         token = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
+            guard let menu = note.object as? NSMenu, let i = menu.items.firstIndex(where: matches),
+                  !menu.items[i].title.isEmpty || title == nil else { return }
             if let token { NotificationCenter.default.removeObserver(token) }
-            guard let menu = note.object as? NSMenu else { return }
+            token = nil
             let timer = Timer(timeInterval: delay, repeats: false) { _ in
                 menu.cancelTracking()
-                if let title, let i = menu.items.firstIndex(where: { $0.title == title || $0.toolTip == title }) {
-                    DispatchQueue.main.async { menu.performActionForItem(at: i) }
-                }
+                if title != nil { DispatchQueue.main.async { menu.performActionForItem(at: i) } }
             }
             RunLoop.main.add(timer, forMode: .common)
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { if let token { NotificationCenter.default.removeObserver(token) } }
     }
 
     private static func mouse(_ type: NSEvent.EventType, _ p: NSPoint, _ mods: NSEvent.ModifierFlags, _ clicks: Int, _ window: NSWindow,
                               queued: Bool = false) {
         guard let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks,
-                                         pressure: type == .leftMouseUp ? 0 : 1) else { return }
+                                         pressure: type == .leftMouseUp || type == .rightMouseUp ? 0 : 1) else { return }
         if queued { NSApp.postEvent(e, atStart: false) } else { window.sendEvent(e) }
     }
 

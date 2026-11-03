@@ -6,7 +6,7 @@ import Combine
 /// camera), the 30pt zoom track ("+ Click or drag to add zoom"), the 60pt clip of thumbnails with its cut markers, and
 /// the events (Studio Mode), 26pt in from both sides. Drag the clip's edges to trim (a "✂ 0.8s" marker shows what was
 /// cut; click it to bring it back), with the scissors click to split or drag across a stretch to cut it out, click a
-/// clip and press ⌫ to delete it. Zooms and camera layouts: click or drag on their track to add one, drag to move,
+/// clip and press ⌫ to delete it. Zooms and camera actions: click or drag on their track to add one, drag to move,
 /// drag its ends to resize, ⌫ deletes. Hovering an item tells what it is.
 final class VideoTimelineView: NSView {
     let scrollView = NSScrollView()
@@ -55,8 +55,17 @@ final class VideoTimelineView: NSView {
         subscriptions = [
             state.$time.sink { [weak self] _ in DispatchQueue.main.async { self?.playheadMoved() } },
             state.$timelineZoom.sink { [weak self] _ in DispatchQueue.main.async { self?.resize() } },
+            state.$rawFrames.dropFirst().sink { [weak self] raw in
+                DispatchQueue.main.async {
+                    guard let self, raw != self.showsRawFrames else { return }
+                    self.showsRawFrames = raw
+                    self.thumbnails = []
+                    self.reloadThumbnails()
+                }
+            },
             state.$selectedZoom.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$selectedCamera.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
+            state.$selectedEvent.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$selectedCut.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$selectedClip.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$timelineZoomEditing.sink { [weak self] editing in
@@ -80,7 +89,8 @@ final class VideoTimelineView: NSView {
                 }
             },
         ]
-        Task { await makeThumbnails() }
+        showsRawFrames = state.rawFrames
+        reloadThumbnails()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -122,6 +132,7 @@ final class VideoTimelineView: NSView {
             zoomInitialized = true
             let r = ppsRange
             state.timelineZoom = Double(min(max(log(fitPPS / r.min) / log(r.max / r.min), 0), 1))
+            state.timelineFitZoom = state.timelineZoom
             return
         }
         let width = max(visibleWidth, x(project.sourceDuration) + Metrics.inset)
@@ -170,9 +181,9 @@ final class VideoTimelineView: NSView {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    // MARK: Lanes (camera layouts and zooms)
+    // MARK: Lanes (camera actions and zooms)
 
-    /// The tracks of stretches above the clip: camera layouts (Studio Mode recordings with a camera) and zooms.
+    /// The tracks of stretches above the clip: camera actions (Studio Mode recordings with a camera) and zooms.
     private enum Lane { case camera, zoom }
     private struct Span: Equatable { var id: UUID; var start: Double; var end: Double }
 
@@ -209,8 +220,8 @@ final class VideoTimelineView: NSView {
         }
     }
 
-    /// Adds and selects a stretch: a zoom (following the cursor in Studio Mode) or a full-size camera layout (its
-    /// bubble settings start as the Camera section's).
+    /// Adds and selects a stretch: a zoom (following the cursor in Studio Mode) or a full-size camera action (its
+    /// resize settings start as the Camera section's).
     @discardableResult private func addSpan(_ lane: Lane, start: Double, end: Double) -> UUID {
         switch lane {
         case .camera:
@@ -235,6 +246,7 @@ final class VideoTimelineView: NSView {
         state.selectedZoom = lane == .zoom ? id : nil
         state.selectedClip = nil
         state.selectedCut = nil
+        state.selectedEvent = nil
     }
 
     private func removeSpan(_ lane: Lane, _ id: UUID) {
@@ -337,7 +349,12 @@ final class VideoTimelineView: NSView {
     // MARK: Studio Mode events
 
     /// What happened while recording (Studio Mode only), in source time.
-    private lazy var events: [StudioEvent] = project.studio.map(StudioEvent.make) ?? []
+    private lazy var allEvents: [StudioEvent] = project.studio.map(StudioEvent.make) ?? []
+    /// The ones not removed.
+    private var events: [StudioEvent] {
+        let removed = Set(project.edit.removedEvents)
+        return removed.isEmpty ? allEvents : allEvents.filter { !removed.contains($0.id) }
+    }
 
     /// An event's span on the timeline, nil if it was cut out. Points get a few points of width.
     private func eventRect(_ e: StudioEvent) -> CGRect? {
@@ -365,8 +382,16 @@ final class VideoTimelineView: NSView {
         .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))?.tinted(.white)
 
     private func drawEvents() {
+        let events = events
         guard !events.isEmpty else { return }
         let visible = visibleRect.insetBy(dx: -40, dy: 0)
+        // The selected one sits on a blue outline.
+        if let id = state.selectedEvent, let e = events.first(where: { $0.id == id }), let r = eventRect(e)?.insetBy(dx: -2.5, dy: -2.5) {
+            Self.blue.setStroke()
+            let ring = NSBezierPath(roundedRect: r, xRadius: min(r.height / 2, 6), yRadius: min(r.height / 2, 6))
+            ring.lineWidth = 2
+            ring.stroke()
+        }
         // Stretches under points.
         for e in events where [.drag, .scroll, .typing].contains(e.kind) {
             guard let r = eventRect(e), r.intersects(visible) else { continue }
@@ -435,13 +460,15 @@ final class VideoTimelineView: NSView {
                                  hint: "Click to edit, drag to move, drag its ends to resize, ⌫ removes it")
             case .camera:
                 guard let l = project.cameraLayouts.first(where: { $0.id == hit.span.id }) else { return nil }
-                let what = l.kind == .bubble ? "\(l.title), \(l.position.title.lowercased()), \(Int((l.size * 100).rounded()))%" : l.title
-                return HoverInfo(rect: rect, title: "Camera: \(what) · \(length)",
+                let what = l.kind == .bubble
+                    ? "Resize to \(CameraLayout.shapeTitles[min(max(l.shape, 0), 3)].lowercased()), \(l.position.title.lowercased()), \(Int((l.size * 100).rounded()))%"
+                    : l.title
+                return HoverInfo(rect: rect, title: "Camera action: \(what) · \(length)",
                                  hint: "Click to edit, drag to move, drag its ends to resize, ⌫ removes it")
             }
         }
         if let e = studioEvent(at: p), let rect = eventRect(e) {
-            return HoverInfo(rect: rect, title: e.title, hint: "Click to jump there")
+            return HoverInfo(rect: rect, title: e.title, hint: "Click to select it and jump there; ⌫ or right-click removes it")
         }
         let t = time(p.x)
         if !state.scissors, edge(at: p) == nil, p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight,
@@ -533,7 +560,7 @@ final class VideoTimelineView: NSView {
             if end > gapStart { rects.append(CGRect(x: gapStart, y: top(lane), width: end - gapStart, height: height(lane))) }
         }
         rects += clipRects().map(\.1)
-        if !events.isEmpty {
+        if !allEvents.isEmpty {
             rects.append(CGRect(x: 0, y: Metrics.eventsTop, width: bounds.width, height: Metrics.eventsBottom - Metrics.eventsTop))
         }
         guard rects != toolTipRects else { return }
@@ -544,11 +571,11 @@ final class VideoTimelineView: NSView {
 
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         if info(at: point) != nil { return "" }
-        if point.y >= Metrics.eventsTop, point.y <= Metrics.eventsBottom, !events.isEmpty {
-            return "What happened while recording: clicks, drags and scrolling (top), typing and shortcuts (bottom)"
+        if point.y >= Metrics.eventsTop, point.y <= Metrics.eventsBottom, !allEvents.isEmpty {
+            return "What happened while recording: clicks, drags and scrolling (top), typing and shortcuts (bottom). Right-click to bring back removed ones."
         }
         switch lane(at: point) {
-        case .camera: return "Click to change the camera from here on (full size, its own bubble or hidden), or drag over a stretch"
+        case .camera: return "Click to add a camera action (full size, resize or hide the camera for a while), or drag over a stretch"
         case .zoom: return "Click to add a zoom, or drag to add one over a stretch"
         case nil: break
         }
@@ -600,7 +627,7 @@ final class VideoTimelineView: NSView {
             if size.width + 12 < r.width { text.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attrs) }
         } else if spans(lane).isEmpty {
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: NSColor(white: 0.55, alpha: 1)]
-            let text = (lane == .camera ? "+  Click or drag to change the camera" : "+  Click or drag to add zoom") as NSString
+            let text = (lane == .camera ? "+  Click or drag to add a camera action" : "+  Click or drag to add zoom") as NSString
             let size = text.size(withAttributes: attrs)
             let visible = visibleRect.intersection(track)
             text.draw(at: CGPoint(x: (visible.isEmpty ? track : visible).midX - size.width / 2, y: track.midY - size.height / 2), withAttributes: attrs)
@@ -651,7 +678,7 @@ final class VideoTimelineView: NSView {
         }
     }
 
-    /// While a zoom or camera layout is hovered or resized: white lines just inside both ends (where it can be
+    /// While a zoom or camera action is hovered or resized: white lines just inside both ends (where it can be
     /// dragged shorter or longer); the end the pointer would grab is the bright, wider one.
     private func drawGrips(_ lane: Lane, _ id: UUID, in r: CGRect) {
         var active: Bool?
@@ -820,32 +847,93 @@ final class VideoTimelineView: NSView {
 
     // MARK: Thumbnails
 
-    private func makeThumbnails() async {
-        let generator = AVAssetImageGenerator(asset: project.asset)
+    /// The strip shows the recording's own frames (raw) or the edited video's (zooms, cursor, camera…); either way
+    /// they're kept by source time.
+    private var showsRawFrames = false
+    private var editedSource: (asset: AVAsset, composition: AVVideoComposition)?
+    /// Bumped whenever the frames are made again; older results are dropped.
+    private var generation = 0
+    private var batchTask: Task<Void, Never>?
+    private var lookWork: DispatchWorkItem?
+
+    /// The edited video, rendered small (from the editor; again after every change of the clips).
+    func setEditedSource(asset: AVAsset, composition: AVVideoComposition) {
+        editedSource = (asset, composition)
+        if !showsRawFrames { reloadThumbnails() }
+    }
+
+    /// The edit's look changed: the edited frames are made again, a moment later (a slider drag doesn't restart it
+    /// all the time).
+    func editedLookChanged() {
+        guard !showsRawFrames else { return }
+        lookWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reloadThumbnails() }
+        lookWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func makeGenerator(tolerance: CMTime) -> AVAssetImageGenerator? {
+        let generator: AVAssetImageGenerator
+        if showsRawFrames {
+            generator = AVAssetImageGenerator(asset: project.asset)
+        } else {
+            guard let editedSource else { return nil }
+            generator = AVAssetImageGenerator(asset: editedSource.asset)
+            generator.videoComposition = editedSource.composition
+        }
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 240, height: 120)
-        generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 10)
-        generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 10)
+        generator.requestedTimeToleranceBefore = tolerance
+        generator.requestedTimeToleranceAfter = tolerance
+        return generator
+    }
+
+    /// Where a source moment is for the generator: itself (raw), or on the edited timeline (nil: it was cut out).
+    private func generatorTime(_ source: Double) -> Double? {
+        if showsRawFrames { return min(source, max(project.sourceDuration - 0.05, 0)) }
+        return project.outputTime(source: source).map { min($0, max(project.duration - 0.05, 0)) }
+    }
+
+    private func reloadThumbnails() {
+        generation += 1
+        batchTask?.cancel()
+        wanted = []
+        requested = []
+        onDemand = nil
+        let g = generation
+        batchTask = Task { await makeThumbnails(generation: g) }
+    }
+
+    /// The first time tiles fill in as they come; later the old ones stay until all the new ones are there.
+    private func makeThumbnails(generation g: Int) async {
+        guard let generator = makeGenerator(tolerance: CMTime(value: 1, timescale: 10)) else { return }
         let duration = project.sourceDuration
         let count = max(2, min(160, Int(duration / 0.25)))
+        let progressive = thumbnails.isEmpty
+        var fresh: [(time: Double, image: CGImage)] = []
         for i in 0..<count {
+            guard !Task.isCancelled, g == generation else { return }
             let t = duration * Double(i) / Double(count - 1)
-            if let (image, _) = try? await generator.image(at: CMTime(seconds: min(t, max(duration - 0.05, 0)), preferredTimescale: 600)) {
-                thumbnails.append((t, image))
-                if i % 8 == 0 || i == count - 1 { needsDisplay = true }
+            guard let at = generatorTime(t) else { continue }
+            if let (image, _) = try? await generator.image(at: CMTime(seconds: at, preferredTimescale: 600)) {
+                guard g == generation else { return }
+                fresh.append((t, image))
+                if progressive {
+                    thumbnails.append((t, image))
+                    if i % 8 == 0 || i == count - 1 { needsDisplay = true }
+                }
             }
+        }
+        guard g == generation else { return }
+        if !progressive {
+            thumbnails = fresh
+            // Close-ups made meanwhile were of the old frames: they're asked for again.
+            requested = []
         }
         needsDisplay = true
     }
 
-    private lazy var generator: AVAssetImageGenerator = {
-        let generator = AVAssetImageGenerator(asset: project.asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 240, height: 120)
-        generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 60)
-        generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 60)
-        return generator
-    }()
+    private var onDemand: AVAssetImageGenerator?
     private var wanted: [Double] = []
     private var requested = Set<Int>()
     private var loading = false
@@ -862,11 +950,13 @@ final class VideoTimelineView: NSView {
 
     private func loadNext() {
         guard !loading, !wanted.isEmpty else { return }
+        if onDemand == nil { onDemand = makeGenerator(tolerance: CMTime(value: 1, timescale: 60)) }
+        guard let generator = onDemand else { return }
         loading = true
         let t = wanted.removeFirst()
-        let duration = project.sourceDuration
+        let g = generation
         Task {
-            if let (image, _) = try? await generator.image(at: CMTime(seconds: min(t, max(duration - 0.05, 0)), preferredTimescale: 600)) {
+            if let at = generatorTime(t), let (image, _) = try? await generator.image(at: CMTime(seconds: at, preferredTimescale: 600)), g == generation {
                 thumbnails.append((t, image))
                 needsDisplay = true
             }
@@ -895,9 +985,9 @@ final class VideoTimelineView: NSView {
     }
     private var drag: Drag?
     private var hoverEdge: (clip: Int, leading: Bool)?
-    /// The zoom or camera layout a click would add where the pointer is.
+    /// The zoom or camera action a click would add where the pointer is.
     private var hoverGhost: (lane: Lane, start: Double, end: Double)?
-    /// The zoom or camera layout under the pointer and the end it would grab (its resize lines show).
+    /// The zoom or camera action under the pointer and the end it would grab (its resize lines show).
     private var hoverSpanEdge: (lane: Lane, id: UUID, edge: Bool?)?
     /// The cut tool: where a click would split, and the stretch a drag would cut out.
     private var hoverCut: Double?
@@ -925,7 +1015,7 @@ final class VideoTimelineView: NSView {
         return nil
     }
 
-    /// A zoom or camera layout and which end (`true` = start) the pointer grabs. The grips sit inside the ends, so
+    /// A zoom or camera action and which end (`true` = start) the pointer grabs. The grips sit inside the ends, so
     /// where two touch, the left one's end and the right one's start are separate targets.
     private func spanHit(_ p: CGPoint) -> (lane: Lane, span: Span, edge: Bool?)? {
         guard let lane = lane(at: p) else { return nil }
@@ -1071,9 +1161,13 @@ final class VideoTimelineView: NSView {
             return
         }
         select(nil, nil)
+        // A click on an action selects it and jumps to where it starts.
+        if let e = studioEvent(at: p) {
+            state.selectedEvent = e.id
+            if let start = project.outputTime(source: e.start) { seek(start) }
+            return
+        }
         drag = .scrub
-        // A click on an event jumps to where it starts.
-        if let e = studioEvent(at: p), let start = project.outputTime(source: e.start) { seek(start); return }
         seek(t)
     }
 
@@ -1133,7 +1227,7 @@ final class VideoTimelineView: NSView {
     override func mouseUp(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if case .createSpan(let lane, let start, let id) = drag, id == nil, let ghost = ghost(at: CGPoint(x: x(start), y: top(lane) + 1)) {
-            // A click adds the zoom or camera layout the ghost showed.
+            // A click adds the zoom or camera action the ghost showed.
             addSpan(lane, start: ghost.start, end: ghost.end)
         }
         if case .cut(let start) = drag {
@@ -1154,7 +1248,7 @@ final class VideoTimelineView: NSView {
         needsDisplay = true
     }
 
-    /// The gap between neighbouring zooms (or camera layouts) that `t` lies in.
+    /// The gap between neighbouring zooms (or camera actions) that `t` lies in.
     private func freeRange(_ lane: Lane, around t: Double, excluding id: UUID?) -> (Double, Double) {
         var lo = 0.0, hi = project.duration
         for s in spans(lane) where s.id != id {
@@ -1174,7 +1268,7 @@ final class VideoTimelineView: NSView {
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
     }
 
-    /// Right-click: a zoom's or camera layout's options; Split / Delete on a clip; Delete Cut on a cut marker.
+    /// Right-click: a zoom's or camera action's options; Split / Delete on a clip; Delete Cut on a cut marker.
     override func menu(for event: NSEvent) -> NSMenu? {
         let p = convert(event.locationInWindow, from: nil)
         let t = min(max(time(p.x), 0), project.duration)
@@ -1218,11 +1312,33 @@ final class VideoTimelineView: NSView {
             }
             menu.addItem(.separator())
             menu.addItem(ClosureMenuItem(title: "Remove") { [weak self] in self?.removeSpan(lane, span.id) })
-            menu.addItem(ClosureMenuItem(title: lane == .zoom ? "Remove All Zooms" : "Remove All Camera Layouts") { [weak self] in
+            menu.addItem(ClosureMenuItem(title: lane == .zoom ? "Remove All Zooms" : "Remove All Camera Actions") { [weak self] in
                 guard let self else { return }
                 self.select(nil, nil)
                 if lane == .zoom { self.project.zooms = [] } else { self.project.cameraLayouts = [] }
             })
+            if lane == .zoom, project.isStudio { menu.addItem(redoZoomsItem()) }
+        } else if lane(at: p) == .zoom, project.isStudio {
+            menu.addItem(redoZoomsItem())
+        } else if let e = studioEvent(at: p) {
+            select(nil, nil)
+            state.selectedEvent = e.id
+            menu.addItem(ClosureMenuItem(title: "Remove \(e.kind == .typing ? "Typing" : e.title)") { [weak self] in self?.removeEvent(e.id) })
+            // A shortcut or key can be hidden everywhere in this video.
+            if e.kind == .shortcut || e.kind == .key,
+               let key = project.studio?.keys.first(where: { abs($0.t - e.start) < 0.0005 }) {
+                let excluded = ExcludedKey(code: key.code, flags: key.flags, chars: key.chars)
+                let item = ClosureMenuItem(title: "Never Show “\(excluded.label)” in This Video") { [weak self] in
+                    guard let self, !self.project.edit.keystrokes.excluded.contains(excluded) else { return }
+                    self.project.edit.keystrokes.excluded.append(excluded)
+                }
+                item.isEnabled = !project.edit.keystrokes.excluded.contains(excluded)
+                menu.addItem(item)
+            }
+            addRestoreItem(to: menu)
+        } else if p.y >= Metrics.eventsTop, p.y <= Metrics.eventsBottom, !allEvents.isEmpty {
+            guard !project.edit.removedEvents.isEmpty else { return nil }
+            addRestoreItem(to: menu, separated: false)
         } else if p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight, let (i, _) = project.locate(t) {
             let id = project.clips[i].id
             select(nil, nil)
@@ -1246,16 +1362,38 @@ final class VideoTimelineView: NSView {
         return true
     }
 
+    /// Removes an action from the events track: its click effect or keystrokes no longer show in the video.
+    private func removeEvent(_ id: String) {
+        if state.selectedEvent == id { state.selectedEvent = nil }
+        project.edit.removedEvents.append(id)
+    }
+
+    private func addRestoreItem(to menu: NSMenu, separated: Bool = true) {
+        let count = project.edit.removedEvents.count
+        guard count > 0 else { return }
+        if separated { menu.addItem(.separator()) }
+        menu.addItem(ClosureMenuItem(title: "Bring Back Removed Actions (\(count))") { [weak self] in self?.project.edit.removedEvents = [] })
+    }
+
+    /// Studio Mode: the zooms made again from the clicks and typing, with Settings → Studio Mode's zoom options.
+    private func redoZoomsItem() -> NSMenuItem {
+        ClosureMenuItem(title: "Redo Automatic Zooms") { [weak self] in
+            self?.select(nil, nil)
+            self?.project.redoAutomaticZooms()
+        }
+    }
+
     /// Removes a cut: the cut-out part comes back, or a split's two clips join again.
     private func deleteCut(_ at: Double) {
         if let selected = state.selectedCut, abs(selected - at) < 0.001 { state.selectedCut = nil }
         project.restoreCut(at: at)
     }
 
-    /// ⌫ / ⌦ removes the selected cut, camera layout, zoom or clip.
+    /// ⌫ / ⌦ removes the selected cut, action, camera action, zoom or clip.
     override func keyDown(with event: NSEvent) {
         guard event.keyCode == 51 || event.keyCode == 117 else { super.keyDown(with: event); return }
         if let at = state.selectedCut { deleteCut(at) }
+        else if let id = state.selectedEvent { removeEvent(id) }
         else if let id = state.selectedCamera { removeSpan(.camera, id) }
         else if let id = state.selectedZoom { removeSpan(.zoom, id) }
         else if let id = state.selectedClip { project.deleteClip(id); state.selectedClip = nil }

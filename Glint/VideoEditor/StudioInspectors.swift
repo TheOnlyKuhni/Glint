@@ -81,6 +81,19 @@ struct KeystrokesInspector: View {
     @ObservedObject var project: VideoProject
     private var keys: KeystrokeSettings { project.edit.keystrokes }
 
+    /// The shortcuts and special keys pressed in this recording, once each (offered to hide).
+    private var recordedShortcuts: [ExcludedKey] {
+        var seen = Set<ExcludedKey>()
+        var result: [ExcludedKey] = []
+        for key in project.studio?.keys ?? [] {
+            let flags = NSEvent.ModifierFlags(rawValue: key.flags)
+            guard !flags.isDisjoint(with: [.command, .option, .control]) || (key.code != 49 && KeyLabel.special(key.code) != nil) else { continue }
+            let excluded = ExcludedKey(code: key.code, flags: key.flags, chars: key.chars)
+            if seen.insert(excluded).inserted { result.append(excluded) }
+        }
+        return result
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             InspectorHeader("Keystrokes")
@@ -101,10 +114,21 @@ struct KeystrokesInspector: View {
                     PositionPicker(options: [.topLeft, .topRight, .bottomLeft, .bottom, .bottomRight], selected: keys.position,
                                    spot: CGSize(width: 38, height: 13)) { project.edit.keystrokes.position = $0 }
                     InspectorHeader("Show").padding(.top, 8)
-                    ChoiceButtons(titles: ["All Keys", "Shortcuts"], selected: keys.allKeys ? 0 : 1,
-                                  helps: ["Everything you type, shortcuts included", "Only shortcuts with ⌘, ⌥ or ⌃"]) {
-                        project.edit.keystrokes.allKeys = $0 == 0
+                    let filters = KeystrokeFilter.allCases
+                    ChoiceButtons(titles: filters.map(\.title), selected: filters.firstIndex(of: keys.filter) ?? 0,
+                                  helps: filters.map(\.help)) { project.edit.keystrokes.filter = filters[$0] }
+                    InspectorHeader("Never show").padding(.top, 8)
+                    ExcludedKeysEditor(keys: $project.edit.keystrokes.excluded, suggestions: recordedShortcuts)
+                    Button {
+                        project.edit.keystrokes.filter = KeystrokeFilter.setting
+                        project.edit.keystrokes.excluded = ExcludedKey.setting
+                    } label: {
+                        Text("Use Glint Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
+                            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                    .help("Show and hide keys like Settings → Recording → Keystrokes (what new Studio recordings start with)")
                 }
                 .disabled(!keys.show)
                 .opacity(keys.show ? 1 : 0.45)
@@ -121,6 +145,9 @@ struct CameraInspector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             InspectorHeader("Camera")
+            if project.hasCamera {
+                InfoBox { Text("The default camera. Camera actions on the timeline go full size, resize or hide it for a while.") }
+            }
             if !project.hasCamera {
                 InfoBox { Text("Camera recording was disabled for this recording.") }
             } else {
@@ -146,11 +173,11 @@ struct CameraInspector: View {
     }
 }
 
-/// A selected camera layout (Studio Mode): full size, a bubble of its own (size, shape, corner) or hidden.
+/// A selected camera action (Studio Mode): full size, resized (its own size, shape, corner) or hidden.
 struct CameraLayoutInspector: View {
     @ObservedObject var project: VideoProject
     @ObservedObject var state: VideoEditorState
-    /// A snapshot; edits go back by id (the layout may be removed while this view updates).
+    /// A snapshot; edits go back by id (the action may be removed while this view updates).
     let layout: CameraLayout
 
     private func edit(_ change: (inout CameraLayout) -> Void) {
@@ -161,10 +188,12 @@ struct CameraLayoutInspector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             let kinds = CameraLayout.Kind.allCases
-            InspectorHeader("Camera layout", value: String(format: "%.1f s", layout.end - layout.start))
+            InspectorHeader("Camera action")
             ChoiceButtons(titles: kinds.map(\.title), selected: kinds.firstIndex(of: layout.kind) ?? 0,
-                          helps: ["The camera fills the whole video", "The camera as a bubble with its own size, shape and corner",
+                          helps: ["The camera fills the whole video", "The camera gets its own size, shape and corner here",
                                   "No camera here"]) { i in edit { $0.kind = kinds[i] } }
+            LengthPicker(length: layout.end - layout.start) { project.setLength(cameraAction: layout.id, $0) }
+                .padding(.top, 8)
             if layout.kind == .bubble {
                 let size = Binding(get: { layout.size }, set: { v in edit { $0.size = v } })
                 InspectorHeader("Size", percent: size, range: 0.5...2).padding(.top, 8)
@@ -176,11 +205,13 @@ struct CameraLayoutInspector: View {
                 PositionPicker(options: [.topLeft, .topRight, .bottomLeft, .bottomRight], selected: layout.position,
                                spot: CGSize(width: 18, height: 18), round: layout.shape == 0) { corner in edit { $0.position = corner } }
             } else {
-                InfoBox {
-                    Text(layout.kind == .full ? "The camera fills the video here and goes back into its bubble afterwards."
-                                              : "The camera fades out here and comes back afterwards.")
-                }
             }
+            InfoBox {
+                Text(layout.kind == .full ? "While this action lasts, the camera fills the video. Afterwards the default camera settings apply again."
+                     : layout.kind == .hidden ? "While this action lasts, the camera is hidden. Afterwards the default camera settings apply again."
+                     : "While this action lasts, the camera has this size, shape and position. Afterwards the default camera settings apply again.")
+            }
+            .padding(.top, 4)
             if !project.edit.camera.show {
                 InfoBox { Text("The camera is turned off in the Camera section, so it doesn't show anywhere.") }
             }
@@ -188,12 +219,12 @@ struct CameraLayoutInspector: View {
                 state.selectedCamera = nil
                 state.section = .camera
             } label: {
-                Text("Camera Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
+                Text("Default Camera Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(.top, 14)
-            .help("The camera's look everywhere else: show, size, shape, corner, flip")
+            .help("How the camera looks wherever no camera action is set: show, size, shape, corner, flip")
         }
     }
 }

@@ -87,6 +87,26 @@ enum Prefs {
     static let recShowCursor = Pref(key: "rec.showCursor", defaultValue: true)
     static let recHighlightClicks = Pref(key: "rec.highlightClicks", defaultValue: false)
     static let recShowKeystrokes = Pref(key: "rec.showKeystrokes", defaultValue: false)
+    /// Which keys show (`KeystrokeFilter`; read through `KeystrokeFilter.setting`, which knows the older
+    /// `recKeysShortcutsOnly`), and the keys never shown (JSON of `[ExcludedKey]`). New Studio projects start with these.
+    static let recKeysFilter = Pref(key: "rec.keysFilter", defaultValue: "all")
+    static let recKeysExcluded = Pref(key: "rec.keysExcluded", defaultValue: "")
+    /// Studio Mode's automatic zooms (`AutoZoomSettings`): whether a new recording gets them, what starts one, and
+    /// how they look (level, seconds before and after the action, shortest zoom, gap below which two join).
+    /// The video editor's timeline shows the recording's own frames instead of the edited ones.
+    static let editorRawFrames = Pref(key: "editor.rawFrames", defaultValue: false)
+    static let studioAutoZoom = Pref(key: "studio.autoZoom", defaultValue: true)
+    static let studioZoomClicks = Pref(key: "studio.zoomClicks", defaultValue: true)
+    static let studioZoomRightClicks = Pref(key: "studio.zoomRightClicks", defaultValue: false)
+    static let studioZoomDrags = Pref(key: "studio.zoomDrags", defaultValue: true)
+    static let studioZoomTyping = Pref(key: "studio.zoomTyping", defaultValue: true)
+    static let studioZoomScrolling = Pref(key: "studio.zoomScrolling", defaultValue: false)
+    static let studioZoomLevel = Pref(key: "studio.zoomLevel", defaultValue: 1.8)
+    static let studioZoomBefore = Pref(key: "studio.zoomBefore", defaultValue: 0.6)
+    static let studioZoomAfter = Pref(key: "studio.zoomAfter", defaultValue: 1.6)
+    static let studioZoomMinLength = Pref(key: "studio.zoomMinLength", defaultValue: 2.0)
+    static let studioZoomJoin = Pref(key: "studio.zoomJoin", defaultValue: 1.0)
+    static let studioZoomFollow = Pref(key: "studio.zoomFollow", defaultValue: true)
     /// Recording panel toggles.
     /// Microphone to record (AVCaptureDevice unique ID); empty = "Do Not Record Microphone".
     static let recMicDevice = Pref(key: "rec.micDevice", defaultValue: "")
