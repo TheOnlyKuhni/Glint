@@ -471,19 +471,3 @@ final class CropOverlayView: NSView {
         if dragged { onRectChange?(false) }
     }
 }
-
-/// Bottom bar while cropping: "Snap to edges" plus the hint.
-struct CropBottomBar: View {
-    @Bindable var state: CropState
-    var body: some View {
-        HStack(spacing: 10) {
-            Toggle("Snap to edges", isOn: $state.snapToEdges).toggleStyle(.checkbox)
-            Text("Hold Command ⌘ to disable snapping.").foregroundStyle(.secondary)
-            Spacer()
-        }
-        .font(.system(size: 13))
-        .padding(.leading, 10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.displayP3, red: 0x40 / 255.0, green: 0x40 / 255.0, blue: 0x42 / 255.0))
-    }
-}
