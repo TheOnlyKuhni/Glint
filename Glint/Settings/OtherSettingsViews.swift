@@ -357,7 +357,10 @@ struct KeystrokeOptionsView: View {
             }
             .pickerStyle(.segmented)
             LabeledContent("Display time") {
-                HStack { Slider(value: $duration, in: 0.5...4, step: 0.5); Text(String(format: "%.1f s", duration)).monospacedDigit() }
+                HStack {
+                    Slider(value: $duration, in: 0.5...4, step: 0.5)
+                    EditableValue(text: String(format: "%.1f s", duration), value: $duration, range: 0.5...4, decimals: 1).monospacedDigit()
+                }
             }
             Toggle("Only shortcuts (keys with ⌘ ⌥ ⌃)", isOn: $shortcutsOnly)
         }

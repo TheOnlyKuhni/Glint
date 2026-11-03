@@ -85,6 +85,13 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
             NSApp.activate()
             controller.window?.center()
             controller.showWindow(nil)
+            // Opened by itself (a Studio recording stopped, seconds after the click), Glint may not be let in front
+            // right away: the window goes on top regardless, and asks again once the Dock icon is there.
+            controller.window?.orderFrontRegardless()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                NSApp.activate()
+                controller.window?.makeKeyAndOrderFront(nil)
+            }
             controller.rebuild(force: true)
             // A Studio Mode recording opens on the cursor settings.
             if project.isStudio { controller.state.section = .cursor }

@@ -18,6 +18,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         var microphone: String
         /// GIFs are recorded silently, then converted.
         var isGIF: Bool
+        /// Studio Mode: nothing of Glint is recorded (the camera goes into its own movie).
+        var isStudio = false
     }
 
     let options: Options
@@ -69,7 +71,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         // Glint's controls stay out of the movie; click highlights and keystrokes are meant to be recorded.
         let pid = ProcessInfo.processInfo.processIdentifier
         let excluded = content.windows.filter { $0.owningApplication?.processID == pid && $0.title != RecordingOverlayTitle.recorded }
-        let filter = SCContentFilter(display: display, excludingWindows: excluded)
+        // Studio Mode records none of Glint: the whole app is left out, so a window that appears or is replaced
+        // later (the camera bubble) can't slip in the way one missing from this snapshot of the windows would.
+        let filter = if options.isStudio, let glint = content.applications.first(where: { $0.processID == pid }) {
+            SCContentFilter(display: display, excludingApplications: [glint], exceptingWindows: [])
+        } else {
+            SCContentFilter(display: display, excludingWindows: excluded)
+        }
         let size = pixelSize
         let config = SCStreamConfiguration()
         config.sourceRect = options.rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)

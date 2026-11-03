@@ -71,8 +71,8 @@ struct KeystrokeSettings: Equatable, Codable {
     var size: Double = 1
     var light = false
     var position: OverlayCorner = .bottom
-    /// Off: only shortcuts (with ⌘, ⌥ or ⌃) and special keys.
-    var allKeys = false
+    /// Everything typed (the default); off: only shortcuts (with ⌘, ⌥ or ⌃) and special keys.
+    var allKeys = true
 }
 
 struct CameraSettings: Equatable, Codable {
@@ -131,13 +131,14 @@ enum StudioZooms {
         for m in studio.mouse where m.k == .down && (0...1).contains(m.x) && (0...1).contains(m.y) {
             windows.append((m.t - 0.6, m.t + 1.6))
         }
-        // Typing: keys less than 1.2 s apart, at least three of them.
+        // Typing: keys less than 1.2 s apart, at least three of them. Shortcuts (⌘, ⌥ or ⌃ held) aren't typing.
         var run: [Double] = []
         func flush() {
             if run.count >= 3, let a = run.first, let b = run.last { windows.append((a - 0.5, b + 1.0)) }
             run = []
         }
-        for key in studio.keys.sorted(by: { $0.t < $1.t }) {
+        let typed = studio.keys.filter { NSEvent.ModifierFlags(rawValue: $0.flags).isDisjoint(with: [.command, .option, .control]) }
+        for key in typed.sorted(by: { $0.t < $1.t }) {
             if let last = run.last, key.t - last > 1.2 { flush() }
             run.append(key.t)
         }
@@ -299,7 +300,7 @@ nonisolated struct KeyLabel: Sendable {
         return labels
     }
 
-    private static func special(_ code: Int) -> String? {
+    static func special(_ code: Int) -> String? {
         switch code {
         case 36, 76: "↩"
         case 48: "⇥"
@@ -317,6 +318,86 @@ nonisolated struct KeyLabel: Sendable {
         case 121: "⇟"
         default: nil
         }
+    }
+}
+
+/// What happened while a Studio recording ran, for the timeline's events track (source time; points have
+/// `end == start`). Only what happened inside the recorded area counts.
+nonisolated struct StudioEvent: Sendable {
+    enum Kind: Sendable { case click, rightClick, drag, scroll, typing, shortcut, key }
+    var kind: Kind
+    var start: Double
+    var end: Double
+    /// Typing: what was typed; shortcut or a lone key: its label ("⌘ C", "esc").
+    var text: String?
+
+    var isKeyboard: Bool { kind == .typing || kind == .shortcut || kind == .key }
+
+    var title: String {
+        switch kind {
+        case .click: "Click"
+        case .rightClick: "Right-click"
+        case .drag: String(format: "Drag (%.1f s)", end - start)
+        case .scroll: String(format: "Scrolling (%.1f s)", end - start)
+        case .typing: "Typing: “\(text ?? "")”"
+        case .shortcut: "Shortcut \(text ?? "")"
+        case .key: "Key \(text ?? "")"
+        }
+    }
+
+    static func make(_ studio: StudioRecording) -> [StudioEvent] {
+        var events: [StudioEvent] = []
+        func inside(_ m: StudioRecording.Mouse) -> Bool { (0...1).contains(m.x) && (0...1).contains(m.y) }
+        // Pointer: a press that moved before its release is a drag; scrolls less than 0.6 s apart are one stretch.
+        var press: StudioRecording.Mouse?
+        var scroll: (start: Double, end: Double)?
+        func endScroll() { if let s = scroll { events.append(StudioEvent(kind: .scroll, start: s.start, end: s.end)) }; scroll = nil }
+        for m in studio.mouse {
+            switch m.k {
+            case .down: press = inside(m) ? m : nil
+            case .up:
+                guard let p = press else { continue }
+                press = nil
+                let moved = hypot((m.x - p.x) * studio.areaWidth, (m.y - p.y) * studio.areaHeight) > 6
+                events.append(moved ? StudioEvent(kind: .drag, start: p.t, end: m.t) : StudioEvent(kind: .click, start: p.t, end: p.t))
+            case .rightDown where inside(m): events.append(StudioEvent(kind: .rightClick, start: m.t, end: m.t))
+            case .scroll where inside(m):
+                if let s = scroll, m.t - s.end < 0.6 { scroll = (s.start, m.t) } else { endScroll(); scroll = (m.t, m.t) }
+            default: break
+            }
+        }
+        endScroll()
+        // Keyboard: shortcuts one by one; other keys less than 1.2 s apart are one stretch of typing. A special key
+        // (esc, ↩, arrows…) on its own isn't typing: it's shown like a shortcut.
+        var typing: StudioEvent?
+        func endTyping() { if let t = typing { events.append(t) }; typing = nil }
+        for key in studio.keys.sorted(by: { $0.t < $1.t }) {
+            let flags = NSEvent.ModifierFlags(rawValue: key.flags)
+            if !flags.isDisjoint(with: [.command, .option, .control]) {
+                endTyping()
+                let label = KeyLabel.make([key], allKeys: false).first?.text ?? key.chars
+                events.append(StudioEvent(kind: .shortcut, start: key.t, end: key.t, text: label))
+                continue
+            }
+            let special = key.code == 49 ? nil : KeyLabel.special(key.code)
+            let glyph = key.code == 49 ? " " : special ?? key.chars
+            let continues = typing.map { key.t - $0.end < 1.2 } ?? false
+            if let special, !continues {
+                endTyping()
+                events.append(StudioEvent(kind: .key, start: key.t, end: key.t, text: special))
+                continue
+            }
+            if var t = typing, continues {
+                t.end = key.t
+                t.text = (t.text ?? "") + glyph
+                typing = t
+            } else {
+                endTyping()
+                typing = StudioEvent(kind: .typing, start: key.t, end: key.t, text: glyph)
+            }
+        }
+        endTyping()
+        return events.sorted { $0.start < $1.start }
     }
 }
 
