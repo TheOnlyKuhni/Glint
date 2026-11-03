@@ -69,9 +69,9 @@ final class HistoryModel: ObservableObject {
         switch filter {
         case .all: entries
         case .screenshots: entries.filter { !$0.isVideo && !$0.isGIF }
-        case .videos: entries.filter(\.isVideo)
+        case .videos: entries.filter { $0.isVideo && !$0.isProject }
         case .gifs: entries.filter(\.isGIF)
-        case .videoProjects: []
+        case .videoProjects: entries.filter(\.isProject)
         }
     }
 

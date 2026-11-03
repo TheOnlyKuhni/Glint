@@ -13,7 +13,7 @@ struct CursorInspector: View {
             InspectorHeader("Cursor")
             MainSwitch(title: "Show cursor", isOn: $project.edit.cursor.show, help: "Draw the cursor in the video")
             VStack(alignment: .leading, spacing: 10) {
-                InspectorHeader("Size", value: "\(Int((cursor.size * 100).rounded()))%").padding(.top, 8)
+                InspectorHeader("Size", percent: $project.edit.cursor.size, range: 0.5...3).padding(.top, 8)
                 StepSlider(value: $project.edit.cursor.size, range: 0.5...3, ticks: 6)
                     .help("How big the cursor is (100% = as it was on screen)")
                 InspectorHeader("Style").padding(.top, 8)
@@ -91,7 +91,7 @@ struct KeystrokesInspector: View {
             } else {
                 MainSwitch(title: "Show keystrokes", isOn: $project.edit.keystrokes.show, help: "Show the keys you pressed in the video")
                 VStack(alignment: .leading, spacing: 10) {
-                    InspectorHeader("Size", value: "\(Int((keys.size * 100).rounded()))%").padding(.top, 8)
+                    InspectorHeader("Size", percent: $project.edit.keystrokes.size, range: 0.5...2).padding(.top, 8)
                     StepSlider(value: $project.edit.keystrokes.size, range: 0.5...2, ticks: 7)
                         .help("How big the keystroke labels are")
                     InspectorHeader("Style").padding(.top, 8)
@@ -101,9 +101,9 @@ struct KeystrokesInspector: View {
                     PositionPicker(options: [.topLeft, .topRight, .bottomLeft, .bottom, .bottomRight], selected: keys.position,
                                    spot: CGSize(width: 38, height: 13)) { project.edit.keystrokes.position = $0 }
                     InspectorHeader("Show").padding(.top, 8)
-                    ChoiceButtons(titles: ["Shortcuts", "All Keys"], selected: keys.allKeys ? 1 : 0,
-                                  helps: ["Only shortcuts with ⌘, ⌥ or ⌃", "Everything you type, shortcuts included"]) {
-                        project.edit.keystrokes.allKeys = $0 == 1
+                    ChoiceButtons(titles: ["All Keys", "Shortcuts"], selected: keys.allKeys ? 0 : 1,
+                                  helps: ["Everything you type, shortcuts included", "Only shortcuts with ⌘, ⌥ or ⌃"]) {
+                        project.edit.keystrokes.allKeys = $0 == 0
                     }
                 }
                 .disabled(!keys.show)
@@ -129,7 +129,7 @@ struct CameraInspector: View {
             } else {
                 MainSwitch(title: "Show camera", isOn: $project.edit.camera.show, help: "Show the camera in the video")
                 VStack(alignment: .leading, spacing: 10) {
-                    InspectorHeader("Size", value: "\(Int((camera.size * 100).rounded()))%").padding(.top, 8)
+                    InspectorHeader("Size", percent: $project.edit.camera.size, range: 0.5...2).padding(.top, 8)
                     StepSlider(value: $project.edit.camera.size, range: 0.5...2, ticks: 7)
                         .help("How big the camera is (100% = the recorder's Medium)")
                     InspectorHeader("Shape").padding(.top, 8)

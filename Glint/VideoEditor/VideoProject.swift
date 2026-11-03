@@ -246,6 +246,15 @@ final class VideoProject: ObservableObject {
         return result
     }
 
+    /// Where a moment of the recording ends up on the edited timeline; nil if it was cut out.
+    func outputTime(source t: Double) -> Double? {
+        let starts = clipStarts
+        for (i, clip) in clips.enumerated() where t >= clip.start - 0.0001 && t <= clip.end + 0.0001 {
+            return starts[i] + min(max(t - clip.start, 0), clip.duration)
+        }
+        return nil
+    }
+
     /// The clip under an output time and the matching source time.
     func locate(_ t: Double) -> (index: Int, source: Double)? {
         let starts = clipStarts

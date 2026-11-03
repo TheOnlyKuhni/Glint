@@ -20,6 +20,8 @@ final class HistoryStore {
         let date: Date
         /// Bundle id of the app that was in front when it was captured (shown as a badge).
         let sourceApp: String?
+        /// A Studio Mode recording (its pointer, keys and camera are kept next to it, so it stays editable).
+        var isProject = false
         var id: URL { fileURL }
         var isVideo: Bool { ["mp4", "mov", "m4v"].contains(fileURL.pathExtension.lowercased()) }
         var isGIF: Bool { fileURL.pathExtension.lowercased() == "gif" }
@@ -49,7 +51,8 @@ final class HistoryStore {
             let date = (try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
             let meta = (try? Data(contentsOf: folder.appendingPathComponent(Self.metadataName)))
                 .flatMap { try? JSONDecoder().decode(Metadata.self, from: $0) }
-            return Entry(fileURL: file, date: date, sourceApp: meta?.sourceApp)
+            let isProject = fm.fileExists(atPath: StudioRecording.folder(for: file).appendingPathComponent("studio.json").path)
+            return Entry(fileURL: file, date: date, sourceApp: meta?.sourceApp, isProject: isProject)
         }
         .sorted { $0.date > $1.date }
     }

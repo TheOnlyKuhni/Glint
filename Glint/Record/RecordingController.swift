@@ -181,7 +181,7 @@ final class RecordingSession {
         let options = ScreenRecorder.Options(rect: rect, screen: screen, frameRate: isGIF ? Defaults[Prefs.gifFrameRate] : Defaults[Prefs.recFrameRate],
                                              showsCursor: mode != .studio && Defaults[Prefs.recShowCursor],
                                              systemAudio: Defaults[Prefs.recSystemAudio],
-                                             microphone: Defaults[Prefs.recMicDevice], isGIF: isGIF)
+                                             microphone: Defaults[Prefs.recMicDevice], isGIF: isGIF, isStudio: mode == .studio)
         let recorder = studioClock.map { ScreenRecorder(options: options, clock: $0) } ?? ScreenRecorder(options: options)
         do {
             try await recorder.start()

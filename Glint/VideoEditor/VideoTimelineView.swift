@@ -24,6 +24,11 @@ final class VideoTimelineView: NSView {
         static let clipTop: CGFloat = 122
         static let clipHeight: CGFloat = 60
         static let cutTop: CGFloat = 190
+        /// Studio Mode's events: pointer row (clicks, drags, scrolling), then keyboard row (typing, shortcuts).
+        static let pointerRow: CGFloat = 223
+        static let keyRow: CGFloat = 242
+        static let eventsTop: CGFloat = 214
+        static let eventsBottom: CGFloat = 252
     }
 
     private static let red = NSColor(red: 0xE9 / 255.0, green: 0x5F / 255.0, blue: 0x52 / 255.0, alpha: 1)
@@ -197,9 +202,86 @@ final class VideoTimelineView: NSView {
         drawZoomTrack()
         drawClips()
         drawCuts()
+        drawEvents()
         drawPlayhead()
         drawScissors()
         updateToolTips()
+    }
+
+    // MARK: Studio Mode events
+
+    /// What happened while recording (Studio Mode only), in source time.
+    private lazy var events: [StudioEvent] = project.studio.map(StudioEvent.make) ?? []
+
+    /// An event's span on the timeline, nil if it was cut out. Points get a few points of width.
+    private func eventRect(_ e: StudioEvent) -> CGRect? {
+        guard let a = project.outputTime(source: e.start) else { return nil }
+        let b = project.outputTime(source: e.end) ?? a
+        let y = e.isKeyboard ? Metrics.keyRow : Metrics.pointerRow
+        switch e.kind {
+        case .click, .rightClick: return CGRect(x: x(a) - 4, y: y - 4, width: 8, height: 8)
+        case .shortcut, .key:
+            let w = (e.text ?? "").size(withAttributes: Self.eventFont).width + 10
+            return CGRect(x: x(a) - w / 2, y: y - 7, width: w, height: 14)
+        case .typing:
+            // Fast typing still gets room for a few characters.
+            let text = (e.text ?? "").size(withAttributes: Self.eventFont).width + 10
+            return CGRect(x: x(a) - 3, y: y - 7, width: max(x(b) - x(a) + 6, min(text, 64)), height: 14)
+        case .drag, .scroll: return CGRect(x: x(a) - 3, y: y - 3, width: max(x(b) - x(a), 0) + 6, height: 6)
+        }
+    }
+
+    private func studioEvent(at p: CGPoint) -> StudioEvent? {
+        // Points first: they sit on top of the stretches.
+        events.filter { e in eventRect(e).map { $0.insetBy(dx: -3, dy: -3).contains(p) } ?? false }
+            .min { a, b in (a.end - a.start) < (b.end - b.start) }
+    }
+
+    private static let eventFont: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9.5, weight: .medium)]
+
+    private func drawEvents() {
+        guard !events.isEmpty else { return }
+        let visible = visibleRect.insetBy(dx: -40, dy: 0)
+        // Stretches under points.
+        for e in events where [.drag, .scroll, .typing].contains(e.kind) {
+            guard let r = eventRect(e), r.intersects(visible) else { continue }
+            switch e.kind {
+            case .drag: NSColor(white: 1, alpha: 0.55).setFill()
+            case .scroll: NSColor(displayP3Red: 0.69, green: 0.45, blue: 0.95, alpha: 0.8).setFill()
+            default: NSColor(displayP3Red: 0.25, green: 0.47, blue: 0.85, alpha: 0.85).setFill()
+            }
+            NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+            if e.kind == .typing, let text = e.text {
+                // As much of the typed text as fits.
+                let attrs = Self.eventFont.merging([.foregroundColor: NSColor.white]) { $1 }
+                let room = r.width - 10
+                var shown = text
+                while !shown.isEmpty, (shown as NSString).size(withAttributes: attrs).width > room { shown.removeLast() }
+                if shown.count < text.count, shown.count > 1 { shown = String(shown.dropLast()) + "…" }
+                if shown.count > 1 || shown == text {
+                    (shown as NSString).draw(at: CGPoint(x: r.minX + 5, y: r.midY - 6.5), withAttributes: attrs)
+                }
+            }
+        }
+        for e in events where ![.drag, .scroll, .typing].contains(e.kind) {
+            guard let r = eventRect(e), r.intersects(visible) else { continue }
+            switch e.kind {
+            case .click:
+                NSColor.white.setFill()
+                NSBezierPath(ovalIn: r).fill()
+            case .rightClick:
+                NSColor.systemOrange.setStroke()
+                let ring = NSBezierPath(ovalIn: r.insetBy(dx: 0.75, dy: 0.75))
+                ring.lineWidth = 1.5
+                ring.stroke()
+            case .shortcut, .key:
+                NSColor(white: 0.88, alpha: 1).setFill()
+                NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                let attrs = Self.eventFont.merging([.foregroundColor: NSColor.black]) { $1 }
+                ((e.text ?? "") as NSString).draw(at: CGPoint(x: r.minX + 5, y: r.midY - 6.5), withAttributes: attrs)
+            default: break
+            }
+        }
     }
 
     // MARK: Hover hints
@@ -221,6 +303,9 @@ final class VideoTimelineView: NSView {
         if end > gapStart { rects.append(CGRect(x: gapStart, y: Metrics.zoomTop, width: end - gapStart, height: Metrics.zoomHeight)) }
         rects += clipRects().map(\.1)
         rects += project.cuts.map(cutRect)
+        if !events.isEmpty {
+            rects.append(CGRect(x: 0, y: Metrics.eventsTop, width: bounds.width, height: Metrics.eventsBottom - Metrics.eventsTop))
+        }
         guard rects != toolTipRects else { return }
         toolTipRects = rects
         removeAllToolTips()
@@ -231,6 +316,10 @@ final class VideoTimelineView: NSView {
         if let cut = cutMarker(at: point) {
             let what = cut.length > 0 ? "\(Self.cutLabel(cut.length)) cut out" : "Cut"
             return "\(what): click to select, ⌫ or right-click → Delete Cut removes it"
+        }
+        if point.y >= Metrics.eventsTop, point.y <= Metrics.eventsBottom, !events.isEmpty {
+            return studioEvent(at: point).map { "\($0.title): click to jump there" }
+                ?? "What happened while recording: clicks, drags and scrolling (top), typing and shortcuts (bottom)"
         }
         if let hit = zoomHit(point) {
             return "Zoom \(Int((hit.zoom.scale * 100).rounded()))%: drag to move, drag its ends to resize, right-click for more, ⌫ removes it"
@@ -310,6 +399,24 @@ final class VideoTimelineView: NSView {
             } else if let icon, r.width > 18 {
                 icon.draw(in: CGRect(x: r.midX - 6, y: r.midY - 6.5, width: 12, height: 13))
             }
+            drawZoomGrips(z, in: r)
+        }
+    }
+
+    /// While a zoom is hovered or resized: white lines just inside both ends (where it can be dragged shorter or
+    /// longer); the end the pointer would grab is the bright, wider one.
+    private func drawZoomGrips(_ z: VideoZoom, in r: CGRect) {
+        var active: Bool?
+        if case .resizeZoom(let id, let leading) = drag, id == z.id { active = leading }
+        else if drag == nil, let hover = hoverZoomEdge, hover.id == z.id { active = hover.edge }
+        else { return }
+        guard r.width > 16 else { return }
+        for leading in [true, false] {
+            let grabbed = active == leading
+            let w: CGFloat = grabbed ? 3 : 2
+            let x = leading ? r.minX + 5 : r.maxX - 5 - w
+            NSColor(white: 1, alpha: grabbed ? 1 : 0.55).setFill()
+            NSBezierPath(roundedRect: CGRect(x: x, y: r.minY + 6, width: w, height: r.height - 12), xRadius: w / 2, yRadius: w / 2).fill()
         }
     }
 
@@ -542,6 +649,8 @@ final class VideoTimelineView: NSView {
     private var hoverEdge: (clip: Int, leading: Bool)?
     /// The zoom a click would add where the pointer is.
     private var hoverZoom: (start: Double, end: Double)?
+    /// The zoom under the pointer and the end it would grab (its resize lines show).
+    private var hoverZoomEdge: (id: UUID, edge: Bool?)?
     /// The cut tool: where a click would split, and the stretch a drag would cut out.
     private var hoverCut: Double?
     private var cutPreview: (Double, Double)?
@@ -568,17 +677,28 @@ final class VideoTimelineView: NSView {
         return nil
     }
 
+    /// A zoom and which end (`true` = start) the pointer grabs. The grips sit inside the zoom's ends, so where two
+    /// zooms touch, the left one's end and the right one's start are separate targets.
     private func zoomHit(_ p: CGPoint) -> (zoom: VideoZoom, edge: Bool?)? {
         guard p.y >= Metrics.zoomTop, p.y <= Metrics.zoomTop + Metrics.zoomHeight else { return nil }
         for z in project.zooms {
             let r = zoomRect(z)
-            guard r.insetBy(dx: -5, dy: 0).contains(p) else { continue }
-            if abs(p.x - r.minX) < 7 { return (z, true) }
-            if abs(p.x - r.maxX) < 7 { return (z, false) }
+            guard p.x >= r.minX, p.x <= r.maxX else { continue }
+            let grip = min(Self.zoomGrip, r.width / 3)
+            if p.x - r.minX < grip { return (z, true) }
+            if r.maxX - p.x < grip { return (z, false) }
             return (z, nil)
+        }
+        // Just outside a free end still grabs it.
+        for z in project.zooms {
+            let r = zoomRect(z)
+            if p.x < r.minX, r.minX - p.x < 5 { return (z, true) }
+            if p.x > r.maxX, p.x - r.maxX < 5 { return (z, false) }
         }
         return nil
     }
+
+    private static let zoomGrip: CGFloat = 10
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -586,6 +706,8 @@ final class VideoTimelineView: NSView {
         if e?.clip != hoverEdge?.clip || e?.leading != hoverEdge?.leading { hoverEdge = e; needsDisplay = true }
         let ghost = ghostZoom(at: p)
         if ghost?.start != hoverZoom?.start || ghost?.end != hoverZoom?.end { hoverZoom = ghost; needsDisplay = true }
+        let over = zoomHit(p).map { (id: $0.zoom.id, edge: $0.edge) }
+        if over?.id != hoverZoomEdge?.id || over?.edge != hoverZoomEdge?.edge { hoverZoomEdge = over; needsDisplay = true }
         let cut = scissorsTime(at: p)
         if cut != hoverCut { hoverCut = cut; needsDisplay = true }
         updateCursor(p)
@@ -593,7 +715,9 @@ final class VideoTimelineView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hoverEdge != nil || hoverZoom != nil || hoverCut != nil { hoverEdge = nil; hoverZoom = nil; hoverCut = nil; needsDisplay = true }
+        if hoverEdge != nil || hoverZoom != nil || hoverCut != nil || hoverZoomEdge != nil {
+            hoverEdge = nil; hoverZoom = nil; hoverCut = nil; hoverZoomEdge = nil; needsDisplay = true
+        }
         onHoverFrame?(nil)
     }
 
@@ -699,6 +823,8 @@ final class VideoTimelineView: NSView {
         state.selectedZoom = nil
         state.selectedClip = nil
         drag = .scrub
+        // A click on an event jumps to where it starts.
+        if let e = studioEvent(at: p), let start = project.outputTime(source: e.start) { seek(start); return }
         seek(t)
     }
 

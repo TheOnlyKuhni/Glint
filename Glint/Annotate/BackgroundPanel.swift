@@ -415,18 +415,21 @@ private struct ValueSlider: View {
     let range: CGFloat
     @State private var hovering = false
     @State private var dragging = false
+    @State private var typing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Text("\(Int((value * range).rounded()))")
+                EditableValue(text: "\(Int((value * range).rounded()))",
+                              value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }), range: 0...1,
+                              scale: Double(range), onEditing: { typing = $0 })
                     .font(.system(size: 12)).monospacedDigit()
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6).frame(height: 18)
                     .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white.opacity(0.13)))
-                    .opacity(hovering || dragging ? 1 : 0)
+                    .opacity(hovering || dragging || typing ? 1 : 0)
             }
             Slider(value: $value, in: 0...1) { editing in dragging = editing }
                 .controlSize(.small)

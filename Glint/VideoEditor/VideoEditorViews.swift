@@ -283,12 +283,25 @@ private struct VideoInspector: View {
 struct InspectorHeader: View {
     let title: String
     var value: String?
+    /// A slider's value: clicking it lets the number be typed.
+    var edit: (binding: Binding<Double>, range: ClosedRange<Double>, scale: Double)?
     init(_ title: String, value: String? = nil) { self.title = title; self.value = value }
+    /// Header of a percentage slider: "150%", typed as 150.
+    init(_ title: String, percent binding: Binding<Double>, range: ClosedRange<Double>, suffix: String = "%") {
+        self.title = title
+        value = "\(Int((binding.wrappedValue * 100).rounded()))\(suffix)"
+        edit = (binding, range, 100)
+    }
     var body: some View {
         HStack {
             Text(title).font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
             Spacer()
-            if let value { Text(value).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white) }
+            if let value {
+                Group {
+                    if let edit { EditableValue(text: value, value: edit.binding, range: edit.range, scale: edit.scale) } else { Text(value) }
+                }
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
+            }
         }
     }
 }
@@ -405,7 +418,8 @@ private struct AudioInspector: View {
                         Image(systemName: "speaker.wave.2.fill").font(.system(size: 12)).foregroundStyle(.white)
                         Text("Volume").font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
                         Spacer()
-                        Text("\(Int((project.volume * 100).rounded()))%").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
+                        EditableValue(text: "\(Int((project.volume * 100).rounded()))%", value: $project.edit.volume, range: 0...2, scale: 100)
+                            .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
                     }
                     StepSlider(value: $project.edit.volume, range: 0...2, ticks: 2)
                         .help("Volume of the video's sound (100% = as recorded)")
@@ -454,9 +468,9 @@ private struct ZoomInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Zoom level", value: "\(Int((zoom.scale * 100).rounded()))%")
-            StepSlider(value: Binding(get: { zoom.scale }, set: { v in edit { $0.scale = v } }),
-                       range: 1.0...4.0, step: 0.05, ticks: 7)
+            let level = Binding(get: { zoom.scale }, set: { v in edit { $0.scale = v } })
+            InspectorHeader("Zoom level", percent: level, range: 1...4)
+            StepSlider(value: level, range: 1.0...4.0, step: 0.05, ticks: 7)
                 .help("How far this zoom magnifies (100–400%)")
             Button { let s = zoom.scale; for i in project.zooms.indices { project.zooms[i].scale = s } } label: {
                 Text("Apply Zoom Level to All").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
@@ -638,13 +652,13 @@ private struct VideoBackgroundInspector: View {
             }
             .labelsHidden()
             .help("Shape of the exported video (Auto keeps the video's own)")
-            InspectorHeader("Padding", value: "\(Int((bg.padding * 100).rounded()))%").padding(.top, 10)
+            InspectorHeader("Padding", percent: $project.edit.background.padding, range: 0...1).padding(.top, 10)
             StepSlider(value: $project.edit.background.padding, range: 0...1, ticks: 7)
                 .help("Space between the video and the edge of the background")
-            InspectorHeader("Shadow", value: "\(Int((bg.shadow * 100).rounded()))").padding(.top, 10)
+            InspectorHeader("Shadow", percent: $project.edit.background.shadow, range: 0...1, suffix: "").padding(.top, 10)
             StepSlider(value: $project.edit.background.shadow, range: 0...1, ticks: 7).disabled(!bg.isVisible)
                 .help(bg.isVisible ? "Shadow under the video" : "Needs a background (add padding or pick one)")
-            InspectorHeader("Corner radius", value: "\(Int((bg.corners * 100).rounded()))").padding(.top, 10)
+            InspectorHeader("Corner radius", percent: $project.edit.background.corners, range: 0...1, suffix: "").padding(.top, 10)
             StepSlider(value: $project.edit.background.corners, range: 0...1, ticks: 7).disabled(!bg.isVisible)
                 .help(bg.isVisible ? "Rounds the video's corners" : "Needs a background (add padding or pick one)")
         }
