@@ -25,9 +25,9 @@ struct VideoEditorContent: View {
     let actions: VideoEditorActions
 
     static let timelineHeight: CGFloat = 258
-    /// The window's smallest height: the 52pt bar, the rail's icons (10 + 6 × 30 + 7 gaps of 20 + the 30pt scissors
-    /// + 14) and the whole timeline, so nothing under the video gets cut off.
-    static let minWindowHeight: CGFloat = 52 + 374 + timelineHeight
+    /// The window's smallest height: the 28pt title bar and the head bar, the rail's icons (10 + 6 × 30 + 7 gaps of
+    /// 20 + the 30pt scissors + 14) and the whole timeline, so nothing under the video gets cut off.
+    static let minWindowHeight: CGFloat = 28 + EditorHeadBar.height + 374 + timelineHeight
 
     var body: some View {
         VStack(spacing: 0) {

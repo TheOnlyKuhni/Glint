@@ -72,6 +72,8 @@ final class CropState {
     var ratio: Ratio = .freeform
     /// The terms typed into the ratio fields (0 = that field is blank); the ratio of Custom Ratio.
     var typedRatio: CGSize?
+    /// The custom ratio last typed: Custom brings it back after another ratio was picked.
+    var lastCustomRatio: CGSize?
     var fill: Fill = .auto
     /// Output scale per axis relative to the crop (Image size popover).
     var outputScaleX: CGFloat = 1
@@ -162,10 +164,16 @@ final class CropState {
     /// Picks a ratio from the menu: the frame shrinks around its center to it. Custom Ratio takes the frame's
     /// current ratio.
     func apply(_ ratio: Ratio) {
+        if self.ratio == .customRatio, let t = typedRatio, t.width > 0, t.height > 0 { lastCustomRatio = t }
         typedRatio = nil
         if ratio == .customRatio {
-            let w = Int((rect.width * pixelScale).rounded()), h = Int((rect.height * pixelScale).rounded()), g = max(Self.gcd(w, h), 1)
-            typedRatio = CGSize(width: w / g, height: h / g)
+            // The one typed before, else the frame's current ratio.
+            if let last = lastCustomRatio {
+                typedRatio = last
+            } else {
+                let w = Int((rect.width * pixelScale).rounded()), h = Int((rect.height * pixelScale).rounded()), g = max(Self.gcd(w, h), 1)
+                typedRatio = CGSize(width: w / g, height: h / g)
+            }
         }
         self.ratio = ratio
         fitRatio(keepWidth: nil)
@@ -184,20 +192,18 @@ final class CropState {
         }
     }
 
-    /// A ratio term was typed (`width` = the first field; nil = cleared). Once both are set the ratio applies by
-    /// changing the edited axis; until then it stays freeform and the other field blank.
+    /// A term of the custom ratio was typed (`width` = the first field; nil = cleared). Once both are set the ratio
+    /// applies by changing the edited axis. It stays Custom (also when it equals a preset) and is remembered.
     func setRatioTerm(_ value: CGFloat?, width: Bool) {
         var t = typedRatio ?? {
             let (a, b) = ratioTerms
             return CGSize(width: CGFloat(Double(a) ?? 0), height: CGFloat(Double(b) ?? 0))
         }()
         if width { t.width = max(value ?? 0, 0) } else { t.height = max(value ?? 0, 0) }
-        guard t.width > 0, t.height > 0 else {
-            ratio = .freeform
-            typedRatio = t.width == 0 && t.height == 0 ? nil : t
-            return
-        }
-        resolve(t)
+        ratio = .customRatio
+        typedRatio = t
+        guard t.width > 0, t.height > 0 else { return }
+        lastCustomRatio = t
         fitRatio(keepWidth: !width)
     }
 

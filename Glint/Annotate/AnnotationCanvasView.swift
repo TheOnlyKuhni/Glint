@@ -294,6 +294,9 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
 
     // MARK: Mouse
 
+    /// The tool in use: outside Annotate mode the tools rest and the canvas works like Select.
+    private var tool: AnnotateTool { doc.toolsResting ? .select : doc.tool }
+
     /// Last pointer position (document points) used for the preview cursor.
     private var hoverPoint: CGPoint?
     private var isDrawing: Bool { if case .creating = dragState { true } else { false } }
@@ -304,7 +307,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         // Cropping: the tool rests until Crop & Resize ends.
         if doc.isCropping { return .arrow }
         let zoom = magnification
-        switch doc.tool {
+        switch tool {
         case .select: return .arrow
         case .draw:
             let width = max(2, AnnotationStyle.thicknesses[doc.thickness] * 0.75)
@@ -355,9 +358,9 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         // "Inverse arrow direction" puts the head where the drag started; ⌥ flips the setting for this arrow.
         arrowAnchor = p
 
-        // Draw/Highlighter with a locked canvas always draw, even starting on an object;
+        // With the canvas locked (the default) every drawing tool draws, even starting on an object;
         // unlocked, they can grab and move existing objects.
-        let drawsOnly = (doc.tool == .draw || doc.tool == .highlighter) && !doc.canvasUnlocked
+        let drawsOnly = tool != .select && !doc.canvasUnlocked
         if drawsOnly { doc.selectedID = nil }
 
         // Handles of the current selection.
@@ -382,9 +385,15 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
 
         doc.selectedID = nil
         let style = (color: doc.color, thickness: doc.thickness)
-        switch doc.tool {
+        switch tool {
         case .select:
             dragState = .none
+        case .emoji:
+            // An emoji is an image object: it can be moved and resized like an added screenshot.
+            guard let image = EmojiImage.render(doc.emoji, points: doc.emojiSize) else { dragState = .none; break }
+            // Placed emoji stay unselected, like counters (click one to select it), so the Emoji options stay.
+            let a = doc.stampImage(image, size: CGSize(width: doc.emojiSize, height: doc.emojiSize), center: p)
+            dragState = .moving(a.id, last: p)
         case .counter:
             // Placed counters stay unselected (click one to select it).
             let a = Annotation(kind: .counter(doc.nextCounter), start: p, end: p, color: style.color, thickness: style.thickness)
@@ -399,10 +408,10 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             beginTextEditing(a.id)
             dragState = .none
         case .draw, .highlighter:
-            var a = Annotation(kind: doc.tool == .draw ? .draw : .highlighter, start: p, end: p, points: [p],
+            var a = Annotation(kind: tool == .draw ? .draw : .highlighter, start: p, end: p, points: [p],
                                color: style.color, thickness: style.thickness)
             // Starting on a line of text: snap to it.
-            if doc.tool == .highlighter, let line = doc.textLine(at: p) {
+            if tool == .highlighter, let line = doc.textLine(at: p) {
                 a.variant = 1
                 a.amount = line.height + 4
                 a.points = [CGPoint(x: p.x, y: line.midY)]
@@ -410,7 +419,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             doc.annotations.append(a)
             dragState = .creating(a.id)
         default:
-            let kind: Annotation.Kind = switch doc.tool {
+            let kind: Annotation.Kind = switch tool {
             case .rectangle: .rectangle
             case .filledRectangle: .filledRectangle
             case .ellipse: .ellipse
@@ -422,7 +431,10 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             var a = Annotation(kind: kind, start: p, end: p, color: style.color, thickness: style.thickness)
             switch kind {
             case .redact: a.variant = doc.redactMode.rawValue; a.amount = doc.redactAmount
-            case .spotlight: a.variant = doc.spotlightShape.rawValue; a.amount = doc.spotlightAmount
+            case .spotlight:
+                a.variant = doc.spotlightShape.rawValue
+                a.spotBrightness = doc.spotlightBrightness
+                a.restBrightness = doc.spotlightRest
             case .arrow: a.variant = doc.arrowStyle.rawValue
             default: break
             }

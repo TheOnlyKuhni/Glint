@@ -115,6 +115,21 @@ final class RedactEffects {
 
     init(base: CGImage, scale: CGFloat) { self.base = base; self.scale = scale }
 
+    /// The screenshot `factor` times as bright (spotlights), in steps of 5%.
+    func brightened(_ factor: CGFloat) -> CGImage? {
+        let bucket = Int((factor * 20).rounded())
+        let key = "bright-\(bucket)"
+        if let cached = cache[key] { return cached }
+        let f = CGFloat(bucket) / 20
+        let output = CIImage(cgImage: base).applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: f, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: f, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: f, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+        ])
+        let image = context.createCGImage(output, from: CGRect(x: 0, y: 0, width: base.width, height: base.height))
+        cache[key] = image
+        return image
+    }
+
     /// Full-size obscured image for a mode and strength (0…1); nil for Black Out.
     func image(_ mode: RedactMode, amount: CGFloat) -> CGImage? {
         guard mode != .blackOut else { return nil }

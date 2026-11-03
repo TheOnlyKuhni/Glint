@@ -46,6 +46,10 @@ struct BackgroundStyle: Codable, Equatable {
     var autoBalance = false
     var shadow: CGFloat = 0
     var corners: CGFloat = 0
+    /// The backdrop's brightness (0.5…1.5; nil = 1, unchanged), and how blurred a wallpaper or image backdrop is
+    /// (0 none, 1 light, 2 medium, 3 strong; nil = 0). Optional so older presets still decode.
+    var brightness: CGFloat?
+    var blur: Int?
     /// 0…8, row-major 3×3 grid; 4 is centered.
     var alignment = 4
     var ratio: Ratio = .auto
@@ -221,6 +225,43 @@ final class BackgroundImages {
     private(set) var wallpaper: CGImage?
     private var blurred: [Int: CGImage] = [:]
     private var custom: [String: CGImage] = [:]
+    private var softened: [String: CGImage] = [:]
+
+    /// A wallpaper or image backdrop blurred `level` (1 light … 3 strong; 0 = as it is).
+    func image(for fill: BackgroundStyle.Fill, blur level: Int) -> CGImage? {
+        guard level > 0, let image = image(for: fill) else { return image(for: fill) }
+        let key = "\(fill)-\(level)"
+        if let cached = softened[key] { return cached }
+        let input = CIImage(cgImage: image)
+        let sigma = Double(max(image.width, image.height)) / [0, 160, 70, 30][min(level, 3)]
+        let output = input.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: input.extent)
+        let result = CIContext().createCGImage(output, from: input.extent)
+        softened[key] = result
+        return result
+    }
+
+    /// The macOS wallpapers stored on this Mac as pictures (the dynamic ones are downloaded on demand), with their
+    /// small preview.
+    static let builtInWallpapers: [(path: String, thumbnail: String)] = {
+        let dir = "/System/Library/Desktop Pictures"
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        return files.filter { $0.hasSuffix(".heic") || $0.hasSuffix(".jpg") || $0.hasSuffix(".png") }.sorted().map { name in
+            let thumb = "\(dir)/.thumbnails/\(name)"
+            return ("\(dir)/\(name)", FileManager.default.fileExists(atPath: thumb) ? thumb : "\(dir)/\(name)")
+        }
+    }()
+
+    /// A small preview of a picture file (wallpaper menu).
+    private var thumbnails: [String: CGImage] = [:]
+    func thumbnail(_ path: String) -> CGImage? {
+        if let cached = thumbnails[path] { return cached }
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                                          kCGImageSourceThumbnailMaxPixelSize: 160] as CFDictionary)
+        else { return nil }
+        thumbnails[path] = image
+        return image
+    }
 
     func prepare() async {
         guard wallpaper == nil, let screen = NSScreen.main else { return }
@@ -273,11 +314,16 @@ extension BackgroundStyle {
         case .transparent:
             if let gridCell { Self.drawChecker(in: canvas, cell: gridCell, ctx: ctx) }
         default:
-            if let image = BackgroundImages.shared.image(for: fill) {
+            if let image = BackgroundImages.shared.image(for: fill, blur: blur ?? 0) {
                 let iw = CGFloat(image.width), ih = CGFloat(image.height)
                 let s = max(canvas.width / iw, canvas.height / ih)
                 AnnotationRenderer.drawImage(image, in: CGRect(x: canvas.midX - iw * s / 2, y: canvas.midY - ih * s / 2, width: iw * s, height: ih * s), ctx: ctx)
             }
+        }
+        // Brightness: darker toward black, brighter toward white.
+        if fill != .transparent, let b = brightness, abs(b - 1) > 0.005 {
+            ctx.setFillColor(b < 1 ? CGColor(gray: 0, alpha: min(1 - b, 1)) : CGColor(gray: 1, alpha: min(b - 1, 1)))
+            ctx.fill(canvas)
         }
 
         let ins = inset * Self.maxInset

@@ -115,7 +115,10 @@ struct AnnotateSidebarActions {
     var setCounterStart: (Int) -> Void
     var setCounterSize: (CGFloat) -> Void
     var setAmount: (CGFloat) -> Void
-    var setCanvasUnlocked: (Bool) -> Void
+    var setSpotlightBrightness: (CGFloat) -> Void
+    var setSpotlightRest: (CGFloat) -> Void
+    var setEmoji: (String) -> Void
+    var setEmojiSize: (CGFloat) -> Void
     var takeScreenshot: () -> Void
     var chooseImage: () -> Void
     var setCropRatio: (CropState.Ratio) -> Void
@@ -141,7 +144,7 @@ struct AnnotateSidebar: View {
             case .background: BackgroundPanel(doc: doc)
             case .add: scrolling { AddImagePanel(actions: actions) }
             case .crop:
-                if let state = crop() { CropPanel(state: state, imageFill: { $0.color(for: doc.baseImage) }, actions: actions) }
+                if let state = crop() { CropPanel(state: state, doc: doc, imageFill: { $0.color(for: doc.baseImage) }, actions: actions) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -203,28 +206,54 @@ private struct TileButton<Label: View>: View {
 struct AnnotateOptionsPanel: View {
     let doc: AnnotationDocument
     let actions: AnnotateSidebarActions
-    @AppStorage(Prefs.annotateColorNames) private var colorNames
 
     private var tool: AnnotateTool { doc.selected.map { AnnotateTool(drawing: $0.kind) } ?? doc.tool }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            PanelTitle(title: doc.selected != nil ? "Selected \(tool.title)" : tool.title,
-                       subtitle: doc.selected != nil ? "Changes apply to the selected object." : tool.hint)
-            if tool == .select {
+            if let selected = doc.selected, case .image = selected.kind {
+                PanelTitle(title: "Selected Image", subtitle: "Drag it to move it, drag its corners to resize it. ⌫ removes it.")
+            } else {
+                PanelTitle(title: doc.selected != nil ? "Selected \(tool.title)" : tool.title,
+                           subtitle: doc.selected != nil ? "Changes apply to the selected object." : tool.hint)
+            }
+            if tool == .select, doc.selected == nil {
                 InfoBox { Text("Pick a tool in the toolbar to draw, or click an object to change its color, size and style.") }
             }
             if hasColor { colorSection }
             if tool == .text { fontSizeSection }
             if hasThickness { thicknessSection }
             styleSection
-            if tool == .redact || tool == .spotlight { amountSection }
+            if tool == .redact { amountSection }
+            if tool == .spotlight { spotlightSection }
             if tool == .counter { counterSection }
-            if tool == .draw || tool == .highlighter { lockSection }
+            if tool == .emoji { emojiSection }
         }
     }
 
-    private var hasColor: Bool { ![.select, .redact, .spotlight].contains(tool) }
+    private var hasColor: Bool { tool.usesColor }
+
+    private static let emojis = ["👍", "👎", "👀", "✅", "❌", "⚠️", "❗️", "❓", "💡", "🔥", "⭐️", "❤️",
+                                 "😀", "😂", "😍", "🤔", "😮", "😢", "😡", "🎉", "🙏", "👏", "💯", "🚀",
+                                 "👉", "👈", "👆", "👇", "✋", "🤝", "🐛", "🔒", "🔑", "📌", "🔍", "💬"]
+
+    /// The emoji a click places: a grid of common ones, or any other typed or picked in the field; and its size.
+    private var emojiSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Emoji", value: doc.emoji).padding(.top, 6)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 6), spacing: 4) {
+                ForEach(Self.emojis, id: \.self) { emoji in
+                    TileButton(selected: doc.emoji == emoji, height: 34, help: emoji) { actions.setEmoji(emoji) } label: {
+                        Text(emoji).font(.system(size: 20))
+                    }
+                }
+            }
+            EmojiField(current: doc.emoji, commit: actions.setEmoji)
+            let size = Binding(get: { Double(doc.emojiSize) }, set: { actions.setEmojiSize(CGFloat($0)) })
+            InspectorHeader("Size", value: "\(Int(doc.emojiSize)) pt").padding(.top, 6)
+            StepSlider(value: size, range: 24...240, step: 4, ticks: 5).help("How big new emoji are (drag a placed one's corners to resize it)")
+        }
+    }
     private var hasThickness: Bool { [.rectangle, .ellipse, .line, .arrow, .counter, .draw, .highlighter].contains(tool) }
 
     private static let colorNameMap: [UInt32: String] = [
@@ -233,46 +262,22 @@ struct AnnotateOptionsPanel: View {
     ]
 
     private var colorSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Color").padding(.top, 6)
-            if colorNames {
-                // Accessibility setting "Show color names": a list with each color's name.
-                VStack(spacing: 4) {
-                    ForEach(AnnotationColor.palette, id: \.hex) { color in
-                        TileButton(selected: doc.color == color, height: 28, help: Self.colorNameMap[color.hex] ?? "") { actions.setColor(color) } label: {
-                            HStack(spacing: 8) {
-                                Circle().fill(Color(nsColor: color.nsColor)).frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5))
-                                Text(Self.colorNameMap[color.hex] ?? "").font(.system(size: 13))
-                                Spacer()
-                            }
-                            .padding(.horizontal, 10)
-                        }
-                    }
-                    TileButton(selected: false, height: 28, help: "Custom color", action: actions.customColor) {
-                        HStack(spacing: 8) {
-                            Image(nsImage: SwatchImage.colorWheel(diameter: 14)).frame(width: 14, height: 14)
-                            Text("Custom Color…").font(.system(size: 13))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10)
+        let name = Self.colorNameMap[doc.color.hex] ?? "Custom"
+        return VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Color", value: name).padding(.top, 6)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                ForEach(AnnotationColor.palette, id: \.hex) { color in
+                    ColorDot(color: Color(nsColor: color.nsColor), selected: doc.color == color, help: Self.colorNameMap[color.hex] ?? "") {
+                        actions.setColor(color)
                     }
                 }
-            } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
-                    ForEach(AnnotationColor.palette, id: \.hex) { color in
-                        ColorDot(color: Color(nsColor: color.nsColor), selected: doc.color == color, help: Self.colorNameMap[color.hex] ?? "") {
-                            actions.setColor(color)
-                        }
-                    }
-                    let custom = !AnnotationColor.palette.contains(doc.color)
-                    Button(action: actions.customColor) {
-                        Image(nsImage: SwatchImage.colorWheel(diameter: 26)).resizable().frame(width: 30, height: 30)
-                            .overlay(Circle().strokeBorder(custom ? Color.white : .clear, lineWidth: 2).padding(-3))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Custom color…")
+                let custom = !AnnotationColor.palette.contains(doc.color)
+                Button(action: actions.customColor) {
+                    Image(nsImage: SwatchImage.colorWheel(diameter: 26)).resizable().frame(width: 30, height: 30)
+                        .overlay(Circle().strokeBorder(custom ? Color.white : .clear, lineWidth: 2).padding(-3))
                 }
+                .buttonStyle(.plain)
+                .help("Custom color…")
             }
         }
     }
@@ -373,12 +378,22 @@ struct AnnotateOptionsPanel: View {
     }
 
     private var amountSection: some View {
-        let isSpotlight = tool == .spotlight
-        let binding = Binding(get: { Double(isSpotlight ? doc.spotlightAmount : doc.redactAmount) }, set: { actions.setAmount(CGFloat($0)) })
+        let binding = Binding(get: { Double(doc.redactAmount) }, set: { actions.setAmount(CGFloat($0)) })
         return VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader(isSpotlight ? "Dimming" : "Strength", percent: binding, range: 0...1).padding(.top, 6)
-            StepSlider(value: binding, range: 0...1, ticks: 5)
-                .help(isSpotlight ? "How dark everything outside the spotlight gets" : "How strongly the area is obscured")
+            InspectorHeader("Strength", percent: binding, range: 0...1).padding(.top, 6)
+            StepSlider(value: binding, range: 0...1, ticks: 5).help("How strongly the area is obscured")
+        }
+    }
+
+    /// Brightness inside the spotlight (125% by default) and of everything else; 100% leaves it as it is.
+    private var spotlightSection: some View {
+        let inside = Binding(get: { Double(doc.spotlightBrightness) }, set: { actions.setSpotlightBrightness(CGFloat($0)) })
+        let rest = Binding(get: { Double(doc.spotlightRest) }, set: { actions.setSpotlightRest(CGFloat($0)) })
+        return VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Spotlight brightness", percent: inside, range: 0.5...2).padding(.top, 6)
+            StepSlider(value: inside, range: 0.5...2, step: 0.05, ticks: 7).help("Brighten or darken the spotlighted area (100% = unchanged)")
+            InspectorHeader("Everything else", percent: rest, range: 0...1.5).padding(.top, 6)
+            StepSlider(value: rest, range: 0...1.5, step: 0.05, ticks: 7).help("Brighten or darken the rest of the screenshot (100% = unchanged)")
         }
     }
 
@@ -393,19 +408,6 @@ struct AnnotateOptionsPanel: View {
             let size = Binding(get: { Double(doc.shownCounter.size) }, set: { actions.setCounterSize(CGFloat($0)) })
             InspectorHeader("Exact size", percent: size, range: 0...1).padding(.top, 6)
             StepSlider(value: size, range: 0...1, ticks: 5).help("The size of every counter (the thickness steps pick common ones)")
-        }
-    }
-
-    private var lockSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider().overlay(W.line).padding(.vertical, 6)
-            Toggle(isOn: Binding(get: { !doc.canvasUnlocked }, set: { actions.setCanvasUnlocked(!$0) })) {
-                Text("Lock canvas").font(.system(size: 13.5)).foregroundStyle(.white)
-            }
-            .toggleStyle(BlueSwitch())
-            .help("Locked: strokes never grab objects. Unlocked: a stroke started on an object moves it instead.")
-            Text(doc.canvasUnlocked ? "Unlocked: start on an object to move it." : "Locked: you always draw, even over objects.")
-                .font(.system(size: 12)).foregroundStyle(Color(white: 0.55))
         }
     }
 }
@@ -431,6 +433,40 @@ private struct ColorDot: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovering)
         .onHover { hovering = $0 }
         .help(help)
+    }
+}
+
+/// Any other emoji: type or paste one, or pick it in the Character Viewer ("All Emoji…", which types into the field).
+private struct EmojiField: View {
+    let current: String
+    let commit: (String) -> Void
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("Other emoji", text: $draft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
+                .focused($focused)
+                .onChange(of: draft) { _, text in
+                    // The last character typed or picked is the emoji.
+                    if let last = text.last, String(last) != current { commit(String(last)) }
+                }
+            Button {
+                focused = true
+                DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) }
+            } label: {
+                Text("All Emoji…").font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                    .padding(.horizontal, 10).frame(height: 28)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
+            }
+            .buttonStyle(.plain)
+            .help("Pick any emoji in the Character Viewer")
+        }
     }
 }
 
@@ -514,6 +550,7 @@ private struct BigActionButton: View {
 /// Crop & Resize mode: ratio, output size, fill, rotate and flip; Cancel or Crop at the bottom.
 private struct CropPanel: View {
     @Bindable var state: CropState
+    let doc: AnnotationDocument
     let imageFill: (CropState.Fill) -> CGColor?
     let actions: AnnotateSidebarActions
 
@@ -524,32 +561,38 @@ private struct CropPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     PanelTitle(title: "Crop & Resize", subtitle: "Drag the frame or its handles. Past the screenshot, the fill shows.")
-                    InspectorHeader("Aspect ratio", value: state.ratio.title).padding(.top, 6)
+                    InspectorHeader("Aspect ratio").padding(.top, 6)
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                        ForEach(CropState.Ratio.allCases.filter { $0 != .customRatio }) { ratio in
-                            TileButton(selected: state.ratio == ratio, height: 28, help: ratio.title) { actions.setCropRatio(ratio) } label: {
-                                Text(ratio.title).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        // Custom last; picking it opens its line below.
+                        ForEach(CropState.Ratio.allCases.filter { $0 != .customRatio } + [.customRatio]) { ratio in
+                            TileButton(selected: state.ratio == ratio, height: 28, help: ratio == .customRatio ? "Type your own ratio" : ratio.title) {
+                                actions.setCropRatio(ratio)
+                            } label: {
+                                Text(ratio == .customRatio ? "Custom" : ratio.title).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
                             }
                         }
                     }
-                    HStack(spacing: 8) {
-                        Text("Custom").font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
-                        Spacer()
-                        HStack(spacing: 0) {
-                            CropRatioField(state: state, width: true)
-                            Text(verbatim: ":").font(.system(size: 13, weight: .medium)).foregroundStyle(Color(white: 0.55))
-                            CropRatioField(state: state, width: false)
+                    if state.ratio == .customRatio {
+                        HStack(spacing: 8) {
+                            Text("Custom ratio").font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
+                            Spacer()
+                            HStack(spacing: 0) {
+                                CropRatioField(state: state, width: true)
+                                Text(verbatim: ":").font(.system(size: 13, weight: .medium)).foregroundStyle(Color(white: 0.55))
+                                CropRatioField(state: state, width: false)
+                            }
+                            .padding(.horizontal, 6)
+                            .frame(height: 28)
+                            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
+                            .help("Aspect ratio, e.g. 16 : 9 (Return or a click elsewhere applies it; the side you edit changes)")
                         }
-                        .padding(.horizontal, 6)
-                        .frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
-                        .help("Aspect ratio, e.g. 16 : 9 (the side you edit changes)")
+                        .transition(.opacity)
                     }
 
-                    InspectorHeader("Image size", value: "\(Int(state.outputPixels.width)) × \(Int(state.outputPixels.height)) px").padding(.top, 10)
+                    InspectorHeader("Image size").padding(.top, 10)
                     imageSize
 
-                    InspectorHeader("Fill", value: state.fill.title).padding(.top, 10)
+                    InspectorHeader("Fill").padding(.top, 10)
                     HStack(spacing: 8) {
                         ForEach(Self.fills, id: \.title) { fill in
                             fillDot(fill)
@@ -567,7 +610,7 @@ private struct CropPanel: View {
                         TileButton(selected: false, height: 32, help: "Rotate 90°", action: actions.rotate) {
                             Label("Rotate", systemImage: "rotate.right").font(.system(size: 12.5, weight: .medium))
                         }
-                        TileButton(selected: false, height: 32, help: "Flip horizontally", action: actions.flip) {
+                        TileButton(selected: doc.isFlipped, height: 32, help: doc.isFlipped ? "Flipped: flip back" : "Flip horizontally", action: actions.flip) {
                             Label("Flip", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right").font(.system(size: 12.5, weight: .medium))
                         }
                     }

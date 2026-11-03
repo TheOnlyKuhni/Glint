@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The screenshot editor: the drawing tools and Save as… / Done in the toolbar; on the left the mode rail (Annotate,
+/// The screenshot editor: the drawing tools, Share, Save as… and Done in the head bar (under the title bar and any
+/// tabs); on the left the mode rail (Annotate,
 /// Background, Add Image, Crop & Resize) and the sidebar with the mode's settings; the zoomable canvas; the bottom
 /// action bar. Dark, in the video editor's design language.
-final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation {
+final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     private static var open: [AnnotateWindowController] = []
     static var hasOpenEditors: Bool { !open.isEmpty }
 
@@ -118,23 +119,15 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         canvas = AnnotationCanvasView(document: document)
         let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
-        window.titleVisibility = .hidden
+        EditorHeadBar.configure(window)
+        window.appearance = NSAppearance(named: .darkAqua)
         window.collectionBehavior.insert(.moveToActiveSpace)
-        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 960, height: 540)  // the toolbar's tools and the sidebar fit
+        window.minSize = NSSize(width: 1000, height: 560)  // the head bar's tools and buttons and the sidebar fit
         window.title = document.fileName
         if Defaults[Prefs.annotateAlwaysOnTop] { window.level = .floating }
         super.init(window: window)
         window.delegate = self
-
-        // A unique identifier per window: toolbars sharing one mirror each other's item changes, so cropping in
-        // one editor rearranged (and shifted) the others.
-        let toolbar = NSToolbar(identifier: "GlintAnnotate-\(UUID().uuidString)")
-        toolbar.delegate = self
-        toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = false
-        window.toolbar = toolbar
 
         buildContent()
         sizeWindowToFit()
@@ -158,6 +151,10 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
                 let grows = Defaults[Prefs.annotateExpandCanvas]
                 if self.doc.expandsCanvas != grows { self.doc.expandsCanvas = grows }
                 if self.bottomModel.growsCanvas != grows { self.bottomModel.growsCanvas = grows }
+                // "Lock canvas" too.
+                let locks = Defaults[Prefs.annotateLockCanvas]
+                if self.doc.canvasUnlocked == locks { self.doc.canvasUnlocked = !locks }
+                if self.bottomModel.locksCanvas != locks { self.bottomModel.locksCanvas = locks }
             }
         }
         DispatchQueue.main.async { [weak self] in
@@ -196,9 +193,18 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         NotificationCenter.default.addObserver(self, selector: #selector(magnificationChanged),
                                                name: NSScrollView.didEndLiveMagnifyNotification, object: scrollView)
 
-        // Opaque band behind the toolbar with a hairline below it.
-        let band = Self.solid(NSColor(white: 0x21 / 255.0, alpha: 1))
-        let hairline = Self.solid(NSColor(white: 0x30 / 255.0, alpha: 1))
+        // The title bar's band, then the head bar: tools over the workspace's middle, Share / Save as… / Done right.
+        let band = EditorHeadBar.titleBand()
+        let tools = ToolPickerHostingView(rootView: ToolPicker(doc: doc, onSelect: { [weak self] tool in
+            self?.pickTool(tool)
+            if let canvas = self?.canvas { self?.window?.makeFirstResponder(canvas) }
+        }))
+        tools.sizingOptions = [.intrinsicContentSize]
+        let buttons = NSHostingView(rootView: AnnotateHeadButtons(doc: doc, share: { [weak self] view in self?.share(from: view) },
+                                                                  saveAs: { [weak self] in self?.saveDocumentAs(nil) },
+                                                                  done: { [weak self] in self?.done() }))
+        buttons.sizingOptions = [.intrinsicContentSize]
+        let head = EditorHeadBar(center: tools, centerInset: Self.sideWidth, trailing: buttons)
 
         let bar = NSHostingView(rootView: AnnotateBottomBar(model: bottomModel, actions: bottomActions))
         bottomBar = bar
@@ -214,17 +220,16 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         let railLine = Self.solid(NSColor(white: 0x30 / 255.0, alpha: 1))
         let sidebarLine = Self.solid(NSColor(white: 0x30 / 255.0, alpha: 1))
 
-        for view in [scrollView, rail, railLine, sidebar, sidebarLine, band, hairline, bar] as [NSView] { content.addSubview(view) }
-        let top = content.safeAreaLayoutGuide.topAnchor
+        for view in [scrollView, rail, railLine, sidebar, sidebarLine, band, head, bar] as [NSView] { content.addSubview(view) }
+        let top = head.bottomAnchor
         NSLayoutConstraint.activate([
             band.topAnchor.constraint(equalTo: content.topAnchor),
             band.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             band.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            band.bottomAnchor.constraint(equalTo: top),
-            hairline.topAnchor.constraint(equalTo: band.bottomAnchor, constant: -1),
-            hairline.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            hairline.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            hairline.heightAnchor.constraint(equalToConstant: 1),
+            band.bottomAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            head.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            head.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            head.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             rail.topAnchor.constraint(equalTo: top),
             rail.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             rail.bottomAnchor.constraint(equalTo: bar.topAnchor),
@@ -264,7 +269,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
     private func sizeWindowToFit() {
         guard let window, let screen = NSScreen.withMouse ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
-        let chrome = CGSize(width: Self.sideWidth, height: 52 + 51)
+        let chrome = CGSize(width: Self.sideWidth, height: 28 + EditorHeadBar.height + 51)
         let margin: CGFloat = 60
         let maxContent = CGSize(width: visible.width * 0.9 - chrome.width - margin * 2, height: visible.height * 0.88 - chrome.height - margin * 2)
         let fit = min(1, maxContent.width / doc.imageSize.width, maxContent.height / doc.imageSize.height)
@@ -284,62 +289,6 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         window.setContentSize(size)
         window.center()
         DispatchQueue.main.async { [weak self] in self?.setZoom(fit) }
-    }
-
-    // MARK: Toolbar
-
-    private enum ID {
-        static let tools = NSToolbarItem.Identifier("tools")
-        static let save = NSToolbarItem.Identifier("save")
-        static let done = NSToolbarItem.Identifier("done")
-    }
-
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [ID.tools, .flexibleSpace, ID.save, ID.done]
-    }
-
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
-    }
-
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        switch id {
-        case ID.tools:
-            let picker = ToolPickerHostingView(rootView: ToolPicker(doc: doc, onSelect: { [weak self] tool in
-                self?.pickTool(tool)
-                if let canvas = self?.canvas { self?.window?.makeFirstResponder(canvas) }
-            }))
-            picker.sizingOptions = [.intrinsicContentSize]
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.view = picker
-            item.isBordered = false
-            item.label = "Tools"
-            return item
-        case ID.save:
-            return barButton(id, title: "Save as...", tip: "Save as... Choose export location and file name", prominent: false) { [weak self] in
-                self?.saveDocumentAs(nil)
-            }
-        case ID.done:
-            return barButton(id, title: "Done", tip: "Finish editing and show it in Quick Access", prominent: true, trailing: 5) { [weak self] in
-                self?.done()
-            }
-        default:
-            return nil
-        }
-    }
-
-    /// Text button "Save as...": a 26pt capsule, blue when prominent; dimmed and off while cropping. `trailing`
-    /// widens the toolbar's 8pt right margin to 13pt.
-    private func barButton(_ id: NSToolbarItem.Identifier, title: String, tip: String, prominent: Bool, trailing: CGFloat = 0,
-                           action: @escaping () -> Void) -> NSToolbarItem {
-        let host = NSHostingView(rootView: CropAwareBarButton(doc: doc, title: title, tip: tip, prominent: prominent, action: action)
-            .padding(.trailing, trailing))
-        host.sizingOptions = [.intrinsicContentSize]
-        let item = NSToolbarItem(itemIdentifier: id)
-        item.view = host
-        item.isBordered = false
-        item.label = title
-        return item
     }
 
     // MARK: Actions
@@ -379,6 +328,8 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
         if mode == .crop { beginCrop(); return }
         editorModel.mode = mode
+        // The tools work in Annotate mode only.
+        doc.toolsResting = mode != .annotate
         doc.isBackgroundPanelOpen = mode == .background
         // "Remember if background tool was opened".
         UserDefaults.standard.set(mode == .background, forKey: "background.panelOpen")
@@ -435,8 +386,8 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         let center = canvas.convert(CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), from: clip)
         let limit = min(1, doc.imageSize.width / max(pointSize.width, 1), doc.imageSize.height / max(pointSize.height, 1))
         let size = CGSize(width: (pointSize.width * limit).rounded(), height: (pointSize.height * limit).rounded())
-        // The move tool, so the new image can be dragged and resized right away.
-        pickTool(.select)
+        // Selected, so it can be dragged and resized right away (outside Annotate the canvas works like Select).
+        if editorModel.mode == .annotate { select(.select) }
         doc.addImage(image, size: size, center: center)
         window?.makeFirstResponder(canvas)
     }
@@ -583,7 +534,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
             zoomToFit: { [weak self] in self?.zoomToFit() },
             setZoom: { [weak self] in self?.setZoom($0) },
             toggleGrowCanvas: { Defaults[Prefs.annotateExpandCanvas].toggle() },
-            share: { [weak self] view in self?.share(from: view) },
+            toggleLockCanvas: { Defaults[Prefs.annotateLockCanvas].toggle() },
             pin: { [weak self] in self?.pinResult() },
             copy: { [weak self] in self?.copy(nil) },
             dragFile: { [weak self] in self?.canvas.endTextEditing(); return self?.exportedFile() },
@@ -594,7 +545,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     private func share(from view: NSView) {
         guard let file = exportedFile() else { return }
-        NSSharingServicePicker(items: [file]).show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
+        NSSharingServicePicker(items: [file]).show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
     }
 
     func zoom(by factor: CGFloat) { setZoom(scrollView.magnification * factor) }
@@ -787,12 +738,11 @@ extension AnnotateWindowController {
             setCounterStyle: { [weak self] style in self?.doc.changeCounter { $0.style = style } },
             setCounterStart: { [weak self] start in self?.doc.counter.start = start },
             setCounterSize: { [weak self] size in self?.doc.changeCounter { $0.size = size } },
-            setAmount: { [weak self] value in
-                guard let self else { return }
-                if self.optionsTool == .spotlight { self.doc.spotlightAmount = value } else { self.doc.redactAmount = value }
-                self.restyleSelection()
-            },
-            setCanvasUnlocked: { [weak self] unlocked in self?.doc.canvasUnlocked = unlocked },
+            setAmount: { [weak self] value in self?.doc.redactAmount = value; self?.restyleSelection() },
+            setSpotlightBrightness: { [weak self] value in self?.doc.spotlightBrightness = value; self?.restyleSelection() },
+            setSpotlightRest: { [weak self] value in self?.doc.spotlightRest = value; self?.restyleSelection() },
+            setEmoji: { [weak self] emoji in self?.doc.emoji = emoji },
+            setEmojiSize: { [weak self] size in self?.doc.emojiSize = size },
             takeScreenshot: { [weak self] in self?.addScreenshot(nil) },
             chooseImage: { [weak self] in self?.addImageFromFile(nil) },
             setCropRatio: { [weak self] ratio in self?.crop?.apply(ratio) },
@@ -925,6 +875,7 @@ extension AnnotateWindowController {
         // Back to the mode before (the sidebar no longer needs the crop's state).
         editorModel.mode = modeBeforeCrop
         doc.isBackgroundPanelOpen = modeBeforeCrop == .background
+        doc.toolsResting = modeBeforeCrop != .annotate
         crop = nil
         canvas.window?.makeFirstResponder(canvas)
         DispatchQueue.main.async { self.zoomToFit() }
@@ -1058,6 +1009,8 @@ struct CropDraftField: View {
     /// What Return last applied, so leaving the field afterwards doesn't apply it again.
     @State private var submitted: String?
     @FocusState private var focused: Bool
+    /// While typing: a click anywhere but in the field ends it (and applies the value), like Return.
+    @State private var clickMonitor: Any?
 
     var body: some View {
         TextField(placeholder, text: $draft)
@@ -1066,7 +1019,17 @@ struct CropDraftField: View {
             .onAppear { draft = current }
             .onChange(of: current) { _, value in draft = value }
             .onChange(of: focused) { _, isFocused in
-                guard !isFocused else { return }
+                if isFocused {
+                    clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+                        if let editor = event.window?.firstResponder as? NSTextView, editor.isFieldEditor,
+                           editor.bounds.contains(editor.convert(event.locationInWindow, from: nil)) { return event }
+                        DispatchQueue.main.async { focused = false }
+                        return event
+                    }
+                    return
+                }
+                if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+                clickMonitor = nil
                 if draft != current, draft != submitted { commit(draft) }
                 submitted = nil
                 draft = current
@@ -1102,7 +1065,26 @@ struct CropRatioField: View {
     }
 }
 
-/// Save as… / Done in the toolbar: off (dimmed) while cropping, like the tools.
+/// Share, Save as… and Done in the head bar: off (dimmed) while cropping, like the tools.
+struct AnnotateHeadButtons: View {
+    let doc: AnnotationDocument
+    let share: (NSView) -> Void
+    let saveAs: () -> Void
+    let done: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HeadShareButton(help: "Share", action: share)
+                .disabled(doc.isCropping)
+                .opacity(doc.isCropping ? 0.45 : 1)
+            CropAwareBarButton(doc: doc, title: "Save as...", tip: "Save as... Choose export location and file name", prominent: false, action: saveAs)
+            CropAwareBarButton(doc: doc, title: "Done", tip: "Finish editing and show it in Quick Access", prominent: true, action: done)
+        }
+        .fixedSize()
+    }
+}
+
+/// Save as… / Done: off (dimmed) while cropping, like the tools.
 struct CropAwareBarButton: View {
     let doc: AnnotationDocument
     let title: String
