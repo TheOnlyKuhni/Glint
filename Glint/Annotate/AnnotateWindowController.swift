@@ -448,6 +448,8 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: Actions
 
     private func select(_ tool: AnnotateTool) {
+        // The tool rests while cropping (it comes back as it was afterwards).
+        guard !doc.isCropping else { NSSound.beep(); return }
         canvas.endTextEditing()
         doc.selectedID = nil
         doc.tool = tool

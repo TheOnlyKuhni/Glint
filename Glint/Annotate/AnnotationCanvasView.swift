@@ -301,6 +301,8 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     /// Preview cursors: Draw shows a circle as big as the pen, Highlighter a marker tip as big as
     /// the band it will paint (shrinking to the text line when hovering text). Others: crosshair / arrow.
     private var toolCursor: NSCursor {
+        // Cropping: the tool rests until Crop & Resize ends.
+        if doc.isCropping { return .arrow }
         let zoom = magnification
         switch doc.tool {
         case .select: return .arrow
@@ -343,6 +345,8 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             NSCursor.closedHand.set()
             return
         }
+        // Cropping: the crop frame takes the clicks; the tool doesn't draw meanwhile.
+        if doc.isCropping { window?.makeFirstResponder(self); return }
         let p = convert(event.locationInWindow, from: nil)
         if textView != nil { endTextEditing() }
         window?.makeFirstResponder(self)

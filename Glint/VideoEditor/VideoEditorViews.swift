@@ -329,13 +329,14 @@ struct InspectorHeader: View {
 struct LengthPicker: View {
     let length: Double
     let set: (Double) -> Void
-    private static let presets: [Double] = [1, 2, 3, 5, 10]
+    private static let presets: [Double] = [1, 2, 5, 30, 60]
+    private static func title(_ seconds: Double) -> String { seconds >= 60 ? "\(Int(seconds / 60)) min" : "\(Int(seconds)) s" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             InspectorHeader("Length", seconds: Binding(get: { length }, set: set), range: 0.3...3600)
-            ChoiceButtons(titles: Self.presets.map { "\(Int($0)) s" }, selected: Self.presets.firstIndex { abs($0 - length) < 0.05 } ?? -1,
-                          helps: Self.presets.map { "Make it \(Int($0)) seconds long (it grows to the right, then to the left)" }) {
+            ChoiceButtons(titles: Self.presets.map(Self.title), selected: Self.presets.firstIndex { abs($0 - length) < 0.05 } ?? -1,
+                          helps: Self.presets.map { "Make it \(Self.title($0)) long (it grows to the right, then to the left; never past the next one or the end)" }) {
                 set(Self.presets[$0])
             }
         }
