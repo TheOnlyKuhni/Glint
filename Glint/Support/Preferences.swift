@@ -137,6 +137,8 @@ enum Prefs {
     static let annotateRememberBackground = Pref(key: "annotate.rememberBackground", defaultValue: true)
     static let annotateShadow = Pref(key: "annotate.shadow", defaultValue: true)
     static let annotateExpandCanvas = Pref(key: "annotate.expandCanvas", defaultValue: true)
+    /// "Lock canvas" (bottom bar): drawing never grabs an object it starts on, whatever the tool.
+    static let annotateLockCanvas = Pref(key: "annotate.lockCanvas", defaultValue: true)
     static let annotateAlwaysOnTop = Pref(key: "annotate.alwaysOnTop", defaultValue: false)
     static let annotateShowDockIcon = Pref(key: "annotate.showDockIcon", defaultValue: true)
     static let annotateColorNames = Pref(key: "annotate.colorNames", defaultValue: false)

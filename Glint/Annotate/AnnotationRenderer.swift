@@ -31,28 +31,49 @@ struct AnnotationRenderer {
                                      gridCell: transparencyGridCell)
         }
         guard parts.contains(.image) || parts.contains(.overlay) else { return }
+        // Spotlights: everything else (and the spotlights themselves) brightened or dimmed; the latest one's values.
+        let spotlights = annotations.filter { $0.kind == .spotlight }
+        let spots = CGMutablePath()
+        for s in spotlights {
+            switch SpotlightShape(rawValue: s.variant) ?? .rounded {
+            case .rectangle: spots.addRect(s.rect)
+            case .rounded: spots.addPath(Self.roundedRect(s.rect, radius: 12))
+            case .ellipse: spots.addEllipse(in: s.rect)
+            }
+        }
+        let inside = spotlights.last?.spotInside ?? 1, outside = spotlights.last?.spotRest ?? 1
         ctx.saveGState()
         background?.clipScreenshot(imageSize: imageSize, ctx: ctx)
         if parts.contains(.image) { Self.drawImage(baseImage, in: bounds, ctx: ctx) }
-        if parts.contains(.overlay) { for a in annotations where a.kind == .redact { drawRedact(a, ctx: ctx) } }
+        if parts.contains(.overlay) {
+            // Brightening draws the screenshot again, brighter, before the redactions go on top.
+            if !spotlights.isEmpty, abs(inside - 1) > 0.01, let bright = effects?.brightened(inside) {
+                ctx.saveGState()
+                ctx.addPath(spots)
+                ctx.clip()
+                Self.drawImage(bright, in: bounds, ctx: ctx)
+                ctx.restoreGState()
+            }
+            if !spotlights.isEmpty, outside > 1.01, let bright = effects?.brightened(outside) {
+                ctx.saveGState()
+                ctx.addRect(bounds)
+                ctx.addPath(spots)
+                ctx.clip(using: .evenOdd)
+                Self.drawImage(bright, in: bounds, ctx: ctx)
+                ctx.restoreGState()
+            }
+            for a in annotations where a.kind == .redact { drawRedact(a, ctx: ctx) }
+        }
         ctx.restoreGState()
         guard parts.contains(.overlay) else { return }
 
-        let spotlights = annotations.filter { $0.kind == .spotlight }
-        if !spotlights.isEmpty {
+        if !spotlights.isEmpty, outside < 0.99 {
             let path = CGMutablePath()
             path.addRect(bounds)
-            for s in spotlights {
-                switch SpotlightShape(rawValue: s.variant) ?? .rounded {
-                case .rectangle: path.addRect(s.rect)
-                case .rounded: path.addPath(Self.roundedRect(s.rect, radius: 12))
-                case .ellipse: path.addEllipse(in: s.rect)
-                }
-            }
-            let dim = 0.15 + 0.75 * (spotlights.last?.amount ?? 0.5)
+            path.addPath(spots)
             ctx.saveGState()
             ctx.addPath(path)
-            ctx.setFillColor(NSColor.black.withAlphaComponent(dim).cgColor)
+            ctx.setFillColor(NSColor.black.withAlphaComponent(1 - max(outside, 0)).cgColor)
             ctx.fillPath(using: .evenOdd)
             ctx.restoreGState()
         }

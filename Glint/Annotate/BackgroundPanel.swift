@@ -10,8 +10,7 @@ struct BackgroundPanel: View {
     @State private var showAllGradients = false
     @State private var wallpaperLoaded = false
     @State private var presets = BackgroundStyle.presets
-    @State private var showPresets = false
-    @State private var editingPresets = false
+    @State private var showWallpapers = false
     @State private var customPaths: [String] = UserDefaults.standard.stringArray(forKey: "background.customImages") ?? []
     private let images = BackgroundImages.shared
 
@@ -27,7 +26,6 @@ struct BackgroundPanel: View {
                 noneButton
                 gradientSection
                 wallpaperSection.id(wallpaperLoaded)
-                blurredSection.id(wallpaperLoaded)
                 colorSection
                 Divider().overlay(W.line).padding(.vertical, 2)
                 sliders
@@ -39,38 +37,33 @@ struct BackgroundPanel: View {
         .task {
             await images.prepare()
             wallpaperLoaded = true
-            // Blurred variants are expensive; build them off the first frame.
-            _ = images.image(for: .blurred(0)); _ = images.image(for: .blurred(1)); _ = images.image(for: .blurred(2))
-            wallpaperLoaded.toggle(); wallpaperLoaded = true
         }
     }
 
     // MARK: Sections
 
-    /// "Presets…" opens a list of the saved presets; "Edit Presets" shows a red minus beside each, which deletes it
-    /// after a confirmation.
+    /// "Presets": a drop-down like Glint's other ones, with the saved presets, Save, and Delete.
     private var presetRow: some View {
-        HStack(spacing: 8) {
-            Button { editingPresets = false; showPresets.toggle() } label: {
-                HStack {
-                    Text("Presets…")
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
-                .contentShape(Rectangle())
+        Menu {
+            if presets.isEmpty { Text("No presets yet") }
+            ForEach(Array(presets.enumerated()), id: \.offset) { i, preset in
+                Button(preset.name ?? "Preset \(i + 1)") { apply(preset) }
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity)
-            .popover(isPresented: $showPresets, arrowEdge: .bottom) { presetList }
-            Button { savePreset() } label: { Image(systemName: "plus") }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Save the current background as a preset")
-                .disabled(doc.background == nil)
+            Divider()
+            Button("Save Current Background as Preset…", action: savePreset).disabled(doc.background == nil)
+            if !presets.isEmpty {
+                Menu("Delete Preset") {
+                    ForEach(Array(presets.enumerated()), id: \.offset) { i, preset in
+                        Button(preset.name ?? "Preset \(i + 1)") { confirmDelete(i) }
+                    }
+                }
+            }
+        } label: {
+            Text("Presets")
         }
+        .menuStyle(.button)
+        .fixedSize()
+        .help("Apply, save or delete background presets")
     }
 
     private var noneButton: some View {
@@ -113,37 +106,81 @@ struct BackgroundPanel: View {
     private var wallpaperSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("Wallpapers")
-            HStack(spacing: 9) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(38), spacing: 9), count: 5), alignment: .leading, spacing: 10) {
                 Swatch(selected: doc.background?.fill == .wallpaper) { imageFill(images.wallpaper) } action: { select(.wallpaper) }
                     .help("Desktop wallpaper")
                 ForEach(customPaths, id: \.self) { path in
                     Swatch(selected: doc.background?.fill == .customImage(path)) {
-                        imageFill(images.image(for: .customImage(path)))
+                        imageFill(images.thumbnail(path) ?? images.image(for: .customImage(path)))
                     } action: { select(.customImage(path)) }
+                    .contextMenu { Button("Remove") { removeCustomImage(path) } }
                 }
-                Button(action: addCustomImage) {
+                Button { showWallpapers = true } label: {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(white: 0.55))
                         .frame(width: 38, height: 38)
-                        .overlay(Image(systemName: "plus").foregroundStyle(.secondary))
+                        .overlay(Image(systemName: "plus").foregroundStyle(Color(white: 0.7)))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Add a custom image")
+                .help("Add a macOS wallpaper or your own image")
+                .popover(isPresented: $showWallpapers, arrowEdge: .trailing) { wallpaperPicker }
+            }
+            if isImageFill {
+                // How blurred the wallpaper or image is (its brightness is the Brightness slider).
+                HStack(spacing: 8) {
+                    Text("Blur").font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62)).frame(width: 34, alignment: .leading)
+                    ChoiceButtons(titles: ["None", "Light", "Medium", "Strong"], selected: blurLevel,
+                                  helps: ["Sharp", "A little blurred", "Blurred", "Very blurred"]) { setBlur($0) }
+                }
+                .padding(.top, 4)
             }
         }
     }
 
-    private var blurredSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("Blurred")
-            HStack(spacing: 9) {
-                ForEach(0..<3, id: \.self) { v in
-                    Swatch(selected: doc.background?.fill == .blurred(v)) { imageFill(images.image(for: .blurred(v))) }
-                        action: { select(.blurred(v)) }
+    /// The "+" popover: the macOS wallpapers on this Mac, or any picture.
+    private var wallpaperPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("macOS Wallpapers").font(.system(size: 12.5, weight: .semibold))
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(64), spacing: 8), count: 4), spacing: 8) {
+                ForEach(BackgroundImages.builtInWallpapers, id: \.path) { wallpaper in
+                    Button { addImage(wallpaper.path) } label: {
+                        imageFill(images.thumbnail(wallpaper.thumbnail))
+                            .frame(width: 64, height: 42)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(URL(fileURLWithPath: wallpaper.path).deletingPathExtension().lastPathComponent)
                 }
             }
+            Divider()
+            Button("Choose Image…", action: chooseCustomImage)
         }
+        .padding(14)
+        .frame(width: 310)
+    }
+
+    private var isImageFill: Bool {
+        switch doc.background?.fill {
+        case .wallpaper, .customImage, .blurred: true
+        default: false
+        }
+    }
+
+    private var blurLevel: Int {
+        if case .blurred = doc.background?.fill { return 3 }
+        return doc.background?.blur ?? 0
+    }
+
+    private func setBlur(_ level: Int) {
+        guard var bg = doc.background else { return }
+        // The old blurred-wallpaper fills become the wallpaper with a blur level.
+        if case .blurred = bg.fill { bg.fill = .wallpaper }
+        bg.blur = level
+        doc.background = bg
+        BackgroundStyle.lastUsed = bg
     }
 
     private var colorSection: some View {
@@ -183,22 +220,29 @@ struct BackgroundPanel: View {
         }
     }
 
+    /// Two columns: labels start either at the left edge or at the second column; rows 14pt apart.
     private var sliders: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             labeledSlider("Padding", value: binding(\.padding), range: BackgroundStyle.maxPadding)
-            HStack(alignment: .bottom, spacing: 12) {
+            HStack(alignment: .top, spacing: 16) {
                 labeledSlider("Inset", value: binding(\.inset), range: BackgroundStyle.maxInset)
                     .disabled(doc.isWindowCapture)
-                Toggle("Auto-balance", isOn: binding(\.autoBalance)).toggleStyle(.checkbox).font(.system(size: 12))
-                    .disabled(doc.isWindowCapture)
-            }
-            HStack(spacing: 12) {
                 // A window capture already has its own shadow and rounded corners.
-                labeledSlider("Shadow", value: binding(\.shadow), range: BackgroundStyle.maxShadow).disabled(doc.isWindowCapture)
                 labeledSlider("Corners", value: binding(\.corners), range: BackgroundStyle.maxCornerPercent).disabled(doc.isWindowCapture)
             }
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 16) {
+                BrightnessSlider(value: Binding(get: { doc.background?.brightness ?? 1 }, set: { value in
+                    var bg = doc.background ?? BackgroundStyle(fill: .transparent)
+                    bg.brightness = abs(value - 1) < 0.005 ? nil : value
+                    doc.background = bg
+                    BackgroundStyle.lastUsed = bg
+                }))
+                .frame(maxWidth: .infinity)
+                .disabled(doc.background == nil || doc.background?.fill == .transparent)
+                labeledSlider("Shadow", value: binding(\.shadow), range: BackgroundStyle.maxShadow).disabled(doc.isWindowCapture)
+            }
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
                     sectionTitle("Alignment")
                     Grid(horizontalSpacing: 6, verticalSpacing: 6) {
                         ForEach(0..<3, id: \.self) { row in
@@ -210,17 +254,22 @@ struct BackgroundPanel: View {
                         }
                     }
                 }
-                VStack(alignment: .leading, spacing: 6) {
+                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 8) {
                     sectionTitle("Ratio")
                     Picker("", selection: binding(\.ratio)) {
                         ForEach(BackgroundStyle.Ratio.allCases) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .frame(maxWidth: .infinity)
+                    Toggle("Auto-balance", isOn: binding(\.autoBalance)).toggleStyle(.checkbox).font(.system(size: 12.5))
+                        .disabled(doc.isWindowCapture)
+                        .help("The screenshot's edge color fades into the background around it")
+                        .padding(.top, 4)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-
     }
 
     private func alignmentCell(_ index: Int) -> some View {
@@ -249,7 +298,7 @@ struct BackgroundPanel: View {
     }
 
     private func labeledSlider(_ title: String, value: Binding<CGFloat>, range: CGFloat) -> some View {
-        ValueSlider(title: title, value: value, range: range)
+        ValueSlider(title: title, value: value, range: range).frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -286,39 +335,6 @@ struct BackgroundPanel: View {
         BackgroundStyle.lastUsed = preset
     }
 
-    private var presetList: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if presets.isEmpty {
-                Text("No presets yet").foregroundStyle(.secondary).padding(.horizontal, 10).padding(.vertical, 6)
-            }
-            ForEach(Array(presets.enumerated()), id: \.offset) { i, preset in
-                HStack(spacing: 8) {
-                    if editingPresets {
-                        Button { confirmDelete(i) } label: {
-                            Image(systemName: "minus.circle.fill").symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, Color(red: 0.93, green: 0.27, blue: 0.27)).font(.system(size: 15))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Delete preset")
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                    PresetRowButton(title: preset.name ?? "Preset \(i + 1)", enabled: !editingPresets) {
-                        apply(preset)
-                        showPresets = false
-                    }
-                }
-            }
-            if !presets.isEmpty {
-                Divider().padding(.vertical, 4)
-                PresetRowButton(title: editingPresets ? "Done" : "Edit Presets", enabled: true) {
-                    withAnimation(.easeOut(duration: 0.15)) { editingPresets.toggle() }
-                }
-            }
-        }
-        .padding(6)
-        .frame(width: 220, alignment: .leading)
-    }
-
     private func confirmDelete(_ index: Int) {
         guard presets.indices.contains(index) else { return }
         let alert = NSAlert()
@@ -332,7 +348,6 @@ struct BackgroundPanel: View {
         // Keep the Screenshots setting "Background preset" pointing at the same preset.
         let chosen = Defaults[Prefs.backgroundPreset]
         if chosen == index { Defaults[Prefs.backgroundPreset] = -1 } else if chosen > index { Defaults[Prefs.backgroundPreset] = chosen - 1 }
-        if presets.isEmpty { editingPresets = false }
     }
 
     /// "+": asks for a name, then saves the current background as a preset.
@@ -355,13 +370,26 @@ struct BackgroundPanel: View {
         BackgroundStyle.presets = presets
     }
 
-    private func addCustomImage() {
+    /// "+" → Choose Image…: any picture file.
+    private func chooseCustomImage() {
+        showWallpapers = false
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         guard panel.runModal() == .OK, let path = panel.url?.path else { return }
+        addImage(path)
+    }
+
+    /// Adds a picture to the Wallpapers row (remembered for every editor) and uses it.
+    private func addImage(_ path: String) {
+        showWallpapers = false
         if !customPaths.contains(path) { customPaths.append(path) }
         UserDefaults.standard.set(customPaths, forKey: "background.customImages")
         select(.customImage(path))
+    }
+
+    private func removeCustomImage(_ path: String) {
+        customPaths.removeAll { $0 == path }
+        UserDefaults.standard.set(customPaths, forKey: "background.customImages")
     }
 }
 
@@ -434,23 +462,22 @@ private struct ValueSlider: View {
     }
 }
 
-/// A menu-like row in the presets list: highlights blue on hover, like a menu item.
-private struct PresetRowButton: View {
-    let title: String
-    let enabled: Bool
-    let action: () -> Void
-    @State private var hovered = false
+/// Brightness of the backdrop: 50…150%, 100% in the middle.
+private struct BrightnessSlider: View {
+    @Binding var value: CGFloat
 
     var body: some View {
-        Button(action: action) {
-            Text(title).frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).frame(height: 24)
-                .foregroundStyle(hovered && enabled ? .white : .primary)
-                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(hovered && enabled ? W.blue : .clear))
-                .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Brightness").font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
+                Spacer(minLength: 4)
+                EditableValue(text: "\(Int((value * 100).rounded()))%", value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }),
+                              range: 0.5...1.5, scale: 100)
+                    .font(.system(size: 12.5, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(.white)
+            }
+            StepSlider(value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }), range: 0.5...1.5, ticks: 5)
+                .help("Darker or brighter backdrop (100% = as it is)")
         }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .onHover { hovered = $0 }
     }
 }

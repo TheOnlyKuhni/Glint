@@ -2,7 +2,7 @@ import AppKit
 
 /// Drawing tools of the Annotate editor, in toolbar order.
 enum AnnotateTool: String, CaseIterable, Identifiable {
-    case select, rectangle, filledRectangle, ellipse, line, arrow, text, redact, spotlight, counter, draw, highlighter
+    case select, rectangle, filledRectangle, ellipse, line, arrow, text, redact, spotlight, counter, emoji, draw, highlighter
 
     var id: String { rawValue }
 
@@ -18,6 +18,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .redact: "Redact"
         case .spotlight: "Spotlight"
         case .counter: "Counter"
+        case .emoji: "Emoji"
         case .draw: "Draw"
         case .highlighter: "Highlighter"
         }
@@ -36,6 +37,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .redact: "p"
         case .spotlight: "h"
         case .counter: "c"
+        case .emoji: "j"
         case .draw: "d"
         case .highlighter: "m"
         }
@@ -53,6 +55,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .redact: "checkerboard.rectangle"
         case .spotlight: "rectangle.inset.filled"
         case .counter: "1.circle.fill"
+        case .emoji: "face.smiling"
         case .draw: "pencil"
         case .highlighter: "highlighter"
         }
@@ -77,7 +80,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
     }
 
     var usesThickness: Bool { [.rectangle, .ellipse, .line, .arrow, .draw, .highlighter, .counter].contains(self) }
-    var usesColor: Bool { ![.select, .redact, .spotlight].contains(self) }
+    var usesColor: Bool { ![.select, .redact, .spotlight, .emoji].contains(self) }
 }
 
 /// One object drawn on top of the screenshot. Value type, so undo is just keeping old arrays.
@@ -104,8 +107,12 @@ struct Annotation: Identifiable, Equatable, Codable {
     var fontSize: CGFloat
     /// Tool-specific style: RedactMode, SpotlightShape, ArrowStyle or TextStyle raw value.
     var variant = 0
-    /// Redact strength / spotlight dimming, 0…1.
+    /// Redact strength, 0…1. Spotlights made before the brightness sliders: their dimming (see `spotRest`).
     var amount: CGFloat = 0.5
+    /// Spotlights: brightness inside the spotlight and of everything else (1 = unchanged); nil = made before these
+    /// existed (inside unchanged, outside dimmed by `amount`).
+    var spotBrightness: CGFloat?
+    var restBrightness: CGFloat?
     /// Curved and double arrows: the point the arrow bends through (set by dragging its middle handle).
     /// nil = straight (the default).
     var control: CGPoint?
@@ -149,6 +156,10 @@ struct Annotation: Identifiable, Equatable, Codable {
             return CGPoint(x: u * u * start.x + 2 * u * t * c.x + t * t * end.x, y: u * u * start.y + 2 * u * t * c.y + t * t * end.y)
         }
     }
+    /// A spotlight's brightness inside it and outside it.
+    var spotInside: CGFloat { spotBrightness ?? 1 }
+    var spotRest: CGFloat { restBrightness ?? 1 - (0.15 + 0.75 * amount) }
+
     var lineWidth: CGFloat { AnnotationStyle.thicknesses[min(max(thickness, 0), AnnotationStyle.thicknesses.count - 1)] }
 
     var isRectLike: Bool {
@@ -163,6 +174,8 @@ struct Annotation: Identifiable, Equatable, Codable {
         var copy = Annotation(kind: kind, start: start, end: end, points: points, color: color, thickness: thickness, fontSize: fontSize)
         copy.variant = variant
         copy.amount = amount
+        copy.spotBrightness = spotBrightness
+        copy.restBrightness = restBrightness
         copy.control = control
         return copy
     }

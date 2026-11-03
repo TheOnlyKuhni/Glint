@@ -102,13 +102,30 @@ final class AnnotationDocument {
     var redactMode: RedactMode = .pixelate
     var redactAmount: CGFloat = 0.5
     var spotlightShape: SpotlightShape = .rounded
-    var spotlightAmount: CGFloat = 0.5
+    /// Spotlight: brightness inside it (125% brightens it a little) and of everything else.
+    var spotlightBrightness: CGFloat = 1.25
+    var spotlightRest: CGFloat = 0.5
     var arrowStyle: ArrowStyle = .standard
     var textStyle: TextStyle = .standard
     /// Shared by every counter; changing the size resizes all of them.
     var counter = CounterSettings() { didSet { isDirty = true; updateExpansion() } }
     /// Images added with Add screenshot, by `Annotation.Kind.image` key (kept when an object is deleted, for undo).
     @ObservationIgnored var images: [String: CGImage] = [:]
+
+    /// The Emoji tool: what a click places, and how big (points).
+    var emoji = "👍"
+    var emojiSize: CGFloat = 64
+
+    /// Places an image object without an undo step of its own (the canvas makes one for the whole click and drag).
+    func stampImage(_ image: CGImage, size: CGSize, center: CGPoint) -> Annotation {
+        let key = UUID().uuidString
+        images[key] = image
+        let origin = CGPoint(x: (center.x - size.width / 2).rounded(), y: (center.y - size.height / 2).rounded())
+        let a = Annotation(kind: .image(key), start: origin, end: CGPoint(x: origin.x + size.width, y: origin.y + size.height),
+                           color: color, thickness: thickness)
+        annotations.append(a)
+        return a
+    }
 
     /// Adds an image as a movable object, `size` in points, centered on `center`, and selects it.
     func addImage(_ image: CGImage, size: CGSize, center: CGPoint) {
@@ -122,8 +139,10 @@ final class AnnotationDocument {
         selectedID = a.id
     }
 
-    /// "Unlock canvas" toggle for Draw/Highlighter.
-    var canvasUnlocked = false
+    /// "Lock canvas" off (bottom bar): a drawing tool started on an object grabs it instead of drawing.
+    var canvasUnlocked = !Defaults[Prefs.annotateLockCanvas]
+    /// Outside Annotate mode the tools rest: the canvas works like the Select tool.
+    var toolsResting = false
     /// Text line boxes found in the screenshot (for the highlighter), filled in shortly after opening.
     @ObservationIgnored private(set) var textLines: [CGRect] = []
 
@@ -202,7 +221,10 @@ final class AnnotationDocument {
         if tool.usesThickness, tool != .counter { thickness = a.thickness }
         switch a.kind {
         case .redact: redactMode = RedactMode(rawValue: a.variant) ?? redactMode; redactAmount = a.amount
-        case .spotlight: spotlightShape = SpotlightShape(rawValue: a.variant) ?? spotlightShape; spotlightAmount = a.amount
+        case .spotlight:
+            spotlightShape = SpotlightShape(rawValue: a.variant) ?? spotlightShape
+            spotlightBrightness = a.spotInside
+            spotlightRest = a.spotRest
         case .arrow: arrowStyle = ArrowStyle(rawValue: a.variant) ?? arrowStyle
         case .text: textStyle = TextStyle(rawValue: a.variant) ?? textStyle; fontSize = a.fontSize
         default: break
@@ -218,7 +240,7 @@ final class AnnotationDocument {
         a.fontSize = fontSize
         switch a.kind {
         case .redact: a.variant = redactMode.rawValue; a.amount = redactAmount
-        case .spotlight: a.variant = spotlightShape.rawValue; a.amount = spotlightAmount
+        case .spotlight: a.variant = spotlightShape.rawValue; a.spotBrightness = spotlightBrightness; a.restBrightness = spotlightRest
         case .arrow: a.variant = arrowStyle.rawValue
         case .text: a.variant = textStyle.rawValue
         default: break
@@ -286,7 +308,7 @@ final class AnnotationDocument {
 
     /// Replaces the screenshot with `image` (annotations already flattened into it), undoable.
     func replaceImage(_ image: CGImage, name: String) {
-        let previous = (baseImage, imageSize, annotations, realBackground)
+        let previous = (baseImage, imageSize, annotations, realBackground, isFlipped)
         undoManager.registerUndo(withTarget: self) { doc in doc.restoreImage(previous, name: name) }
         undoManager.setActionName(name)
         setImage(image)
@@ -294,11 +316,12 @@ final class AnnotationDocument {
         selectedID = nil
     }
 
-    private func restoreImage(_ state: (CGImage, CGSize, [Annotation], BackgroundStyle?), name: String) {
-        let current = (baseImage, imageSize, annotations, realBackground)
+    private func restoreImage(_ state: (CGImage, CGSize, [Annotation], BackgroundStyle?, Bool), name: String) {
+        let current = (baseImage, imageSize, annotations, realBackground, isFlipped)
         undoManager.registerUndo(withTarget: self) { doc in doc.restoreImage(current, name: name) }
         undoManager.setActionName(name)
         setImage(state.0)
+        isFlipped = state.4
         annotations = state.2
         if isCropping { backgroundBeforeCrop = state.3 } else { background = state.3 }
         selectedID = nil
@@ -308,8 +331,9 @@ final class AnnotationDocument {
     func transform(rotate: Bool) {
         guard let image = CropState.transform(baseImage, rotate: rotate) else { return }
         let old = imageSize
-        let previous = (baseImage, imageSize, annotations, realBackground)
+        let previous = (baseImage, imageSize, annotations, realBackground, isFlipped)
         undoManager.registerUndo(withTarget: self) { doc in doc.restoreImage(previous, name: rotate ? "Rotate" : "Flip") }
+        if !rotate { isFlipped.toggle() }
         undoManager.setActionName(rotate ? "Rotate" : "Flip")
         let moved = annotations.map { transformed($0, rotate: rotate, in: old) }
         setImage(image)
@@ -337,6 +361,9 @@ final class AnnotationDocument {
         }
         return b
     }
+
+    /// The screenshot is mirrored left–right (Flip in Crop & Resize shows it; rotating keeps it).
+    var isFlipped = false
 
     /// While cropping, `background` is the crop's transparent room; the user's background waits here.
     var backgroundBeforeCrop: BackgroundStyle?

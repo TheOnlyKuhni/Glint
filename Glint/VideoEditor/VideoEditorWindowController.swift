@@ -32,7 +32,7 @@ final class VideoEditorState: ObservableObject {
 /// The video editor: a 1180×858 window with the file name in the middle of a 52pt
 /// bar (Share + Export on the right), an icon rail and inspector on the left, the preview with transport controls,
 /// and a timeline with a zoom track and the clip's thumbnails underneath.
-final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
+final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     private static var open: [VideoEditorWindowController] = []
 
     let project: VideoProject
@@ -124,8 +124,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1180, height: 858),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
-        window.titleVisibility = .hidden
-        window.toolbarStyle = .unified
+        EditorHeadBar.configure(window)
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 960, height: VideoEditorContent.minWindowHeight)
@@ -133,12 +132,6 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         window.collectionBehavior.insert(.moveToActiveSpace)
         super.init(window: window)
         window.delegate = self
-        let toolbar = NSToolbar(identifier: "GlintVideoEditor")
-        toolbar.delegate = self
-        toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = false
-        toolbar.centeredItemIdentifiers = [ID.title]
-        window.toolbar = toolbar
         // Clicking the timeline jumps there and pauses.
         timeline.onPause = { [weak self] in
             guard let self, self.state.isPlaying || self.player.rate != 0 else { return }
@@ -164,23 +157,33 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         let content = NSView()
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor(white: 0x21 / 255.0, alpha: 1).cgColor
-        // Opaque bar behind the toolbar with a hairline under it.
-        let hairline = NSView()
-        hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = NSColor(white: 0x30 / 255.0, alpha: 1).cgColor
-        hairline.translatesAutoresizingMaskIntoConstraints = false
+        // The title bar's band, then the head bar (under any tabs) with Share, Save and Export on the right.
+        let band = EditorHeadBar.titleBand()
+        let buttons = NSHostingView(rootView: HStack(spacing: 8) {
+            HeadShareButton(help: "Share the edited video") { [weak self] anchor in self?.share(from: anchor) }
+            Button("Save") { [weak self] in self?.save() }
+                .buttonStyle(BarTextButtonStyle(prominent: false)).help("Save the edits into this recording (Quick Access and History)")
+            Button("Export") { [weak self] in self?.showExport() }
+                .buttonStyle(BarTextButtonStyle(prominent: true)).help("Export the edited video")
+        }.fixedSize())
+        buttons.sizingOptions = [.intrinsicContentSize]
+        let head = EditorHeadBar(trailing: buttons)
         let editor = NSHostingView(rootView: VideoEditorContent(project: project, state: state, player: player, timeline: timeline,
                                                                 actions: actions))
         editor.sizingOptions = []
         editor.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(editor)
-        content.addSubview(hairline)
+        content.addSubview(band)
+        content.addSubview(head)
         NSLayoutConstraint.activate([
-            hairline.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor, constant: -1),
-            hairline.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            hairline.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            hairline.heightAnchor.constraint(equalToConstant: 1),
-            editor.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            band.topAnchor.constraint(equalTo: content.topAnchor),
+            band.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            band.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            band.bottomAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            head.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            head.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            head.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            editor.topAnchor.constraint(equalTo: head.bottomAnchor),
             editor.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             editor.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             editor.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -406,56 +409,6 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         }
     }
 
-    // MARK: Toolbar
-
-    private enum ID {
-        static let title = NSToolbarItem.Identifier("title")
-        static let share = NSToolbarItem.Identifier("share")
-        static let export = NSToolbarItem.Identifier("export")
-        static let save = NSToolbarItem.Identifier("save")
-    }
-
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, ID.title, .flexibleSpace, ID.share, ID.save, ID.export]
-    }
-
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
-
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        let item = NSToolbarItem(itemIdentifier: id)
-        item.isBordered = false
-        let view: NSView
-        switch id {
-        case ID.title:
-            let label = NSTextField(labelWithString: sourceFile.lastPathComponent)
-            label.font = .systemFont(ofSize: 13, weight: .semibold)
-            label.textColor = .white
-            label.lineBreakMode = .byTruncatingMiddle
-            view = label
-        case ID.share:
-            // Share (there is no cloud upload).
-            let host = NSHostingView(rootView: Button { [weak self] in self?.share() } label: {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 13, weight: .semibold)).frame(width: 18)
-            }.buttonStyle(BarTextButtonStyle(prominent: false)).help("Share the edited video"))
-            host.sizingOptions = [.intrinsicContentSize]
-            view = host
-        case ID.save:
-            let host = NSHostingView(rootView: Button("Save") { [weak self] in self?.save() }
-                .buttonStyle(BarTextButtonStyle(prominent: false)).help("Save the edits into this recording (Quick Access and History)"))
-            host.sizingOptions = [.intrinsicContentSize]
-            view = host
-        case ID.export:
-            let host = NSHostingView(rootView: Button("Export") { [weak self] in self?.showExport() }
-                .buttonStyle(BarTextButtonStyle(prominent: true)).help("Export the edited video").padding(.trailing, 5))
-            host.sizingOptions = [.intrinsicContentSize]
-            view = host
-        default:
-            return nil
-        }
-        item.view = view
-        return item
-    }
-
     // MARK: Timeline hover preview
 
     private lazy var hoverPreview = TimelineHoverPreview()
@@ -554,10 +507,9 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         if !fromQuickAccess, let item = CaptureItem.loadRecording(target, date: Date()) { QuickAccessManager.shared.show(item) }
     }
 
-    private func share() {
+    private func share(from anchor: NSView) {
         player.pause()
         state.isPlaying = false
-        guard let anchor = window?.toolbar?.items.first(where: { $0.itemIdentifier == ID.share })?.view else { return }
         Task {
             guard let movie = try? await VideoExporter.export(project: project, scale: 1, quality: 2, includeAudio: true, progress: { _ in }),
                   let url = await finalFile(movie) else {

@@ -5,9 +5,10 @@ import SwiftUI
 final class AnnotateBottomBarModel {
     var zoom: CGFloat = 1
     var growsCanvas = Defaults[Prefs.annotateExpandCanvas]
+    var locksCanvas = Defaults[Prefs.annotateLockCanvas]
 }
 
-/// Zoom menu, "Drag Me" handle and the Share / Pin / Copy buttons along the bottom of the editor.
+/// Zoom menu, Grow and Lock Canvas, "Drag Me" handle and the Pin / Copy buttons along the bottom of the editor.
 struct AnnotateBottomBar: View {
     struct Actions {
         var zoomIn: () -> Void
@@ -16,7 +17,7 @@ struct AnnotateBottomBar: View {
         var zoomToFit: () -> Void
         var setZoom: (CGFloat) -> Void
         var toggleGrowCanvas: () -> Void
-        var share: (NSView) -> Void
+        var toggleLockCanvas: () -> Void
         var pin: () -> Void
         var copy: () -> Void
         var dragFile: () -> URL?
@@ -61,10 +62,17 @@ struct AnnotateBottomBar: View {
                 .help(model.growsCanvas ? "Grow Canvas is on: annotations past the edge widen the canvas on every side, so the screenshot stays centered. Click to cut them off at the screenshot's edge instead."
                                          : "Grow Canvas is off: annotations are cut off at the screenshot's edge. Click to widen the canvas to fit them.")
 
+                Button(action: actions.toggleLockCanvas) {
+                    Image(systemName: model.locksCanvas ? "lock.fill" : "lock.open.fill")
+                        .font(.system(size: 13, weight: .semibold)).frame(width: 22)
+                }
+                .buttonStyle(BarButtonStyle(isOn: model.locksCanvas))
+                .help(model.locksCanvas ? "Lock Canvas is on: drawing over an object draws, it never picks the object up (use Select to move objects). Click to unlock."
+                                        : "Lock Canvas is off: starting a drawing on an object selects and moves it instead. Click to lock.")
+
                 Spacer()
 
                 HStack(spacing: 8) {
-                    ShareButton(action: actions.share)
                     BarIconButton(symbol: "pin.fill", help: "Pin to the screen", action: actions.pin)
                     BarIconButton(symbol: "doc.on.doc.fill", help: "Copy to clipboard (⇧⌘C)", action: actions.copy)
                 }
@@ -125,38 +133,6 @@ private struct BarIconButton: View {
         }
         .buttonStyle(BarButtonStyle())
         .help(help)
-    }
-}
-
-/// Share needs an anchor view for the sharing picker, so it is AppKit-backed.
-private struct ShareButton: NSViewRepresentable {
-    let action: (NSView) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let host = NSHostingView(rootView: AnyView(EmptyView()))
-        let anchor = AnchorView()
-        anchor.action = action
-        host.rootView = AnyView(
-            Button { anchor.action?(anchor) } label: {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 14, weight: .medium)).frame(width: 22)
-            }
-            .buttonStyle(BarButtonStyle())
-            .help("Share")
-        )
-        anchor.addSubview(host)
-        host.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: anchor.leadingAnchor), host.trailingAnchor.constraint(equalTo: anchor.trailingAnchor),
-            host.topAnchor.constraint(equalTo: anchor.topAnchor), host.bottomAnchor.constraint(equalTo: anchor.bottomAnchor),
-        ])
-        return anchor
-    }
-
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    final class AnchorView: NSView {
-        var action: ((NSView) -> Void)?
-        override var intrinsicContentSize: NSSize { NSSize(width: 42, height: 32) }
     }
 }
 

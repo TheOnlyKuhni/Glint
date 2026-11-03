@@ -18,7 +18,7 @@ struct ToolPicker: View {
     var body: some View {
         let tools = AnnotateTool.allCases
         let inactive = windowState == .inactive
-        let resting = doc.isCropping
+        let resting = doc.isCropping || doc.toolsResting
         HStack(spacing: 0) {
             ForEach(Array(tools.enumerated()), id: \.element) { index, tool in
                 if index > 0 {
@@ -99,6 +99,7 @@ extension AnnotateTool {
         case .redact: "Pixelate sensitive information"
         case .spotlight: "Dim everything except the selected area"
         case .counter: "Click to add numbered steps"
+        case .emoji: "Click to place an emoji; drag its corners to resize it"
         case .draw: "Draw freehand"
         case .highlighter: "Highlight with a translucent marker"
         }
