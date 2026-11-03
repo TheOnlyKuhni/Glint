@@ -117,6 +117,9 @@ struct AnnotateSidebarActions {
     var setAmount: (CGFloat) -> Void
     var setSpotlightBrightness: (CGFloat) -> Void
     var setSpotlightRest: (CGFloat) -> Void
+    var setSpotlightKeepsAnnotations: (Bool) -> Void
+    var setSpotlightSoftness: (CGFloat) -> Void
+    var setSpotlightBorder: (Bool) -> Void
     var setEmoji: (String) -> Void
     var setEmojiSize: (CGFloat) -> Void
     var takeScreenshot: () -> Void
@@ -215,7 +218,7 @@ struct AnnotateOptionsPanel: View {
                 PanelTitle(title: "Selected Image", subtitle: "Drag it to move it, drag its corners to resize it. ⌫ removes it.")
             } else {
                 PanelTitle(title: doc.selected != nil ? "Selected \(tool.title)" : tool.title,
-                           subtitle: doc.selected != nil ? "Changes apply to the selected object." : tool.hint)
+                           subtitle: doc.selected != nil ? "Changes apply to the selected object." : tool.modifierHint)
             }
             if tool == .select, doc.selected == nil {
                 InfoBox { Text("Pick a tool in the toolbar to draw, or click an object to change its color, size and style.") }
@@ -312,6 +315,12 @@ struct AnnotateOptionsPanel: View {
         }
     }
 
+    /// Text style samples show the current color, so the styles read as they will look; black and white (which
+    /// would vanish on the tiles or in the white card) show as red.
+    private var sampleColor: AnnotationColor {
+        doc.color.isDark || doc.color.hex == 0xFFFFFF ? AnnotationColor(hex: 0xE5484A) : doc.color
+    }
+
     @ViewBuilder private var styleSection: some View {
         switch tool {
         case .arrow:
@@ -331,7 +340,7 @@ struct AnnotateOptionsPanel: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
                     ForEach(TextStyle.allCases, id: \.self) { style in
                         TileButton(selected: doc.textStyle == style, height: 36, help: style.title) { actions.setTextStyle(style) } label: {
-                            Image(nsImage: SwatchImage.textStyleSample(style, color: AnnotationColor(hex: 0xFFFFFF)))
+                            Image(nsImage: SwatchImage.textStyleSample(style, color: sampleColor))
                         }
                     }
                 }
@@ -394,6 +403,22 @@ struct AnnotateOptionsPanel: View {
             StepSlider(value: inside, range: 0.5...2, step: 0.05, ticks: 7).help("Brighten or darken the spotlighted area (100% = unchanged)")
             InspectorHeader("Everything else", percent: rest, range: 0...1.5).padding(.top, 6)
             StepSlider(value: rest, range: 0...1.5, step: 0.05, ticks: 7).help("Brighten or darken the rest of the screenshot (100% = unchanged)")
+            Toggle(isOn: Binding(get: { doc.spotlightKeepsAnnotations }, set: actions.setSpotlightKeepsAnnotations)) {
+                Text("Exclude annotations").font(.system(size: 12.5)).foregroundStyle(.white)
+            }
+            .toggleStyle(.checkbox)
+            .help("Arrows, text and other annotations outside the spotlight keep their brightness")
+            let soft = Binding(get: { Double(doc.spotlightSoftness) }, set: { actions.setSpotlightSoftness(CGFloat($0)) })
+            InspectorHeader("Soft edge", percent: soft, range: 0...1).padding(.top, 6)
+            StepSlider(value: soft, range: 0...1, step: 0.05, ticks: 5).help("How gently the spotlight's edge fades into the rest (0% = a sharp edge)")
+            Toggle(isOn: Binding(get: { doc.spotlightBorder }, set: actions.setSpotlightBorder)) {
+                Text("Border").font(.system(size: 13.5)).foregroundStyle(.white)
+            }
+            .toggleStyle(BlueSwitch())
+            .padding(.top, 6)
+            .help("A line around the spotlight, in the color below")
+            // The border's color, right under its switch (a spotlight has no color otherwise).
+            if doc.spotlightBorder { colorSection }
         }
     }
 
@@ -547,7 +572,25 @@ private struct BigActionButton: View {
 
 // MARK: Crop
 
-/// Crop & Resize mode: ratio, output size, fill, rotate and flip; Cancel or Crop at the bottom.
+/// A group in the Crop & Resize panel: a divider (except for the first), its name and what it's for.
+private struct CropSection: View {
+    let title: String
+    let subtitle: String
+    var first = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !first { Rectangle().fill(W.line).frame(height: 1).padding(.bottom, 14) }
+            Text(title).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white)
+            Text(subtitle).font(.system(size: 12)).foregroundStyle(Color(white: 0.55)).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, first ? 0 : 10)
+        .padding(.bottom, 2)
+    }
+}
+
+/// Crop & Resize mode in three groups (crop: ratio, fill, snapping; resize: output size; rotate and flip); Cancel or
+/// Apply at the bottom.
 private struct CropPanel: View {
     @Bindable var state: CropState
     let doc: AnnotationDocument
@@ -560,8 +603,10 @@ private struct CropPanel: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    PanelTitle(title: "Crop & Resize", subtitle: "Drag the frame or its handles. Past the screenshot, the fill shows.")
-                    InspectorHeader("Aspect ratio").padding(.top, 6)
+                    PanelTitle(title: "Crop & Resize", subtitle: "Crop picks the part to keep, Resize sets how many pixels the result has. Both apply together.")
+
+                    CropSection(title: "Crop", subtitle: "Drag the frame or its handles. Drag it past the screenshot to add room around it.", first: true)
+                    InspectorHeader("Aspect ratio")
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                         // Custom last; picking it opens its line below.
                         ForEach(CropState.Ratio.allCases.filter { $0 != .customRatio } + [.customRatio]) { ratio in
@@ -589,10 +634,7 @@ private struct CropPanel: View {
                         .transition(.opacity)
                     }
 
-                    InspectorHeader("Image size").padding(.top, 10)
-                    imageSize
-
-                    InspectorHeader("Fill").padding(.top, 10)
+                    InspectorHeader("Fill around the screenshot").padding(.top, 6)
                     HStack(spacing: 8) {
                         ForEach(Self.fills, id: \.title) { fill in
                             fillDot(fill)
@@ -605,7 +647,18 @@ private struct CropPanel: View {
                         .help("Custom color…")
                     }
 
-                    InspectorHeader("Rotate & flip").padding(.top, 10)
+                    Toggle(isOn: $state.snapToEdges) {
+                        Text("Snap to edges").font(.system(size: 13.5)).foregroundStyle(.white)
+                    }
+                    .toggleStyle(BlueSwitch())
+                    .padding(.top, 6)
+                    Text("Hold ⌘ while dragging to stop snapping for a moment.").font(.system(size: 12)).foregroundStyle(Color(white: 0.55))
+
+                    CropSection(title: "Resize", subtitle: "The result's size. Lower it for a smaller file, e.g. 50% to turn a Retina screenshot into standard size.")
+                    InspectorHeader("Image size")
+                    imageSize
+
+                    CropSection(title: "Rotate & Flip", subtitle: "Turns or mirrors the screenshot right away; annotations go along.")
                     HStack(spacing: 6) {
                         TileButton(selected: false, height: 32, help: "Rotate 90°", action: actions.rotate) {
                             Label("Rotate", systemImage: "rotate.right").font(.system(size: 12.5, weight: .medium))
@@ -614,13 +667,6 @@ private struct CropPanel: View {
                             Label("Flip", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right").font(.system(size: 12.5, weight: .medium))
                         }
                     }
-
-                    Toggle(isOn: $state.snapToEdges) {
-                        Text("Snap to edges").font(.system(size: 13.5)).foregroundStyle(.white)
-                    }
-                    .toggleStyle(BlueSwitch())
-                    .padding(.top, 12)
-                    Text("Hold ⌘ while dragging to stop snapping for a moment.").font(.system(size: 12)).foregroundStyle(Color(white: 0.55))
                 }
                 .padding(EdgeInsets(top: 22, leading: 22, bottom: 16, trailing: 22))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -631,8 +677,8 @@ private struct CropPanel: View {
                 TileButton(selected: false, height: 32, help: "Leave Crop & Resize without changes (Esc)", action: actions.cancelCrop) {
                     Text("Cancel").font(.system(size: 13.5, weight: .medium))
                 }
-                TileButton(selected: true, height: 32, help: "Apply the crop (Return)", action: actions.applyCrop) {
-                    Text("Crop").font(.system(size: 13.5, weight: .semibold))
+                TileButton(selected: true, height: 32, help: "Apply the crop and size (Return)", action: actions.applyCrop) {
+                    Text("Apply").font(.system(size: 13.5, weight: .semibold))
                 }
             }
             .padding(14)

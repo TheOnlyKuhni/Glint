@@ -113,6 +113,11 @@ struct Annotation: Identifiable, Equatable, Codable {
     /// existed (inside unchanged, outside dimmed by `amount`).
     var spotBrightness: CGFloat?
     var restBrightness: CGFloat?
+    /// Spotlights: whether annotations outside stay as they are (nil = no, they're dimmed too), how soft the edge is
+    /// (0…1; nil = made before Soft edge: hard), and whether a border in `color` goes around it.
+    var spotKeepsAnnotations: Bool?
+    var spotSoftness: CGFloat?
+    var spotBorder: Bool?
     /// Curved and double arrows: the point the arrow bends through (set by dragging its middle handle).
     /// nil = straight (the default).
     var control: CGPoint?
@@ -159,6 +164,9 @@ struct Annotation: Identifiable, Equatable, Codable {
     /// A spotlight's brightness inside it and outside it.
     var spotInside: CGFloat { spotBrightness ?? 1 }
     var spotRest: CGFloat { restBrightness ?? 1 - (0.15 + 0.75 * amount) }
+    var spotSoft: CGFloat { spotSoftness ?? 0 }
+    /// Spotlights saved before these settings kept annotations out of the dimming; they still do.
+    var spotKeeps: Bool { spotKeepsAnnotations ?? (spotSoftness == nil) }
 
     var lineWidth: CGFloat { AnnotationStyle.thicknesses[min(max(thickness, 0), AnnotationStyle.thicknesses.count - 1)] }
 
@@ -176,6 +184,9 @@ struct Annotation: Identifiable, Equatable, Codable {
         copy.amount = amount
         copy.spotBrightness = spotBrightness
         copy.restBrightness = restBrightness
+        copy.spotKeepsAnnotations = spotKeepsAnnotations
+        copy.spotSoftness = spotSoftness
+        copy.spotBorder = spotBorder
         copy.control = control
         return copy
     }
@@ -206,6 +217,12 @@ struct AnnotationColor: Equatable, Hashable, Codable {
     var prefersWhiteText: Bool {
         guard let c = nsColor.usingColorSpace(.sRGB) else { return true }
         return 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent < 0.75
+    }
+
+    /// Too dark to read on a dark box (black, very dark custom colors).
+    var isDark: Bool {
+        guard let c = nsColor.usingColorSpace(.sRGB) else { return false }
+        return 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent < 0.3
     }
 
     init(hex: UInt32) { self.hex = hex }

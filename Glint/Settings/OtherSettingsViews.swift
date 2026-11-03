@@ -122,6 +122,7 @@ struct RecordingSettingsView: View {
 struct AnnotateSettingsView: View {
     @AppStorage(Prefs.annotateInverseArrow) private var inverseArrow
     @AppStorage(Prefs.annotateSmoothDrawing) private var smoothDrawing
+    @AppStorage(Prefs.annotateSelectPlaced) private var selectPlaced
     @AppStorage(Prefs.annotateRememberBackground) private var rememberBackground
     @AppStorage(Prefs.annotateShadow) private var shadow
     @AppStorage(Prefs.annotateExpandCanvas) private var expandCanvas
@@ -135,6 +136,10 @@ struct AnnotateSettingsView: View {
                 Toggle(isOn: $inverseArrow) {
                     Text("Inverse arrow direction")
                     Text("Press ⌥ (option) when drawing to invert the behavior.")
+                }
+                Toggle(isOn: $selectPlaced) {
+                    Text("Select objects after placing them")
+                    Text("Off: a new arrow, shape, text or emoji stays unselected, so the next click draws again. Click it with the Select tool to change it.")
                 }
                 Toggle("Smooth drawing", isOn: $smoothDrawing)
                 Toggle("Remember if background tool was opened", isOn: $rememberBackground)

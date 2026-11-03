@@ -34,14 +34,12 @@ struct AnnotationRenderer {
         // Spotlights: everything else (and the spotlights themselves) brightened or dimmed; the latest one's values.
         let spotlights = annotations.filter { $0.kind == .spotlight }
         let spots = CGMutablePath()
-        for s in spotlights {
-            switch SpotlightShape(rawValue: s.variant) ?? .rounded {
-            case .rectangle: spots.addRect(s.rect)
-            case .rounded: spots.addPath(Self.roundedRect(s.rect, radius: 12))
-            case .ellipse: spots.addEllipse(in: s.rect)
-            }
-        }
-        let inside = spotlights.last?.spotInside ?? 1, outside = spotlights.last?.spotRest ?? 1
+        for s in spotlights { spots.addPath(Self.spotPath(s)) }
+        let last = spotlights.last
+        let inside = last?.spotInside ?? 1, outside = last?.spotRest ?? 1
+        let soft = Self.spotEdge(last?.spotSoft ?? 0)
+        // Dimming covers the annotations outside the spotlights too, unless they're excluded.
+        let dimsAnnotations = !(last?.spotKeeps ?? false)
         ctx.saveGState()
         background?.clipScreenshot(imageSize: imageSize, ctx: ctx)
         if parts.contains(.image) { Self.drawImage(baseImage, in: bounds, ctx: ctx) }
@@ -49,16 +47,13 @@ struct AnnotationRenderer {
             // Brightening draws the screenshot again, brighter, before the redactions go on top.
             if !spotlights.isEmpty, abs(inside - 1) > 0.01, let bright = effects?.brightened(inside) {
                 ctx.saveGState()
-                ctx.addPath(spots)
-                ctx.clip()
+                Self.clip(ctx, to: spots, inside: true, bounds: bounds, soft: soft)
                 Self.drawImage(bright, in: bounds, ctx: ctx)
                 ctx.restoreGState()
             }
             if !spotlights.isEmpty, outside > 1.01, let bright = effects?.brightened(outside) {
                 ctx.saveGState()
-                ctx.addRect(bounds)
-                ctx.addPath(spots)
-                ctx.clip(using: .evenOdd)
+                Self.clip(ctx, to: spots, inside: false, bounds: bounds, soft: soft)
                 Self.drawImage(bright, in: bounds, ctx: ctx)
                 ctx.restoreGState()
             }
@@ -67,26 +62,85 @@ struct AnnotationRenderer {
         ctx.restoreGState()
         guard parts.contains(.overlay) else { return }
 
-        if !spotlights.isEmpty, outside < 0.99 {
-            let path = CGMutablePath()
-            path.addRect(bounds)
-            path.addPath(spots)
+        func dim() {
+            guard !spotlights.isEmpty, outside < 0.99 else { return }
             ctx.saveGState()
-            ctx.addPath(path)
+            Self.clip(ctx, to: spots, inside: false, bounds: bounds, soft: soft)
             ctx.setFillColor(NSColor.black.withAlphaComponent(1 - max(outside, 0)).cgColor)
-            ctx.fillPath(using: .evenOdd)
+            ctx.fill(bounds)
             ctx.restoreGState()
         }
+        if !dimsAnnotations { dim() }
 
+        let brightensAnnotations = dimsAnnotations && !spotlights.isEmpty && outside > 1.01
+        // Annotations outside the spotlights get brighter with the screenshot: a white wash on top of them only.
+        if brightensAnnotations { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
         for a in annotations where a.kind != .redact && a.kind != .spotlight {
             if a.id == editingTextID {
-                // The text view shows the letters; keep the box behind them.
-                if case .text(let s) = a.kind, let style = TextStyle(rawValue: a.variant), style.hasBox {
-                    Self.drawStyledText(s, at: a.start, size: a.fontSize, color: a.color, style: style, boxOnly: true, ctx: ctx)
+                // The text view shows the letters; keep the box or outline behind them.
+                if case .text(let s) = a.kind, case let style = TextStyle(variant: a.variant), style.hasBox || style == .outline {
+                    Self.drawStyledText(s, at: a.start, size: a.fontSize, color: a.color, style: style, backgroundOnly: true, ctx: ctx)
                 }
                 continue
             }
             draw(a, ctx: ctx)
+        }
+        if brightensAnnotations {
+            ctx.saveGState()
+            Self.clip(ctx, to: spots, inside: false, bounds: bounds, soft: soft)
+            ctx.setBlendMode(.sourceAtop)
+            ctx.setFillColor(NSColor.white.withAlphaComponent(min(outside - 1, 1) * 0.6).cgColor)
+            ctx.fill(bounds.insetBy(dx: -bounds.width, dy: -bounds.height))
+            ctx.restoreGState()
+            ctx.endTransparencyLayer()
+        }
+        if dimsAnnotations { dim() }
+
+        // The optional border, in the spotlight's color.
+        for s in spotlights where s.spotBorder == true {
+            ctx.saveGState()
+            if drawsShadows {
+                ctx.setShadow(offset: .zero, blur: 6 * deviceScale, color: NSColor.black.withAlphaComponent(0.35).cgColor)
+            }
+            ctx.setStrokeColor(s.color.cgColor)
+            ctx.setLineWidth(3)
+            ctx.addPath(Self.spotPath(s))
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
+    }
+
+    // MARK: Spotlight
+
+    /// A spotlight's outline; rounded corners grow with its size.
+    static func spotPath(_ s: Annotation) -> CGPath {
+        let r = s.rect
+        switch SpotlightShape(rawValue: s.variant) ?? .rounded {
+        case .rectangle: return CGPath(rect: r, transform: nil)
+        case .rounded: return roundedRect(r, radius: min(max(10, min(r.width, r.height) * 0.12), 32))
+        case .ellipse: return CGPath(ellipseIn: r, transform: nil)
+        }
+    }
+
+    /// How far (points) a spotlight's edge fades, for its Soft edge setting (0…1).
+    static func spotEdge(_ softness: CGFloat) -> CGFloat { softness * 48 }
+
+    /// Clips to the spotlights (`inside`) or to everything else; a soft edge fades across the outline.
+    private static func clip(_ ctx: CGContext, to spots: CGPath, inside: Bool, bounds: CGRect, soft: CGFloat) {
+        if soft > 0.5, let mask = SpotMask.shared.mask(spots, size: bounds.size, edge: soft, inside: inside) {
+            // The mask is a top-down image like the screenshot: flip it upright the way `drawImage` does.
+            ctx.translateBy(x: 0, y: bounds.maxY)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.clip(to: CGRect(origin: .zero, size: bounds.size), mask: mask)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.translateBy(x: 0, y: -bounds.maxY)
+        } else if inside {
+            ctx.addPath(spots)
+            ctx.clip()
+        } else {
+            ctx.addRect(bounds.insetBy(dx: -bounds.width, dy: -bounds.height))
+            ctx.addPath(spots)
+            ctx.clip(using: .evenOdd)
         }
     }
 
@@ -158,7 +212,7 @@ struct AnnotationRenderer {
             let font = NSFont.rounded(size: d * 0.58, weight: .bold)
             Self.drawText(label, font: font, color: a.color.prefersWhiteText ? .white : .black, centeredIn: pill, ctx: ctx)
         case .text(let string):
-            Self.drawStyledText(string, at: a.start, size: a.fontSize, color: a.color, style: TextStyle(rawValue: a.variant) ?? .standard, ctx: ctx)
+            Self.drawStyledText(string, at: a.start, size: a.fontSize, color: a.color, style: TextStyle(variant: a.variant), ctx: ctx)
         case .redact, .spotlight:
             break
         }
@@ -338,28 +392,44 @@ struct AnnotationRenderer {
 
     // MARK: Text
 
-    /// Draws text in one of the text styles; returns nothing, bounds come from `styledTextSize`.
+    /// Draws text in one of the text styles; returns nothing, bounds come from `styledTextSize`. `backgroundOnly`
+    /// draws just the box or white outline (behind the letters of the text being typed).
     static func drawStyledText(_ string: String, at origin: CGPoint, size: CGFloat, color: AnnotationColor, style: TextStyle,
-                               boxOnly: Bool = false, ctx: CGContext) {
+                               backgroundOnly: Bool = false, ctx: CGContext) {
         let font = style.font(size: size)
         let textSize = styledTextSize(string, size: size, style: style)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
-        var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color.nsColor]
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: style.textColor(color)]
         var textOrigin = origin
         if style.hasBox {
             let pad = boxPadding(size)
             let box = CGRect(origin: origin, size: textSize)
-            let radius = style == .roundedBox ? box.height / 2 : size * 0.18
-            color.nsColor.setFill()
-            NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius).fill()
-            attrs[.foregroundColor] = color.prefersWhiteText ? NSColor.white : NSColor.black
+            let radius = size * (style == .card ? 0.28 : 0.18)
+            switch style {
+            case .card:
+                // White card, colored border inside the box (light gray for white).
+                let border = max(1.5, size * 0.08)
+                NSColor.white.setFill()
+                NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius).fill()
+                (color.hex == 0xFFFFFF ? NSColor(white: 0.8, alpha: 1) : color.nsColor).setStroke()
+                let edge = NSBezierPath(roundedRect: box.insetBy(dx: border / 2, dy: border / 2), xRadius: radius - border / 2, yRadius: radius - border / 2)
+                edge.lineWidth = border
+                edge.stroke()
+            case .code:
+                NSColor(white: 0.11, alpha: 0.92).setFill()
+                NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius).fill()
+            default:
+                color.nsColor.setFill()
+                NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius).fill()
+            }
             textOrigin = CGPoint(x: origin.x + pad.width, y: origin.y + pad.height)
-            if boxOnly { NSGraphicsContext.restoreGraphicsState(); return }
-        } else if style == .outlined {
+            if backgroundOnly { NSGraphicsContext.restoreGraphicsState(); return }
+        } else if style == .outline {
             // Colored letters with a white outline.
             let outline = attrs.merging([.strokeColor: NSColor.white, .strokeWidth: 12, .foregroundColor: NSColor.white]) { $1 }
             (string as NSString).draw(with: CGRect(origin: textOrigin, size: textSize), options: [.usesLineFragmentOrigin], attributes: outline)
+            if backgroundOnly { NSGraphicsContext.restoreGraphicsState(); return }
         }
         (string as NSString).draw(with: CGRect(origin: textOrigin, size: textSize), options: [.usesLineFragmentOrigin], attributes: attrs)
         NSGraphicsContext.restoreGraphicsState()
@@ -425,5 +495,39 @@ extension NSFont {
         let base = NSFont.systemFont(ofSize: size, weight: weight)
         guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
         return NSFont(descriptor: descriptor, size: size) ?? base
+    }
+}
+
+/// Soft-edged clip masks for spotlights (white = painted), at half resolution; the last few are kept, since the
+/// canvas redraws often with the same spotlights.
+final class SpotMask: @unchecked Sendable {
+    static let shared = SpotMask()
+    private let lock = NSLock()
+    private var cache: [(path: CGPath, size: CGSize, edge: CGFloat, inside: Bool, image: CGImage)] = []
+
+    func mask(_ spots: CGPath, size: CGSize, edge: CGFloat, inside: Bool) -> CGImage? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let hit = cache.first(where: { $0.path == spots && $0.size == size && $0.edge == edge && $0.inside == inside }) { return hit.image }
+        let scale: CGFloat = 0.5
+        let w = max(Int(ceil(size.width * scale)), 1), h = max(Int(ceil(size.height * scale)), 1)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
+                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        ctx.setFillColor(gray: inside ? 0 : 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        // y-down like the document; the spotlights are filled far to the left and only their blurred shadow lands
+        // here, so the edge fades evenly to both sides of the outline.
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: scale, y: -scale)
+        let away = size.width + edge * 4 + 100
+        ctx.setShadow(offset: CGSize(width: away * scale, height: 0), blur: edge * scale,
+                      color: CGColor(gray: inside ? 1 : 0, alpha: 1))
+        ctx.translateBy(x: -away, y: 0)
+        ctx.addPath(spots)
+        ctx.fillPath()
+        guard let image = ctx.makeImage() else { return nil }
+        cache.insert((spots.copy() ?? spots, size, edge, inside, image), at: 0)
+        if cache.count > 4 { cache.removeLast() }
+        return image
     }
 }
