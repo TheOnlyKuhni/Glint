@@ -577,6 +577,15 @@ final class VideoProject: ObservableObject {
             for (clip, start) in zip(clips, starts) {
                 let a = max(clip.start, offset), b = min(clip.end, offset + length)
                 guard b - a > 0.02 else { continue }
+                // The camera starts a moment after the screen: its first frame stands in until then, so the camera
+                // shows from the first frame on (the paused editor opens there).
+                if a > clip.start, a - offset < 0.001 {
+                    let first = CMTimeRange(start: .zero, duration: CMTime(value: 1, timescale: 30))
+                    if (try? camera.insertTimeRange(first, of: cameraSource, at: start)) != nil {
+                        camera.scaleTimeRange(CMTimeRange(start: start, duration: first.duration),
+                                              toDuration: CMTime(seconds: a - clip.start, preferredTimescale: 600))
+                    }
+                }
                 let range = CMTimeRange(start: CMTime(seconds: a - offset, preferredTimescale: 600), end: CMTime(seconds: b - offset, preferredTimescale: 600))
                 try? camera.insertTimeRange(range, of: cameraSource, at: start + CMTime(seconds: a - clip.start, preferredTimescale: 600))
             }

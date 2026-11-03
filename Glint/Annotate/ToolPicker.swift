@@ -87,21 +87,39 @@ final class ToolHint: NSObject, NSViewToolTipOwner {
 }
 
 extension AnnotateTool {
+    /// What the tool does (the toolbar's hover hint).
     var hint: String {
         switch self {
         case .select: "Select, move and resize objects"
-        case .rectangle: "Draw a rectangle outline. Hold Shift for a square"
+        case .rectangle: "Draw a rectangle outline"
         case .filledRectangle: "Draw a solid rectangle"
-        case .ellipse: "Draw an ellipse. Hold Shift for a circle"
-        case .line: "Draw a straight line. Hold Shift to snap to 45°"
-        case .arrow: "Draw an arrow. Hold Shift to snap to 45°"
+        case .ellipse: "Draw an ellipse"
+        case .line: "Draw a straight line"
+        case .arrow: "Draw an arrow"
         case .text: "Click to add text"
         case .redact: "Pixelate sensitive information"
         case .spotlight: "Dim everything except the selected area"
         case .counter: "Click to add numbered steps"
-        case .emoji: "Click to place an emoji; drag its corners to resize it"
+        case .emoji: "Click to place an emoji"
         case .draw: "Draw freehand"
         case .highlighter: "Highlight with a translucent marker"
+        }
+    }
+
+    /// The modifier keys while using it (the sidebar, under the tool's name).
+    var modifierHint: String {
+        switch self {
+        case .select: "Hold Shift to move straight or keep proportions, Option to drag a copy. Arrow keys nudge (Shift: 10 pt)."
+        case .rectangle, .filledRectangle, .redact: "Hold Shift for a square, Option to draw from the center."
+        case .spotlight: "Hold Shift for a square or circle, Option to draw from the center."
+        case .ellipse: "Hold Shift for a circle, Option to draw from the center."
+        case .line: "Hold Shift to snap to 45°, Option to draw from the center."
+        case .arrow: "Hold Shift to snap to 45°, Option to flip its direction."
+        case .text: "Press ⌘Return or Esc to finish. Double-click a text to edit it."
+        case .counter: "Hold Shift to line it up with the last counter."
+        case .emoji: "Hold Shift to line it up with the last emoji."
+        case .draw: "Hold Shift for a straight line."
+        case .highlighter: "Hold Shift for a straight line, Option to ignore lines of text."
         }
     }
 }

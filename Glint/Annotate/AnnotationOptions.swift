@@ -35,16 +35,60 @@ enum ArrowStyle: Int, CaseIterable {
     var symbol: String { ["arrow.down.left", "arrow.down.left.circle", "arrow.uturn.left", "arrow.left.and.right"][rawValue] }
 }
 
+/// Raw values are stored in `Annotation.variant`; retired styles map to their closest one (`init(variant:)`).
 enum TextStyle: Int, CaseIterable {
-    case standard, rounded, outlined, mono, box, monoBox, roundedBox
-    var title: String { ["Standard", "Rounded", "Outlined", "Mono", "Box", "Mono Box", "Rounded Box"][rawValue] }
-    var hasBox: Bool { [.box, .monoBox, .roundedBox].contains(self) }
+    /// Bold letters in the color; Outline adds a white edge that reads on any background.
+    case standard = 0, outline = 2
+    /// A colored box with white or black letters.
+    case box = 4
+    /// A white card with a colored border and colored letters.
+    case card = 7
+    /// Monospaced letters on a dark box, for commands and code.
+    case code = 3
+    /// Marker-pen letters, for handwritten-looking notes.
+    case handwritten = 8
+
+    static let allCases: [TextStyle] = [.standard, .outline, .box, .card, .code, .handwritten]
+
+    /// The style stored in an annotation; the retired Rounded, Mono Box and Rounded Box become their closest style.
+    init(variant: Int) {
+        switch variant {
+        case 5: self = .code
+        case 6: self = .box
+        default: self = TextStyle(rawValue: variant) ?? .standard
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .standard: "Standard"
+        case .outline: "Outline"
+        case .box: "Box"
+        case .card: "Card"
+        case .code: "Code"
+        case .handwritten: "Handwritten"
+        }
+    }
+
+    var hasBox: Bool { [.box, .card, .code].contains(self) }
 
     func font(size: CGFloat) -> NSFont {
         switch self {
-        case .standard, .outlined, .box: NSFont.systemFont(ofSize: size, weight: .bold)
-        case .rounded, .roundedBox: NSFont.rounded(size: size, weight: .bold)
-        case .mono, .monoBox: NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
+        case .standard, .outline, .box, .card: NSFont.systemFont(ofSize: size, weight: .bold)
+        case .code: NSFont.monospacedSystemFont(ofSize: size, weight: .semibold)
+        case .handwritten:
+            NSFont(name: "MarkerFelt-Wide", size: size) ?? NSFont(name: "Noteworthy-Bold", size: size) ?? NSFont.systemFont(ofSize: size, weight: .bold)
+        }
+    }
+
+    /// The letters' color for an object in `color`.
+    func textColor(_ color: AnnotationColor) -> NSColor {
+        switch self {
+        case .box: color.prefersWhiteText ? .white : .black
+        // White letters would vanish on the white card; dark ones would on the dark box.
+        case .card: color.hex == 0xFFFFFF ? .black : color.nsColor
+        case .code: color.isDark ? .white : color.nsColor
+        default: color.nsColor
         }
     }
 }

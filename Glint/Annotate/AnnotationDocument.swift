@@ -72,7 +72,7 @@ final class AnnotationDocument {
     func bounds(of a: Annotation) -> CGRect {
         switch a.kind {
         case .text(let s):
-            return CGRect(origin: a.start, size: AnnotationRenderer.styledTextSize(s, size: a.fontSize, style: TextStyle(rawValue: a.variant) ?? .standard))
+            return CGRect(origin: a.start, size: AnnotationRenderer.styledTextSize(s, size: a.fontSize, style: TextStyle(variant: a.variant)))
         case .counter(let n):
             let c = counter.resolved(for: a)
             let d = c.diameter
@@ -105,6 +105,11 @@ final class AnnotationDocument {
     /// Spotlight: brightness inside it (125% brightens it a little) and of everything else.
     var spotlightBrightness: CGFloat = 1.25
     var spotlightRest: CGFloat = 0.5
+    /// Spotlight: annotations outside it keep their look (off: they dim with everything else), a soft edge (0…1)
+    /// and a border in the color.
+    var spotlightKeepsAnnotations = false
+    var spotlightSoftness: CGFloat = 0.3
+    var spotlightBorder = false
     var arrowStyle: ArrowStyle = .standard
     var textStyle: TextStyle = .standard
     /// Shared by every counter; changing the size resizes all of them.
@@ -115,11 +120,14 @@ final class AnnotationDocument {
     /// The Emoji tool: what a click places, and how big (points).
     var emoji = "👍"
     var emojiSize: CGFloat = 64
+    /// The `images` keys of placed emoji (⇧ lines a new one up with the previous one).
+    @ObservationIgnored private(set) var emojiKeys: Set<String> = []
 
     /// Places an image object without an undo step of its own (the canvas makes one for the whole click and drag).
     func stampImage(_ image: CGImage, size: CGSize, center: CGPoint) -> Annotation {
         let key = UUID().uuidString
         images[key] = image
+        emojiKeys.insert(key)
         let origin = CGPoint(x: (center.x - size.width / 2).rounded(), y: (center.y - size.height / 2).rounded())
         let a = Annotation(kind: .image(key), start: origin, end: CGPoint(x: origin.x + size.width, y: origin.y + size.height),
                            color: color, thickness: thickness)
@@ -216,7 +224,7 @@ final class AnnotationDocument {
     func adoptStyleOfSelection() {
         guard let a = selected else { return }
         let tool = AnnotateTool(drawing: a.kind)
-        if tool.usesColor { color = a.color }
+        if tool.usesColor || a.spotBorder == true { color = a.color }
         // A counter's size is shared by all counters, not stored per object.
         if tool.usesThickness, tool != .counter { thickness = a.thickness }
         switch a.kind {
@@ -225,8 +233,11 @@ final class AnnotationDocument {
             spotlightShape = SpotlightShape(rawValue: a.variant) ?? spotlightShape
             spotlightBrightness = a.spotInside
             spotlightRest = a.spotRest
+            spotlightKeepsAnnotations = a.spotKeeps
+            spotlightSoftness = a.spotSoft
+            spotlightBorder = a.spotBorder ?? false
         case .arrow: arrowStyle = ArrowStyle(rawValue: a.variant) ?? arrowStyle
-        case .text: textStyle = TextStyle(rawValue: a.variant) ?? textStyle; fontSize = a.fontSize
+        case .text: textStyle = TextStyle(variant: a.variant); fontSize = a.fontSize
         default: break
         }
     }
@@ -240,7 +251,13 @@ final class AnnotationDocument {
         a.fontSize = fontSize
         switch a.kind {
         case .redact: a.variant = redactMode.rawValue; a.amount = redactAmount
-        case .spotlight: a.variant = spotlightShape.rawValue; a.spotBrightness = spotlightBrightness; a.restBrightness = spotlightRest
+        case .spotlight:
+            a.variant = spotlightShape.rawValue
+            a.spotBrightness = spotlightBrightness
+            a.restBrightness = spotlightRest
+            a.spotKeepsAnnotations = spotlightKeepsAnnotations
+            a.spotSoftness = spotlightSoftness
+            a.spotBorder = spotlightBorder
         case .arrow: a.variant = arrowStyle.rawValue
         case .text: a.variant = textStyle.rawValue
         default: break
