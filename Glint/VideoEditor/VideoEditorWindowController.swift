@@ -8,6 +8,8 @@ final class VideoEditorState: ObservableObject {
     enum Section: CaseIterable { case cursor, keystrokes, audio, camera, background, animation }
     @Published var section: Section = .audio
     @Published var selectedZoom: UUID?
+    /// The selected camera layout (Studio Mode).
+    @Published var selectedCamera: UUID?
     @Published var selectedClip: UUID?
     /// The cut tool. While it's on, the playhead stays where it is (cutting and clicking don't move it).
     @Published var scissors = false
@@ -120,7 +122,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         window.toolbarStyle = .unified
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 960, height: 640)
+        window.minSize = NSSize(width: 960, height: VideoEditorContent.minWindowHeight)
         window.title = sourceFile.lastPathComponent
         window.collectionBehavior.insert(.moveToActiveSpace)
         super.init(window: window)
@@ -251,7 +253,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         let settings = project.renderSettings(outputScale: previewScale, includeBackground: false)
         let renderSize = CGSize(width: (source.width * previewScale / 2).rounded() * 2, height: (source.height * previewScale / 2).rounded() * 2)
         let key = "\(project.clips.map { "\($0.start)-\($0.end)" })"
-        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)"
+        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)"
         if !force, key == structureKey, let renderer, let item = player.currentItem, let composition = item.videoComposition {
             if look != renderKey {
                 renderKey = look
@@ -340,6 +342,9 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         if let at = state.selectedCut {
             state.selectedCut = nil
             project.restoreCut(at: at)
+        } else if let id = state.selectedCamera {
+            state.selectedCamera = nil
+            project.cameraLayouts.removeAll { $0.id == id }
         } else if let id = state.selectedZoom {
             state.selectedZoom = nil
             project.zooms.removeAll { $0.id == id }

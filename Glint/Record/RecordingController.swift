@@ -196,6 +196,7 @@ final class RecordingSession {
             let tracker = StudioTracker(area: rect, folder: studioFolder, clock: studioClock)
             tracker.start()
             self.tracker = tracker
+            WebcamOverlay.shared.onFullScreenChange = { [weak tracker] in tracker?.cameraToggled(full: $0) }
         }
         started = Date()
         pausedTime = 0

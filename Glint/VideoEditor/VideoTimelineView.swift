@@ -2,10 +2,12 @@ import AppKit
 import AVFoundation
 import Combine
 
-/// The timeline: seconds ruler, red playhead, a 30pt zoom track ("+ Click or drag to add zoom")
-/// and the 60pt clip of thumbnails, 26pt in from both sides. Drag the clip's edges to trim (a "✂ 0.8s" marker shows
-/// what was cut; click it to bring it back), with the scissors click to split or drag across a stretch to cut it out,
-/// click a clip and press ⌫ to delete it. Zooms: click or drag on the zoom track to add one, drag to move, drag its ends to resize, ⌫ deletes.
+/// The timeline, top to bottom: seconds ruler with the red playhead, the camera track (Studio Mode recordings with a
+/// camera), the 30pt zoom track ("+ Click or drag to add zoom"), the 60pt clip of thumbnails with its cut markers, and
+/// the events (Studio Mode), 26pt in from both sides. Drag the clip's edges to trim (a "✂ 0.8s" marker shows what was
+/// cut; click it to bring it back), with the scissors click to split or drag across a stretch to cut it out, click a
+/// clip and press ⌫ to delete it. Zooms and camera layouts: click or drag on their track to add one, drag to move,
+/// drag its ends to resize, ⌫ deletes. Hovering an item tells what it is.
 final class VideoTimelineView: NSView {
     let scrollView = NSScrollView()
     private let project: VideoProject
@@ -19,6 +21,8 @@ final class VideoTimelineView: NSView {
         static let inset: CGFloat = 26
         static let rulerText: CGFloat = 18.5
         static let headTop: CGFloat = 28
+        static let cameraTop: CGFloat = 44
+        static let cameraHeight: CGFloat = 28
         static let zoomTop: CGFloat = 79
         static let zoomHeight: CGFloat = 30
         static let clipTop: CGFloat = 122
@@ -52,6 +56,7 @@ final class VideoTimelineView: NSView {
             state.$time.sink { [weak self] _ in DispatchQueue.main.async { self?.playheadMoved() } },
             state.$timelineZoom.sink { [weak self] _ in DispatchQueue.main.async { self?.resize() } },
             state.$selectedZoom.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
+            state.$selectedCamera.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$selectedCut.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$selectedClip.sink { [weak self] _ in DispatchQueue.main.async { self?.needsDisplay = true } },
             state.$timelineZoomEditing.sink { [weak self] editing in
@@ -85,6 +90,8 @@ final class VideoTimelineView: NSView {
     func refresh() {
         resize()
         needsDisplay = true
+        // The hovered item may have changed (its label says what it is now).
+        if let hoverPoint { updateHoverInfo(hoverPoint) }
     }
 
     @objc private func clipResized() { resize() }
@@ -163,8 +170,126 @@ final class VideoTimelineView: NSView {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    private func zoomRect(_ z: VideoZoom) -> CGRect {
-        CGRect(x: x(z.start), y: Metrics.zoomTop, width: x(z.end) - x(z.start), height: Metrics.zoomHeight)
+    // MARK: Lanes (camera layouts and zooms)
+
+    /// The tracks of stretches above the clip: camera layouts (Studio Mode recordings with a camera) and zooms.
+    private enum Lane { case camera, zoom }
+    private struct Span: Equatable { var id: UUID; var start: Double; var end: Double }
+
+    private var lanes: [Lane] { project.isStudio && project.hasCamera ? [.camera, .zoom] : [.zoom] }
+    private func top(_ lane: Lane) -> CGFloat { lane == .camera ? Metrics.cameraTop : Metrics.zoomTop }
+    private func height(_ lane: Lane) -> CGFloat { lane == .camera ? Metrics.cameraHeight : Metrics.zoomHeight }
+    private func lane(at p: CGPoint) -> Lane? { lanes.first { p.y >= top($0) && p.y <= top($0) + height($0) } }
+
+    private func spans(_ lane: Lane) -> [Span] {
+        switch lane {
+        case .camera: project.cameraLayouts.map { Span(id: $0.id, start: $0.start, end: $0.end) }
+        case .zoom: project.zooms.map { Span(id: $0.id, start: $0.start, end: $0.end) }
+        }
+    }
+
+    private func spanRect(_ lane: Lane, _ s: Span) -> CGRect {
+        CGRect(x: x(s.start), y: top(lane), width: x(s.end) - x(s.start), height: height(lane))
+    }
+
+    private func setSpan(_ lane: Lane, _ id: UUID, start: Double, end: Double) {
+        switch lane {
+        case .camera:
+            guard let i = project.cameraLayouts.firstIndex(where: { $0.id == id }) else { return }
+            var layout = project.cameraLayouts[i]
+            layout.start = start
+            layout.end = end
+            project.cameraLayouts[i] = layout
+        case .zoom:
+            guard let i = project.zooms.firstIndex(where: { $0.id == id }) else { return }
+            var zoom = project.zooms[i]
+            zoom.start = start
+            zoom.end = end
+            project.zooms[i] = zoom
+        }
+    }
+
+    /// Adds and selects a stretch: a zoom (following the cursor in Studio Mode) or a full-size camera layout (its
+    /// bubble settings start as the Camera section's).
+    @discardableResult private func addSpan(_ lane: Lane, start: Double, end: Double) -> UUID {
+        switch lane {
+        case .camera:
+            let c = project.edit.camera
+            let layout = CameraLayout(start: start, end: end, size: c.size, shape: c.shape, position: c.position)
+            project.cameraLayouts.append(layout)
+            select(.camera, layout.id)
+            return layout.id
+        case .zoom:
+            let zoom = VideoZoom(start: start, end: end, follow: project.isStudio)
+            project.zooms.append(zoom)
+            select(.zoom, zoom.id)
+            return zoom.id
+        }
+    }
+
+    private func selected(_ lane: Lane) -> UUID? { lane == .camera ? state.selectedCamera : state.selectedZoom }
+
+    /// Selects one stretch (nil: none); clips and cut markers are deselected.
+    private func select(_ lane: Lane?, _ id: UUID?) {
+        state.selectedCamera = lane == .camera ? id : nil
+        state.selectedZoom = lane == .zoom ? id : nil
+        state.selectedClip = nil
+        state.selectedCut = nil
+    }
+
+    private func removeSpan(_ lane: Lane, _ id: UUID) {
+        if selected(lane) == id { select(nil, nil) }
+        switch lane {
+        case .camera: project.cameraLayouts.removeAll { $0.id == id }
+        case .zoom: project.zooms.removeAll { $0.id == id }
+        }
+    }
+
+    /// A copy right after the stretch (or in the next free gap that fits it).
+    private func duplicateSpan(_ lane: Lane, _ id: UUID) {
+        guard let span = spans(lane).first(where: { $0.id == id }) else { return }
+        let length = span.end - span.start
+        var start = span.end
+        for other in spans(lane).sorted(by: { $0.start < $1.start }) where other.end > start && other.start < start + length {
+            start = other.end
+        }
+        guard start + length <= project.duration + 0.001 else { NSSound.beep(); return }
+        let end = min(start + length, project.duration)
+        switch lane {
+        case .camera:
+            guard var copy = project.cameraLayouts.first(where: { $0.id == id }) else { return }
+            copy.id = UUID(); copy.start = start; copy.end = end
+            project.cameraLayouts.append(copy)
+            select(.camera, copy.id)
+        case .zoom:
+            guard var copy = project.zooms.first(where: { $0.id == id }) else { return }
+            copy.id = UUID(); copy.start = start; copy.end = end
+            project.zooms.append(copy)
+            select(.zoom, copy.id)
+        }
+    }
+
+    /// Two stretches with the same settings, split at the playhead (one undo step).
+    private func splitSpan(_ lane: Lane, _ id: UUID) {
+        let t = state.time
+        var edit = project.edit
+        switch lane {
+        case .camera:
+            guard let i = edit.cameraLayouts.firstIndex(where: { $0.id == id }) else { return }
+            var copy = edit.cameraLayouts[i]
+            guard t > copy.start + 0.3, t < copy.end - 0.3 else { return }
+            edit.cameraLayouts[i].end = t
+            copy.id = UUID(); copy.start = t
+            edit.cameraLayouts.append(copy)
+        case .zoom:
+            guard let i = edit.zooms.firstIndex(where: { $0.id == id }) else { return }
+            var copy = edit.zooms[i]
+            guard t > copy.start + 0.3, t < copy.end - 0.3 else { return }
+            edit.zooms[i].end = t
+            copy.id = UUID(); copy.start = t
+            edit.zooms.append(copy)
+        }
+        project.edit = edit
     }
 
     private func clipRects() -> [(VideoClip, CGRect)] {
@@ -199,12 +324,13 @@ final class VideoTimelineView: NSView {
         NSColor(white: 0x17 / 255.0, alpha: 1).setFill()
         dirtyRect.fill()
         drawRuler()
-        drawZoomTrack()
+        lanes.forEach(drawLane)
         drawClips()
         drawCuts()
         drawEvents()
         drawPlayhead()
         drawScissors()
+        drawHoverInfo()
         updateToolTips()
     }
 
@@ -223,10 +349,7 @@ final class VideoTimelineView: NSView {
         case .shortcut, .key:
             let w = (e.text ?? "").size(withAttributes: Self.eventFont).width + 10
             return CGRect(x: x(a) - w / 2, y: y - 7, width: w, height: 14)
-        case .typing:
-            // Fast typing still gets room for a few characters.
-            let text = (e.text ?? "").size(withAttributes: Self.eventFont).width + 10
-            return CGRect(x: x(a) - 3, y: y - 7, width: max(x(b) - x(a) + 6, min(text, 64)), height: 14)
+        case .typing: return CGRect(x: x(a) - 3, y: y - 7, width: max(x(b) - x(a) + 6, 12), height: 14)
         case .drag, .scroll: return CGRect(x: x(a) - 3, y: y - 3, width: max(x(b) - x(a), 0) + 6, height: 6)
         }
     }
@@ -238,6 +361,8 @@ final class VideoTimelineView: NSView {
     }
 
     private static let eventFont: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9.5, weight: .medium)]
+    private static let keyboardIcon = NSImage(systemSymbolName: "keyboard", accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))?.tinted(.white)
 
     private func drawEvents() {
         guard !events.isEmpty else { return }
@@ -251,16 +376,9 @@ final class VideoTimelineView: NSView {
             default: NSColor(displayP3Red: 0.25, green: 0.47, blue: 0.85, alpha: 0.85).setFill()
             }
             NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
-            if e.kind == .typing, let text = e.text {
-                // As much of the typed text as fits.
-                let attrs = Self.eventFont.merging([.foregroundColor: NSColor.white]) { $1 }
-                let room = r.width - 10
-                var shown = text
-                while !shown.isEmpty, (shown as NSString).size(withAttributes: attrs).width > room { shown.removeLast() }
-                if shown.count < text.count, shown.count > 1 { shown = String(shown.dropLast()) + "…" }
-                if shown.count > 1 || shown == text {
-                    (shown as NSString).draw(at: CGPoint(x: r.minX + 5, y: r.midY - 6.5), withAttributes: attrs)
-                }
+            // Typing carries a keyboard where it fits; what was typed shows on hover.
+            if e.kind == .typing, r.width >= 24, let keyboard = Self.keyboardIcon {
+                keyboard.draw(in: CGRect(x: r.minX + 6, y: r.midY - 4.5, width: 13, height: 9))
             }
         }
         for e in events where ![.drag, .scroll, .typing].contains(e.kind) {
@@ -284,25 +402,137 @@ final class VideoTimelineView: NSView {
         }
     }
 
+    // MARK: Hover info
+
+    /// What the item under the pointer is, shown in a dark label next to it a moment after the pointer stops there
+    /// (then right away while moving on to the next item).
+    private struct HoverInfo: Equatable {
+        var rect: CGRect
+        var title: String
+        var hint: String
+    }
+
+    private var hoverInfo: HoverInfo?
+    private var hoverInfoVisible = false
+    private var hoverInfoWork: DispatchWorkItem?
+    private var hoverX: CGFloat = 0
+    private var hoverPoint: CGPoint?
+    private var hoverInfoFrame: CGRect?
+
+    private func info(at p: CGPoint) -> HoverInfo? {
+        if let cut = cutMarker(at: p) {
+            return HoverInfo(rect: cutRect(cut), title: cut.length > 0 ? "\(Self.cutLabel(cut.length)) cut out here" : "Clip split here",
+                             hint: cut.length > 0 ? "Click to select, ⌫ puts the cut-out part back" : "Click to select, ⌫ joins the two clips again")
+        }
+        if let hit = spanHit(p) {
+            let rect = spanRect(hit.lane, hit.span)
+            let length = String(format: "%.1f s", hit.span.end - hit.span.start)
+            switch hit.lane {
+            case .zoom:
+                guard let z = project.zooms.first(where: { $0.id == hit.span.id }) else { return nil }
+                let mode = z.follow && project.isStudio ? "follows the cursor" : "fixed spot"
+                return HoverInfo(rect: rect, title: "Zoom \(Int((z.scale * 100).rounded()))% · \(mode) · \(length)",
+                                 hint: "Click to edit, drag to move, drag its ends to resize, ⌫ removes it")
+            case .camera:
+                guard let l = project.cameraLayouts.first(where: { $0.id == hit.span.id }) else { return nil }
+                let what = l.kind == .bubble ? "\(l.title), \(l.position.title.lowercased()), \(Int((l.size * 100).rounded()))%" : l.title
+                return HoverInfo(rect: rect, title: "Camera: \(what) · \(length)",
+                                 hint: "Click to edit, drag to move, drag its ends to resize, ⌫ removes it")
+            }
+        }
+        if let e = studioEvent(at: p), let rect = eventRect(e) {
+            return HoverInfo(rect: rect, title: e.title, hint: "Click to jump there")
+        }
+        let t = time(p.x)
+        if !state.scissors, edge(at: p) == nil, p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight,
+           t >= 0, t <= project.duration, let (i, _) = project.locate(t) {
+            let clip = project.clips[i]
+            let count = project.clips.count
+            let which = count > 1 ? "Clip \(i + 1) of \(count)" : "Clip"
+            return HoverInfo(rect: clipRects()[i].1,
+                             title: "\(which) · \(Self.timeLabel(clip.start))–\(Self.timeLabel(clip.end)) of the recording · " + String(format: "%.1f s", clip.duration),
+                             hint: "Click to select (⌫ deletes it), drag its ends to trim, right-click to split")
+        }
+        return nil
+    }
+
+    /// Follows the pointer (`nil`: it left, or a click or drag started).
+    private func updateHoverInfo(_ p: CGPoint?) {
+        let next = p.flatMap { drag == nil ? info(at: $0) : nil }
+        hoverPoint = p
+        if let p { hoverX = p.x }
+        if next != hoverInfo {
+            hoverInfo = next
+            hoverInfoWork?.cancel()
+            if next == nil {
+                hoverInfoVisible = false
+            } else if !hoverInfoVisible {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.hoverInfoVisible = true
+                    self.redrawHoverInfo()
+                }
+                hoverInfoWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+            }
+        }
+        redrawHoverInfo()
+    }
+
+    private func redrawHoverInfo() {
+        let frame = hoverInfoVisible ? hoverInfo.map(hoverInfoRect) : nil
+        guard frame != hoverInfoFrame else { return }
+        if let old = hoverInfoFrame { setNeedsDisplay(old.insetBy(dx: -2, dy: -2)) }
+        if let frame { setNeedsDisplay(frame.insetBy(dx: -2, dy: -2)) }
+        hoverInfoFrame = frame
+    }
+
+    private static let hoverTitleFont: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: NSColor.white]
+    private static let hoverHintFont: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10.5), .foregroundColor: NSColor(white: 0.68, alpha: 1)]
+
+    /// Above the item at the pointer (below it when there's no room), inside the visible part of the timeline.
+    private func hoverInfoRect(_ info: HoverInfo) -> CGRect {
+        let width = max((info.title as NSString).size(withAttributes: Self.hoverTitleFont).width,
+                        (info.hint as NSString).size(withAttributes: Self.hoverHintFont).width) + 20
+        let height: CGFloat = 36
+        let visible = visibleRect
+        let anchor = min(max(hoverX, info.rect.minX), info.rect.maxX)
+        let x = min(max(anchor - width / 2, visible.minX + 4), visible.maxX - width - 4)
+        let above = info.rect.minY - 5 - height
+        let y = above >= visible.minY + 2 ? above : info.rect.maxY + 5
+        return CGRect(x: x.rounded(), y: y.rounded(), width: width.rounded(), height: height)
+    }
+
+    private func drawHoverInfo() {
+        guard hoverInfoVisible, let info = hoverInfo else { return }
+        let r = hoverInfoRect(info)
+        NSColor(white: 0.06, alpha: 0.94).setFill()
+        NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7).fill()
+        NSColor(white: 1, alpha: 0.12).setStroke()
+        NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7).stroke()
+        (info.title as NSString).draw(at: CGPoint(x: r.minX + 10, y: r.minY + 4), withAttributes: Self.hoverTitleFont)
+        (info.hint as NSString).draw(at: CGPoint(x: r.minX + 10, y: r.minY + 19), withAttributes: Self.hoverHintFont)
+    }
+
     // MARK: Hover hints
 
-    /// One tooltip area per ruler, zoom-track gap, zoom, clip and cut marker; the text comes from the point (so it
-    /// follows the cut tool). Areas are only rebuilt when they move, otherwise redraws during playback would keep
-    /// restarting the 1 s delay.
+    /// Tooltips for the empty places (the ruler, a track's gaps, the events row, the clip with the cut tool); items
+    /// get the hover info instead. Areas are only rebuilt when they move, otherwise redraws during playback would
+    /// keep restarting the 1 s delay.
     private var toolTipRects: [CGRect] = []
 
     private func updateToolTips() {
-        var rects = [CGRect(x: 0, y: 0, width: bounds.width, height: Metrics.zoomTop - 4)]
-        var gapStart = Metrics.inset
-        for r in project.zooms.map(zoomRect).sorted(by: { $0.minX < $1.minX }) {
-            if r.minX > gapStart { rects.append(CGRect(x: gapStart, y: Metrics.zoomTop, width: r.minX - gapStart, height: Metrics.zoomHeight)) }
-            rects.append(r)
-            gapStart = max(gapStart, r.maxX)
-        }
+        var rects = [CGRect(x: 0, y: 0, width: bounds.width, height: lanes.map(top).min()! - 4)]
         let end = x(project.duration)
-        if end > gapStart { rects.append(CGRect(x: gapStart, y: Metrics.zoomTop, width: end - gapStart, height: Metrics.zoomHeight)) }
+        for lane in lanes {
+            var gapStart = Metrics.inset
+            for r in spans(lane).map({ spanRect(lane, $0) }).sorted(by: { $0.minX < $1.minX }) {
+                if r.minX > gapStart { rects.append(CGRect(x: gapStart, y: top(lane), width: r.minX - gapStart, height: height(lane))) }
+                gapStart = max(gapStart, r.maxX)
+            }
+            if end > gapStart { rects.append(CGRect(x: gapStart, y: top(lane), width: end - gapStart, height: height(lane))) }
+        }
         rects += clipRects().map(\.1)
-        rects += project.cuts.map(cutRect)
         if !events.isEmpty {
             rects.append(CGRect(x: 0, y: Metrics.eventsTop, width: bounds.width, height: Metrics.eventsBottom - Metrics.eventsTop))
         }
@@ -313,24 +543,17 @@ final class VideoTimelineView: NSView {
     }
 
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
-        if let cut = cutMarker(at: point) {
-            let what = cut.length > 0 ? "\(Self.cutLabel(cut.length)) cut out" : "Cut"
-            return "\(what): click to select, ⌫ or right-click → Delete Cut removes it"
-        }
+        if info(at: point) != nil { return "" }
         if point.y >= Metrics.eventsTop, point.y <= Metrics.eventsBottom, !events.isEmpty {
-            return studioEvent(at: point).map { "\($0.title): click to jump there" }
-                ?? "What happened while recording: clicks, drags and scrolling (top), typing and shortcuts (bottom)"
+            return "What happened while recording: clicks, drags and scrolling (top), typing and shortcuts (bottom)"
         }
-        if let hit = zoomHit(point) {
-            return "Zoom \(Int((hit.zoom.scale * 100).rounded()))%: drag to move, drag its ends to resize, right-click for more, ⌫ removes it"
-        }
-        if point.y >= Metrics.zoomTop, point.y <= Metrics.zoomTop + Metrics.zoomHeight {
-            return "Click to add a zoom, or drag to add one over a stretch"
+        switch lane(at: point) {
+        case .camera: return "Click to change the camera from here on (full size, its own bubble or hidden), or drag over a stretch"
+        case .zoom: return "Click to add a zoom, or drag to add one over a stretch"
+        case nil: break
         }
         if point.y >= Metrics.clipTop, point.y <= Metrics.clipTop + Metrics.clipHeight {
-            return state.scissors
-                ? "Click to split the clip here, drag across it to cut that part out (Esc leaves the cut tool)"
-                : "Click to select (⌫ deletes it), drag its ends to trim, right-click to split"
+            return state.scissors ? "Click to split the clip here, drag across it to cut that part out (Esc leaves the cut tool)" : ""
         }
         return "Click or drag to move the playhead"
     }
@@ -358,57 +581,82 @@ final class VideoTimelineView: NSView {
         }
     }
 
-    private func drawZoomTrack() {
+    private func drawLane(_ lane: Lane) {
         let end = x(project.duration)
-        let track = CGRect(x: Metrics.inset, y: Metrics.zoomTop, width: end - Metrics.inset, height: Metrics.zoomHeight)
+        let track = CGRect(x: Metrics.inset, y: top(lane), width: end - Metrics.inset, height: height(lane))
+        let radius: CGFloat = lane == .camera ? 7 : 8
         Self.track.setFill()
-        NSBezierPath(roundedRect: track, xRadius: 8, yRadius: 8).fill()
+        NSBezierPath(roundedRect: track, xRadius: radius, yRadius: radius).fill()
         NSColor(white: 1, alpha: 0.04).setStroke()
-        NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8).stroke()
-        if let ghost = hoverZoom, drag == nil {
-            let r = CGRect(x: x(ghost.start), y: Metrics.zoomTop, width: x(ghost.end) - x(ghost.start), height: Metrics.zoomHeight)
+        NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius).stroke()
+        let fontSize: CGFloat = lane == .camera ? 12 : 13
+        if let ghost = hoverGhost, ghost.lane == lane, drag == nil {
+            let r = CGRect(x: x(ghost.start), y: top(lane), width: x(ghost.end) - x(ghost.start), height: height(lane))
             NSColor(white: 0x33 / 255.0, alpha: 1).setFill()
-            NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7).fill()
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor(white: 0.62, alpha: 1)]
-            let text = "+  Zoom" as NSString
+            NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1).fill()
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: NSColor(white: 0.62, alpha: 1)]
+            let text = (lane == .camera ? "+  Camera" : "+  Zoom") as NSString
             let size = text.size(withAttributes: attrs)
             if size.width + 12 < r.width { text.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attrs) }
-        } else if project.zooms.isEmpty {
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor(white: 0.55, alpha: 1)]
-            let text = "+  Click or drag to add zoom" as NSString
+        } else if spans(lane).isEmpty {
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: NSColor(white: 0.55, alpha: 1)]
+            let text = (lane == .camera ? "+  Click or drag to change the camera" : "+  Click or drag to add zoom") as NSString
             let size = text.size(withAttributes: attrs)
             let visible = visibleRect.intersection(track)
             text.draw(at: CGPoint(x: (visible.isEmpty ? track : visible).midX - size.width / 2, y: track.midY - size.height / 2), withAttributes: attrs)
         }
-        for z in project.zooms {
-            let r = zoomRect(z)
-            let selected = state.selectedZoom == z.id
-            (selected ? Self.blue : NSColor(white: 0x3A / 255.0, alpha: 1)).setFill()
-            NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7).fill()
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium),
-                                                        .foregroundColor: selected ? NSColor.white : NSColor(white: 0.7, alpha: 1)]
-            let text = "Zoom \(Int((z.scale * 100).rounded()))%" as NSString
+        for span in spans(lane) {
+            let r = spanRect(lane, span)
+            let isSelected = selected(lane) == span.id
+            (isSelected ? Self.blue : NSColor(white: 0x3A / 255.0, alpha: 1)).setFill()
+            NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1).fill()
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
+                                                        .foregroundColor: isSelected ? NSColor.white : NSColor(white: 0.7, alpha: 1)]
+            // Zooms: "Zoom 150%", with a cursor before it when following the cursor. Camera: its symbol and look.
+            let text: NSString
+            var icon: NSImage?
+            switch lane {
+            case .zoom:
+                guard let z = project.zooms.first(where: { $0.id == span.id }) else { continue }
+                text = "Zoom \(Int((z.scale * 100).rounded()))%" as NSString
+                if z.follow { icon = Self.icon("cursorarrow", selected: isSelected) }
+            case .camera:
+                guard let l = project.cameraLayouts.first(where: { $0.id == span.id }) else { continue }
+                text = l.title as NSString
+                icon = Self.icon(Self.cameraSymbol(l), selected: isSelected)
+            }
             let size = text.size(withAttributes: attrs)
-            // Follow-cursor zooms carry a cursor symbol before the level.
-            let icon = z.follow ? Self.followIcon(selected: selected) : nil
-            let iconWidth: CGFloat = icon == nil ? 0 : 16
+            let iconWidth: CGFloat = icon == nil ? 0 : 17
             if size.width + iconWidth + 12 < r.width {
                 let x = r.midX - (size.width + iconWidth) / 2
-                icon?.draw(in: CGRect(x: x, y: r.midY - 6.5, width: 12, height: 13))
+                icon.map { draw($0, centeredIn: CGRect(x: x, y: r.minY, width: 13, height: r.height)) }
                 text.draw(at: CGPoint(x: x + iconWidth, y: r.midY - size.height / 2), withAttributes: attrs)
             } else if let icon, r.width > 18 {
-                icon.draw(in: CGRect(x: r.midX - 6, y: r.midY - 6.5, width: 12, height: 13))
+                draw(icon, centeredIn: CGRect(x: r.midX - 6.5, y: r.minY, width: 13, height: r.height))
             }
-            drawZoomGrips(z, in: r)
+            drawGrips(lane, span.id, in: r)
         }
     }
 
-    /// While a zoom is hovered or resized: white lines just inside both ends (where it can be dragged shorter or
-    /// longer); the end the pointer would grab is the bright, wider one.
-    private func drawZoomGrips(_ z: VideoZoom, in r: CGRect) {
+    private func draw(_ icon: NSImage, centeredIn r: CGRect) {
+        let s = icon.size
+        icon.draw(in: CGRect(x: r.midX - s.width / 2, y: r.midY - s.height / 2, width: s.width, height: s.height))
+    }
+
+    private static func cameraSymbol(_ l: CameraLayout) -> String {
+        switch l.kind {
+        case .full: "rectangle.inset.filled"
+        case .hidden: "video.slash.fill"
+        case .bubble: ["circle.fill", "square.fill", "rectangle.fill", "rectangle.portrait.fill"][min(max(l.shape, 0), 3)]
+        }
+    }
+
+    /// While a zoom or camera layout is hovered or resized: white lines just inside both ends (where it can be
+    /// dragged shorter or longer); the end the pointer would grab is the bright, wider one.
+    private func drawGrips(_ lane: Lane, _ id: UUID, in r: CGRect) {
         var active: Bool?
-        if case .resizeZoom(let id, let leading) = drag, id == z.id { active = leading }
-        else if drag == nil, let hover = hoverZoomEdge, hover.id == z.id { active = hover.edge }
+        if case .resizeSpan(let l, let spanID, let leading) = drag, l == lane, spanID == id { active = leading }
+        else if drag == nil, let hover = hoverSpanEdge, hover.lane == lane, hover.id == id { active = hover.edge }
         else { return }
         guard r.width > 16 else { return }
         for leading in [true, false] {
@@ -639,18 +887,18 @@ final class VideoTimelineView: NSView {
 
     private enum Drag {
         case scrub
-        case createZoom(start: Double, id: UUID?)
-        case moveZoom(id: UUID, grab: Double, original: VideoZoom)
-        case resizeZoom(id: UUID, leading: Bool)
+        case createSpan(lane: Lane, start: Double, id: UUID?)
+        case moveSpan(lane: Lane, id: UUID, grab: Double, original: Span)
+        case resizeSpan(lane: Lane, id: UUID, leading: Bool)
         case trim(clip: Int, leading: Bool, original: VideoClip, grabX: CGFloat)
         case cut(start: Double)
     }
     private var drag: Drag?
     private var hoverEdge: (clip: Int, leading: Bool)?
-    /// The zoom a click would add where the pointer is.
-    private var hoverZoom: (start: Double, end: Double)?
-    /// The zoom under the pointer and the end it would grab (its resize lines show).
-    private var hoverZoomEdge: (id: UUID, edge: Bool?)?
+    /// The zoom or camera layout a click would add where the pointer is.
+    private var hoverGhost: (lane: Lane, start: Double, end: Double)?
+    /// The zoom or camera layout under the pointer and the end it would grab (its resize lines show).
+    private var hoverSpanEdge: (lane: Lane, id: UUID, edge: Bool?)?
     /// The cut tool: where a click would split, and the stretch a drag would cut out.
     private var hoverCut: Double?
     private var cutPreview: (Double, Double)?
@@ -677,48 +925,51 @@ final class VideoTimelineView: NSView {
         return nil
     }
 
-    /// A zoom and which end (`true` = start) the pointer grabs. The grips sit inside the zoom's ends, so where two
-    /// zooms touch, the left one's end and the right one's start are separate targets.
-    private func zoomHit(_ p: CGPoint) -> (zoom: VideoZoom, edge: Bool?)? {
-        guard p.y >= Metrics.zoomTop, p.y <= Metrics.zoomTop + Metrics.zoomHeight else { return nil }
-        for z in project.zooms {
-            let r = zoomRect(z)
+    /// A zoom or camera layout and which end (`true` = start) the pointer grabs. The grips sit inside the ends, so
+    /// where two touch, the left one's end and the right one's start are separate targets.
+    private func spanHit(_ p: CGPoint) -> (lane: Lane, span: Span, edge: Bool?)? {
+        guard let lane = lane(at: p) else { return nil }
+        let items = spans(lane)
+        for span in items {
+            let r = spanRect(lane, span)
             guard p.x >= r.minX, p.x <= r.maxX else { continue }
-            let grip = min(Self.zoomGrip, r.width / 3)
-            if p.x - r.minX < grip { return (z, true) }
-            if r.maxX - p.x < grip { return (z, false) }
-            return (z, nil)
+            let grip = min(Self.grip, r.width / 3)
+            if p.x - r.minX < grip { return (lane, span, true) }
+            if r.maxX - p.x < grip { return (lane, span, false) }
+            return (lane, span, nil)
         }
         // Just outside a free end still grabs it.
-        for z in project.zooms {
-            let r = zoomRect(z)
-            if p.x < r.minX, r.minX - p.x < 5 { return (z, true) }
-            if p.x > r.maxX, p.x - r.maxX < 5 { return (z, false) }
+        for span in items {
+            let r = spanRect(lane, span)
+            if p.x < r.minX, r.minX - p.x < 5 { return (lane, span, true) }
+            if p.x > r.maxX, p.x - r.maxX < 5 { return (lane, span, false) }
         }
         return nil
     }
 
-    private static let zoomGrip: CGFloat = 10
+    private static let grip: CGFloat = 10
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         let e = edge(at: p)
         if e?.clip != hoverEdge?.clip || e?.leading != hoverEdge?.leading { hoverEdge = e; needsDisplay = true }
-        let ghost = ghostZoom(at: p)
-        if ghost?.start != hoverZoom?.start || ghost?.end != hoverZoom?.end { hoverZoom = ghost; needsDisplay = true }
-        let over = zoomHit(p).map { (id: $0.zoom.id, edge: $0.edge) }
-        if over?.id != hoverZoomEdge?.id || over?.edge != hoverZoomEdge?.edge { hoverZoomEdge = over; needsDisplay = true }
+        let ghost = ghost(at: p)
+        if ghost?.lane != hoverGhost?.lane || ghost?.start != hoverGhost?.start || ghost?.end != hoverGhost?.end { hoverGhost = ghost; needsDisplay = true }
+        let over = spanHit(p).map { (lane: $0.lane, id: $0.span.id, edge: $0.edge) }
+        if over?.lane != hoverSpanEdge?.lane || over?.id != hoverSpanEdge?.id || over?.edge != hoverSpanEdge?.edge { hoverSpanEdge = over; needsDisplay = true }
         let cut = scissorsTime(at: p)
         if cut != hoverCut { hoverCut = cut; needsDisplay = true }
         updateCursor(p)
         reportHover(p)
+        updateHoverInfo(p)
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hoverEdge != nil || hoverZoom != nil || hoverCut != nil || hoverZoomEdge != nil {
-            hoverEdge = nil; hoverZoom = nil; hoverCut = nil; hoverZoomEdge = nil; needsDisplay = true
+        if hoverEdge != nil || hoverGhost != nil || hoverCut != nil || hoverSpanEdge != nil {
+            hoverEdge = nil; hoverGhost = nil; hoverCut = nil; hoverSpanEdge = nil; needsDisplay = true
         }
         onHoverFrame?(nil)
+        updateHoverInfo(nil)
     }
 
     /// Hovering the thumbnail strip (not while playing or on a trim edge) previews that moment above the timeline:
@@ -734,22 +985,22 @@ final class VideoTimelineView: NSView {
         onHoverFrame?((t, thumbnail(at: t), convert(p, to: nil).x, top))
     }
 
-    /// Over an empty spot of the zoom track a gray "+ Zoom" block starts at the pointer and
-    /// is 60% of the visible timeline long, cut off by the next zoom or the end; too short a gap shows none.
-    private func ghostZoom(at p: CGPoint) -> (start: Double, end: Double)? {
-        guard p.y >= Metrics.zoomTop, p.y <= Metrics.zoomTop + Metrics.zoomHeight, zoomHit(p) == nil else { return nil }
+    /// Over an empty spot of the zoom or camera track a gray "+ Zoom" block starts at the pointer and is 60% of the
+    /// visible timeline long, cut off by the next one or the end; too short a gap shows none.
+    private func ghost(at p: CGPoint) -> (lane: Lane, start: Double, end: Double)? {
+        guard let lane = lane(at: p), spanHit(p) == nil else { return nil }
         let start = time(p.x)
         guard start >= 0, start < project.duration else { return nil }
         let length = Double((visibleWidth - Metrics.inset * 2) / pointsPerSecond) * 0.6
-        let end = min(start + length, freeRange(around: start, excluding: nil).1)
-        return end - start >= 0.3 ? (start, end) : nil
+        let end = min(start + length, freeRange(lane, around: start, excluding: nil).1)
+        return end - start >= 0.3 ? (lane, start, end) : nil
     }
 
     override func cursorUpdate(with event: NSEvent) { updateCursor(convert(event.locationInWindow, from: nil)) }
 
     private func updateCursor(_ p: CGPoint) {
         if cutMarker(at: p) != nil { NSCursor.pointingHand.set() }
-        else if edge(at: p) != nil || zoomHit(p)?.edge != nil { NSCursor.resizeLeftRight.set() }
+        else if edge(at: p) != nil || spanHit(p)?.edge != nil { NSCursor.resizeLeftRight.set() }
         else if state.scissors { Self.scissorsCursor.set() }
         else { NSCursor.arrow.set() }
     }
@@ -778,15 +1029,15 @@ final class VideoTimelineView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         onHoverFrame?(nil)
+        updateHoverInfo(nil)
         window?.makeFirstResponder(self)
         let p = convert(event.locationInWindow, from: nil)
         let t = min(max(time(p.x), 0), project.duration)
         // Any click on the timeline pauses playback.
         onPause?()
         if let cut = cutMarker(at: p) {
+            select(nil, nil)
             state.selectedCut = cut.at
-            state.selectedClip = nil
-            state.selectedZoom = nil
             return
         }
         state.selectedCut = nil
@@ -794,17 +1045,16 @@ final class VideoTimelineView: NSView {
             drag = .trim(clip: e.clip, leading: e.leading, original: project.clips[e.clip], grabX: p.x)
             return
         }
-        if let hit = zoomHit(p) {
-            state.selectedZoom = hit.zoom.id
-            state.selectedClip = nil
-            if let leading = hit.edge { drag = .resizeZoom(id: hit.zoom.id, leading: leading) }
-            else { drag = .moveZoom(id: hit.zoom.id, grab: t, original: hit.zoom); seek(t) }
+        if let hit = spanHit(p) {
+            select(hit.lane, hit.span.id)
+            if let leading = hit.edge { drag = .resizeSpan(lane: hit.lane, id: hit.span.id, leading: leading) }
+            else { drag = .moveSpan(lane: hit.lane, id: hit.span.id, grab: t, original: hit.span); seek(t) }
             return
         }
-        if p.y >= Metrics.zoomTop, p.y <= Metrics.zoomTop + Metrics.zoomHeight, t < project.duration - 0.2 {
-            hoverZoom = nil
-            state.selectedClip = nil
-            drag = .createZoom(start: t, id: nil)
+        if let lane = lane(at: p), t < project.duration - 0.2 {
+            hoverGhost = nil
+            select(nil, nil)
+            drag = .createSpan(lane: lane, start: t, id: nil)
             seek(t)
             return
         }
@@ -814,14 +1064,13 @@ final class VideoTimelineView: NSView {
                 hoverCut = t
                 needsDisplay = true
             } else if let (i, _) = project.locate(t) {
+                select(nil, nil)
                 state.selectedClip = project.clips[i].id
-                state.selectedZoom = nil
                 seek(t)
             }
             return
         }
-        state.selectedZoom = nil
-        state.selectedClip = nil
+        select(nil, nil)
         drag = .scrub
         // A click on an event jumps to where it starts.
         if let e = studioEvent(at: p), let start = project.outputTime(source: e.start) { seek(start); return }
@@ -843,33 +1092,23 @@ final class VideoTimelineView: NSView {
         switch drag {
         case .scrub:
             seek(t)
-        case .createZoom(let start, let id):
+        case .createSpan(let lane, let start, let id):
             let range = (min(start, t), max(start, t))
             guard range.1 - range.0 > 0.15 else { return }
-            let bounded = freeRange(around: start, excluding: id)
-            let z0 = max(range.0, bounded.0), z1 = min(range.1, bounded.1)
-            if let id, let i = project.zooms.firstIndex(where: { $0.id == id }) {
-                project.zooms[i].start = z0
-                project.zooms[i].end = z1
-            } else if z1 - z0 > 0.15 {
-                let zoom = VideoZoom(start: z0, end: z1, follow: project.isStudio)
-                project.zooms.append(zoom)
-                state.selectedZoom = zoom.id
-                drag = .createZoom(start: start, id: zoom.id)
-            }
-        case .moveZoom(let id, let grab, let original):
-            guard let i = project.zooms.firstIndex(where: { $0.id == id }) else { return }
+            let bounded = freeRange(lane, around: start, excluding: id)
+            let a = max(range.0, bounded.0), b = min(range.1, bounded.1)
+            if let id { setSpan(lane, id, start: a, end: b) }
+            else if b - a > 0.15 { drag = .createSpan(lane: lane, start: start, id: addSpan(lane, start: a, end: b)) }
+        case .moveSpan(let lane, let id, let grab, let original):
             let length = original.end - original.start
-            let bounded = freeRange(around: (original.start + original.end) / 2, excluding: id)
+            let bounded = freeRange(lane, around: (original.start + original.end) / 2, excluding: id)
             let start = min(max(original.start + t - grab, bounded.0), bounded.1 - length)
-            project.zooms[i].start = start
-            project.zooms[i].end = start + length
-        case .resizeZoom(let id, let leading):
-            guard let i = project.zooms.firstIndex(where: { $0.id == id }) else { return }
-            let z = project.zooms[i]
-            let bounded = freeRange(around: (z.start + z.end) / 2, excluding: id)
-            if leading { project.zooms[i].start = min(max(t, bounded.0), z.end - 0.3) }
-            else { project.zooms[i].end = max(min(t, bounded.1), z.start + 0.3) }
+            setSpan(lane, id, start: start, end: start + length)
+        case .resizeSpan(let lane, let id, let leading):
+            guard let span = spans(lane).first(where: { $0.id == id }) else { return }
+            let bounded = freeRange(lane, around: (span.start + span.end) / 2, excluding: id)
+            if leading { setSpan(lane, id, start: min(max(t, bounded.0), span.end - 0.3), end: span.end) }
+            else { setSpan(lane, id, start: span.start, end: max(min(t, bounded.1), span.start + 0.3)) }
         case .trim(let index, let leading, let original, let grabX):
             let delta = Double((p.x - grabX) / pointsPerSecond)
             var clip = original
@@ -881,7 +1120,7 @@ final class VideoTimelineView: NSView {
                 clip.end = max(min(original.end + delta, ceiling), original.start + 0.2)
             }
             project.clips[index] = VideoClip(id: original.id, start: clip.start, end: clip.end)
-            project.clampZooms()
+            project.clampToDuration()
         case .cut(let start):
             cutPreview = (min(start, t), max(start, t))
             hoverCut = t
@@ -893,11 +1132,9 @@ final class VideoTimelineView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if case .createZoom(let start, let id) = drag, id == nil, let ghost = ghostZoom(at: CGPoint(x: x(start), y: p.y)) ?? hoverZoom {
-            // A click adds the zoom the ghost showed.
-            let zoom = VideoZoom(start: ghost.start, end: ghost.end, follow: project.isStudio)
-            project.zooms.append(zoom)
-            state.selectedZoom = zoom.id
+        if case .createSpan(let lane, let start, let id) = drag, id == nil, let ghost = ghost(at: CGPoint(x: x(start), y: top(lane) + 1)) {
+            // A click adds the zoom or camera layout the ghost showed.
+            addSpan(lane, start: ghost.start, end: ghost.end)
         }
         if case .cut(let start) = drag {
             // A click splits; a drag cuts the stretch out (one undo step either way).
@@ -912,17 +1149,17 @@ final class VideoTimelineView: NSView {
         }
         drag = nil
         hoverCut = scissorsTime(at: p)
-        hoverZoom = ghostZoom(at: p)
+        hoverGhost = ghost(at: p)
         updateCursor(p)
         needsDisplay = true
     }
 
-    /// The gap between neighbouring zooms that `t` lies in.
-    private func freeRange(around t: Double, excluding id: UUID?) -> (Double, Double) {
+    /// The gap between neighbouring zooms (or camera layouts) that `t` lies in.
+    private func freeRange(_ lane: Lane, around t: Double, excluding id: UUID?) -> (Double, Double) {
         var lo = 0.0, hi = project.duration
-        for z in project.zooms where z.id != id {
-            if z.end <= t { lo = max(lo, z.end) }
-            if z.start >= t { hi = min(hi, z.start) }
+        for s in spans(lane) where s.id != id {
+            if s.end <= t { lo = max(lo, s.end) }
+            if s.start >= t { hi = min(hi, s.start) }
         }
         return (lo, hi)
     }
@@ -931,49 +1168,64 @@ final class VideoTimelineView: NSView {
 
     // MARK: Context menu and keys
 
-    private static func followIcon(selected: Bool) -> NSImage? {
+    private static func icon(_ name: String, selected: Bool) -> NSImage? {
         let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
             .applying(.init(paletteColors: [selected ? .white : NSColor(white: 0.7, alpha: 1)]))
-        return NSImage(systemSymbolName: "cursorarrow", accessibilityDescription: "Follows the cursor")?.withSymbolConfiguration(config)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
     }
 
-    /// Right-click: Remove on a zoom; Split / Delete on a clip.
+    /// Right-click: a zoom's or camera layout's options; Split / Delete on a clip; Delete Cut on a cut marker.
     override func menu(for event: NSEvent) -> NSMenu? {
         let p = convert(event.locationInWindow, from: nil)
         let t = min(max(time(p.x), 0), project.duration)
+        updateHoverInfo(nil)
         let menu = NSMenu()
         if let cut = cutMarker(at: p) {
+            select(nil, nil)
             state.selectedCut = cut.at
-            state.selectedClip = nil
-            state.selectedZoom = nil
             menu.addItem(ClosureMenuItem(title: "Delete Cut") { [weak self] in self?.deleteCut(cut.at) })
-        } else if let hit = zoomHit(p) {
-            let zoom = hit.zoom
-            state.selectedZoom = zoom.id
-            menu.addItem(ClosureMenuItem(title: "Duplicate") { [weak self] in self?.duplicateZoom(zoom.id) })
-            let split = ClosureMenuItem(title: "Split at Playhead") { [weak self] in self?.splitZoom(zoom.id) }
-            split.isEnabled = state.time > zoom.start + 0.3 && state.time < zoom.end - 0.3
-            menu.addItem(split)
-            let levels = NSMenuItem(title: "Zoom Level", action: nil, keyEquivalent: "")
-            let sub = NSMenu()
-            for scale in [1.25, 1.5, 2.0, 2.5, 3.0, 4.0] {
-                let item = ClosureMenuItem(title: "\(Int(scale * 100))%") { [weak self] in
-                    guard let self, let i = self.project.zooms.firstIndex(where: { $0.id == zoom.id }) else { return }
-                    self.project.zooms[i].scale = scale
+        } else if let hit = spanHit(p) {
+            let lane = hit.lane, span = hit.span
+            select(lane, span.id)
+            if lane == .camera, let layout = project.cameraLayouts.first(where: { $0.id == span.id }) {
+                for kind in CameraLayout.Kind.allCases {
+                    let item = ClosureMenuItem(title: kind.title) { [weak self] in
+                        guard let self, let i = self.project.cameraLayouts.firstIndex(where: { $0.id == span.id }) else { return }
+                        self.project.cameraLayouts[i].kind = kind
+                    }
+                    item.state = layout.kind == kind ? .on : .off
+                    menu.addItem(item)
                 }
-                item.state = abs(zoom.scale - scale) < 0.01 ? .on : .off
-                sub.addItem(item)
+                menu.addItem(.separator())
             }
-            levels.submenu = sub
-            menu.addItem(levels)
+            menu.addItem(ClosureMenuItem(title: "Duplicate") { [weak self] in self?.duplicateSpan(lane, span.id) })
+            let split = ClosureMenuItem(title: "Split at Playhead") { [weak self] in self?.splitSpan(lane, span.id) }
+            split.isEnabled = state.time > span.start + 0.3 && state.time < span.end - 0.3
+            menu.addItem(split)
+            if lane == .zoom, let zoom = project.zooms.first(where: { $0.id == span.id }) {
+                let levels = NSMenuItem(title: "Zoom Level", action: nil, keyEquivalent: "")
+                let sub = NSMenu()
+                for scale in [1.25, 1.5, 2.0, 2.5, 3.0, 4.0] {
+                    let item = ClosureMenuItem(title: "\(Int(scale * 100))%") { [weak self] in
+                        guard let self, let i = self.project.zooms.firstIndex(where: { $0.id == zoom.id }) else { return }
+                        self.project.zooms[i].scale = scale
+                    }
+                    item.state = abs(zoom.scale - scale) < 0.01 ? .on : .off
+                    sub.addItem(item)
+                }
+                levels.submenu = sub
+                menu.addItem(levels)
+            }
             menu.addItem(.separator())
-            menu.addItem(ClosureMenuItem(title: "Remove") { [weak self] in self?.removeZoom(zoom.id) })
-            menu.addItem(ClosureMenuItem(title: "Remove All Zooms") { [weak self] in
-                self?.state.selectedZoom = nil
-                self?.project.zooms = []
+            menu.addItem(ClosureMenuItem(title: "Remove") { [weak self] in self?.removeSpan(lane, span.id) })
+            menu.addItem(ClosureMenuItem(title: lane == .zoom ? "Remove All Zooms" : "Remove All Camera Layouts") { [weak self] in
+                guard let self else { return }
+                self.select(nil, nil)
+                if lane == .zoom { self.project.zooms = [] } else { self.project.cameraLayouts = [] }
             })
         } else if p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight, let (i, _) = project.locate(t) {
             let id = project.clips[i].id
+            select(nil, nil)
             state.selectedClip = id
             menu.addItem(ClosureMenuItem(title: "Split Here") { [weak self] in self?.project.split(at: t) })
             let delete = ClosureMenuItem(title: "Delete") { [weak self] in self?.project.deleteClip(id) }
@@ -983,37 +1235,6 @@ final class VideoTimelineView: NSView {
             return nil
         }
         return menu
-    }
-
-    /// A copy right after the zoom (or in the next free gap that fits it).
-    private func duplicateZoom(_ id: UUID) {
-        guard let zoom = project.zooms.first(where: { $0.id == id }) else { return }
-        let length = zoom.end - zoom.start
-        var start = zoom.end
-        for other in project.zooms.sorted(by: { $0.start < $1.start }) where other.end > start && other.start < start + length {
-            start = other.end
-        }
-        guard start + length <= project.duration + 0.001 else { NSSound.beep(); return }
-        var copy = VideoZoom(start: start, end: start + length, scale: zoom.scale, center: zoom.center, follow: zoom.follow)
-        copy.end = min(copy.end, project.duration)
-        project.zooms.append(copy)
-        state.selectedZoom = copy.id
-    }
-
-    /// Two zooms with the same settings, split at the playhead.
-    private func splitZoom(_ id: UUID) {
-        guard let i = project.zooms.firstIndex(where: { $0.id == id }) else { return }
-        let zoom = project.zooms[i], t = state.time
-        guard t > zoom.start + 0.3, t < zoom.end - 0.3 else { return }
-        var edit = project.edit
-        edit.zooms[i].end = t
-        edit.zooms.append(VideoZoom(start: t, end: zoom.end, scale: zoom.scale, center: zoom.center, follow: zoom.follow))
-        project.edit = edit
-    }
-
-    private func removeZoom(_ id: UUID) {
-        if state.selectedZoom == id { state.selectedZoom = nil }
-        project.zooms.removeAll { $0.id == id }
     }
 
     /// ⌘+ / ⌘− zoom the timeline (like the slider).
@@ -1031,11 +1252,12 @@ final class VideoTimelineView: NSView {
         project.restoreCut(at: at)
     }
 
-    /// ⌫ / ⌦ removes the selected cut, zoom or clip.
+    /// ⌫ / ⌦ removes the selected cut, camera layout, zoom or clip.
     override func keyDown(with event: NSEvent) {
         guard event.keyCode == 51 || event.keyCode == 117 else { super.keyDown(with: event); return }
         if let at = state.selectedCut { deleteCut(at) }
-        else if let id = state.selectedZoom { removeZoom(id) }
+        else if let id = state.selectedCamera { removeSpan(.camera, id) }
+        else if let id = state.selectedZoom { removeSpan(.zoom, id) }
         else if let id = state.selectedClip { project.deleteClip(id); state.selectedClip = nil }
     }
 }

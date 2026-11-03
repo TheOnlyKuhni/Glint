@@ -31,6 +31,10 @@ final class WebcamOverlay {
     /// The bubble's frame when the current drag began.
     private var dragStart: CGRect?
     private(set) var isFullScreen = false
+    /// Told when a click switches full screen (Studio Mode records it).
+    var onFullScreenChange: ((Bool) -> Void)?
+    /// The camera window's title in Studio Mode (its clicks aren't clicks in the recording).
+    static let studioWindowTitle = "GlintStudioCamera"
 
     private init() {
         bubble.onClick = { [weak self] in self?.toggleFullScreen() }
@@ -72,7 +76,7 @@ final class WebcamOverlay {
         bubble.removeFromSuperview()
         guard isEnabled, let session else { return }
         let window = self.window ?? makeWindow()
-        window.title = clock == nil ? RecordingOverlayTitle.recorded : "GlintStudioCamera"
+        window.title = clock == nil ? RecordingOverlayTitle.recorded : Self.studioWindowTitle
         if let clock, let folder {
             let recorder = CameraFileRecorder(url: folder.appendingPathComponent("camera.mov"), clock: clock)
             session.beginConfiguration()
@@ -129,12 +133,14 @@ final class WebcamOverlay {
         selector = nil
         recording = false
         isFullScreen = false
+        onFullScreenChange = nil
         bubble.removeFromSuperview()
         window?.orderOut(nil)
     }
 
     func toggleFullScreen() {
         isFullScreen.toggle()
+        onFullScreenChange?(isFullScreen)
         layout()
     }
 

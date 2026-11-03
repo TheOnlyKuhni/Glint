@@ -119,6 +119,29 @@ extension CameraSettings {
     }
 }
 
+// MARK: - Camera layouts
+
+/// The camera layouts a Studio Mode recording opens with: one full-size stretch for each time the camera was clicked
+/// to full size while recording.
+enum StudioCameraLayouts {
+    static func make(_ studio: StudioRecording, duration: Double, camera: CameraSettings) -> [CameraLayout] {
+        var layouts: [CameraLayout] = []
+        var fullSince: Double?
+        func close(_ end: Double) {
+            if let start = fullSince, end - start >= 0.3 {
+                layouts.append(CameraLayout(start: start, end: end, size: camera.size, shape: camera.shape, position: camera.position))
+            }
+            fullSince = nil
+        }
+        for toggle in (studio.cameraToggles ?? []).sorted(by: { $0.t < $1.t }) {
+            let t = min(max(toggle.t, 0), duration)
+            if toggle.full { if fullSince == nil { fullSince = t } } else { close(t) }
+        }
+        close(duration)
+        return layouts
+    }
+}
+
 // MARK: - Automatic zooms
 
 /// The zooms a Studio Mode recording opens with: one around every burst of activity (clicks inside the area, typing),
@@ -335,13 +358,17 @@ nonisolated struct StudioEvent: Sendable {
 
     var title: String {
         switch kind {
-        case .click: "Click"
-        case .rightClick: "Right-click"
-        case .drag: String(format: "Drag (%.1f s)", end - start)
-        case .scroll: String(format: "Scrolling (%.1f s)", end - start)
-        case .typing: "Typing: “\(text ?? "")”"
-        case .shortcut: "Shortcut \(text ?? "")"
-        case .key: "Key \(text ?? "")"
+        case .click: return "Click"
+        case .rightClick: return "Right-click"
+        case .drag: return String(format: "Drag (%.1f s)", end - start)
+        case .scroll: return String(format: "Scrolling (%.1f s)", end - start)
+        case .typing:
+            // The start of what was typed, and how many keys.
+            let typed = text ?? ""
+            let shown = typed.count > 24 ? typed.prefix(23).trimmingCharacters(in: .whitespaces) + "…" : typed
+            return "Typing “\(shown)” (\(typed.count) \(typed.count == 1 ? "key" : "keys"))"
+        case .shortcut: return "Shortcut \(text ?? "")"
+        case .key: return "Key \(text ?? "")"
         }
     }
 
@@ -409,6 +436,7 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
     let cursor: CursorSettings
     let keystrokes: KeystrokeSettings
     let camera: CameraSettings
+    let cameraLayouts: [CameraLayout]
     /// The recorded area in points.
     let area: CGSize
     let path: CursorPath
@@ -419,6 +447,8 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
     let labels: [KeyLabel]
     let clips: [VideoClip]
     private let clipStarts: [Double]
+    /// The edited length.
+    private let duration: Double
     let follow: [UUID: FollowPath]
 
     private let lock = NSLock()
@@ -434,6 +464,7 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         cursor = edit.cursor
         keystrokes = edit.keystrokes
         camera = edit.camera
+        cameraLayouts = edit.cameraLayouts.sorted { $0.start < $1.start }
         area = CGSize(width: max(studio.areaWidth, 1), height: max(studio.areaHeight, 1))
         self.path = path
         mouse = studio.mouse.sorted { $0.t < $1.t }
@@ -450,6 +481,7 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         clips = edit.clips
         var t = 0.0
         clipStarts = edit.clips.map { clip in defer { t += clip.duration }; return t }
+        duration = t
         self.follow = follow
     }
 
@@ -469,7 +501,7 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         let src = sourceTime(time)
         if cursor.show { output = drawCursor(on: output, size: size, zoom: zoom, source: src) }
         if keystrokes.show { output = drawKeys(on: output, size: size, source: src) }
-        if camera.show, let frame { output = drawCamera(frame, on: output, size: size, zoom: zoom) }
+        if camera.show, let frame { output = drawCamera(frame, on: output, size: size, zoom: zoom, time: time) }
         return output
     }
 
@@ -594,24 +626,83 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         return result
     }
 
-    /// The camera bubble in its corner, as big as the recorder showed it (Medium = 68 + 0.1625 × the area's shorter
-    /// side), shrinking while zoomed in when that's on.
-    private func drawCamera(_ frame: CIImage, on video: CIImage, size: CGSize, zoom: CGRect) -> CIImage {
+    /// Where the camera is (y-up pixels), how round, and how visible.
+    private struct CameraLook {
+        var rect: CGRect
+        var radius: CGFloat
+        var alpha: CGFloat
+        func blended(to other: CameraLook, _ f: CGFloat) -> CameraLook {
+            func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * f }
+            return CameraLook(rect: CGRect(x: mix(rect.minX, other.rect.minX), y: mix(rect.minY, other.rect.minY),
+                                           width: mix(rect.width, other.rect.width), height: mix(rect.height, other.rect.height)),
+                              radius: mix(radius, other.radius), alpha: mix(alpha, other.alpha))
+        }
+    }
+
+    /// How long the camera takes to change into or out of a layout.
+    private static let cameraBlend = 0.35
+
+    /// The bubble as big as the recorder showed it (Medium = 68 + 0.1625 × the area's shorter side), in its corner,
+    /// shrinking while zoomed in when that's on.
+    private func bubbleLook(size scale: Double, shape: Int, position: OverlayCorner, in size: CGSize, zoom: CGRect) -> CameraLook {
         let ppp = size.width / area.width
         let short = min(area.width, area.height)
-        var side = min(68.4 + 0.1625 * short, 0.8 * short) * camera.size * ppp
+        var side = min(68.4 + 0.1625 * short, 0.8 * short) * scale * ppp
         if camera.shrinkOnZoom {
             let zoomed = min(max((1 / max(zoom.width, 0.01) - 1) / 0.5, 0), 1)
             side *= 1 - 0.35 * zoomed
         }
-        let box: CGSize = switch camera.shape {
+        let box: CGSize = switch shape {
         case 2: CGSize(width: side * 4 / 3, height: side)
         case 3: CGSize(width: side * 3 / 4, height: side)
         default: CGSize(width: side, height: side)
         }
-        let bw = box.width.rounded(), bh = box.height.rounded()
-        guard bw > 4, bh > 4 else { return video }
-        let radius = camera.shape == 0 ? min(bw, bh) / 2 : 22 * bh / 166
+        let gap = (6.5 + 0.018 * short) * ppp
+        let x: CGFloat = switch position {
+        case .topLeft, .bottomLeft: gap
+        case .bottom: (size.width - box.width) / 2
+        default: size.width - gap - box.width
+        }
+        let y = position.isTop ? size.height - gap - box.height : gap
+        let radius = shape == 0 ? min(box.width, box.height) / 2 : 22 * box.height / 166
+        return CameraLook(rect: CGRect(origin: CGPoint(x: x, y: y), size: box), radius: radius, alpha: 1)
+    }
+
+    /// The camera at output time `t`: the Camera section's bubble, or the layout there, blending over `cameraBlend`
+    /// from the bubble (or a layout that ends right where this one starts) and back.
+    private func cameraLook(at t: Double, size: CGSize, zoom: CGRect) -> CameraLook {
+        let base = bubbleLook(size: camera.size, shape: camera.shape, position: camera.position, in: size, zoom: zoom)
+        func look(_ l: CameraLayout) -> CameraLook {
+            switch l.kind {
+            case .full: CameraLook(rect: CGRect(origin: .zero, size: size), radius: 0, alpha: 1)
+            case .bubble: bubbleLook(size: l.size, shape: l.shape, position: l.position, in: size, zoom: zoom)
+            case .hidden: CameraLook(rect: base.rect, radius: base.radius, alpha: 0)
+            }
+        }
+        guard let i = cameraLayouts.firstIndex(where: { t >= $0.start && t <= $0.end }) else { return base }
+        let layout = cameraLayouts[i]
+        let ramp = min(Self.cameraBlend, (layout.end - layout.start) / 3)
+        func ease(_ p: Double) -> CGFloat { let p = min(max(p, 0), 1); return CGFloat(p * p * (3 - 2 * p)) }
+        let previous = i > 0 && cameraLayouts[i - 1].end > layout.start - 0.01 ? cameraLayouts[i - 1] : nil
+        let next = i + 1 < cameraLayouts.count && cameraLayouts[i + 1].start < layout.end + 0.01 ? cameraLayouts[i + 1] : nil
+        let target = look(layout)
+        // Into it (not at the very start of the video, where it simply begins like this).
+        if layout.start > 0.01, t < layout.start + ramp {
+            return (previous.map(look) ?? base).blended(to: target, ease((t - layout.start) / ramp))
+        }
+        // Back out to the bubble, unless the next layout takes over right here or the video ends.
+        if next == nil, layout.end < duration - 0.01, t > layout.end - ramp {
+            return target.blended(to: base, ease((t - (layout.end - ramp)) / ramp))
+        }
+        return target
+    }
+
+    /// The camera: its picture aspect-filled into the look's rectangle, clipped round, with a soft shadow.
+    private func drawCamera(_ frame: CIImage, on video: CIImage, size: CGSize, zoom: CGRect, time: Double) -> CIImage {
+        let look = cameraLook(at: time, size: size, zoom: zoom)
+        let bw = look.rect.width.rounded(), bh = look.rect.height.rounded()
+        guard bw > 4, bh > 4, look.alpha > 0.01 else { return video }
+        let radius = min(look.radius.rounded(), min(bw, bh) / 2)
         // Aspect-fill the frame into the box, mirrored if wanted.
         var picture = frame.transformed(by: CGAffineTransform(translationX: -frame.extent.minX, y: -frame.extent.minY))
         let fw = picture.extent.width, fh = picture.extent.height
@@ -624,22 +715,24 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         guard let mask = mask(width: bw, height: bh, radius: radius) else { return video }
         let clear = CIImage(color: .clear).cropped(to: mask.extent)
         var bubble = picture.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: clear, kCIInputMaskImageKey: mask])
-        // A soft shadow under it.
+        // A soft shadow under it (none once it fills the frame).
         let blur = bw * 0.035
-        let shadow = mask.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.35),
-        ]).applyingGaussianBlur(sigma: blur).cropped(to: mask.extent.insetBy(dx: -blur * 3, dy: -blur * 3))
-            .transformed(by: CGAffineTransform(translationX: 0, y: -bw * 0.012))
-        bubble = bubble.composited(over: shadow)
-        let gap = (6.5 + 0.018 * short) * ppp
-        let x: CGFloat = switch camera.position {
-        case .topLeft, .bottomLeft: gap
-        case .bottom: (size.width - bw) / 2
-        default: size.width - gap - bw
+        let covers = bw >= size.width - 1 && bh >= size.height - 1
+        if !covers {
+            let shadow = mask.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.35),
+            ]).applyingGaussianBlur(sigma: blur).cropped(to: mask.extent.insetBy(dx: -blur * 3, dy: -blur * 3))
+                .transformed(by: CGAffineTransform(translationX: 0, y: -bw * 0.012))
+            bubble = bubble.composited(over: shadow)
         }
-        let y = camera.position.isTop ? size.height - gap - bh : gap
-        return bubble.transformed(by: CGAffineTransform(translationX: x.rounded(), y: y.rounded())).composited(over: video)
+        if look.alpha < 0.99 {
+            bubble = bubble.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: look.alpha, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: look.alpha, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: look.alpha, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: look.alpha),
+            ])
+        }
+        return bubble.transformed(by: CGAffineTransform(translationX: look.rect.minX.rounded(), y: look.rect.minY.rounded())).composited(over: video)
     }
 
     private func mask(width: CGFloat, height: CGFloat, radius: CGFloat) -> CIImage? {
