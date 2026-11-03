@@ -27,6 +27,12 @@ struct StudioRecording: Codable {
         var flags: UInt
     }
 
+    /// The camera was clicked to full size (`full`) or back to its bubble, at video time `t`.
+    struct CameraToggle: Codable {
+        var t: Double
+        var full: Bool
+    }
+
     enum CursorType: String, Codable { case arrow, pointingHand, iBeam, crosshair, openHand, closedHand, other }
 
     /// A cursor shape seen while recording: its picture, hot spot and size in points.
@@ -51,6 +57,8 @@ struct StudioRecording: Codable {
     /// The camera movie's file name, and when its first frame happens on the video's timeline.
     var camera: String?
     var cameraOffset: Double = 0
+    /// When the camera went full size and back (recordings made before this was kept have none).
+    var cameraToggles: [CameraToggle]?
     /// The recorder panel's settings at the start: the editor starts from them.
     var highlightedClicks = false
     var showedKeystrokes = false
@@ -151,6 +159,7 @@ final class StudioTracker {
         data.cameraSize = Defaults[Prefs.recCameraSize]
         data.cameraFlipped = Defaults[Prefs.recCameraFlip]
         data.keysRecorded = KeystrokePermission.isGranted
+        data.cameraToggles = WebcamOverlay.shared.isFullScreen ? [.init(t: 0, full: true)] : []
     }
 
     func start() {
@@ -173,6 +182,13 @@ final class StudioTracker {
     func reset() {
         data.mouse = []
         data.keys = []
+        data.cameraToggles = WebcamOverlay.shared.isFullScreen ? [.init(t: 0, full: true)] : []
+    }
+
+    /// The camera was clicked to full size or back.
+    func cameraToggled(full: Bool) {
+        let t = clock.videoTime(ProcessInfo.processInfo.systemUptime) ?? data.mouse.last?.t ?? 0
+        data.cameraToggles = (data.cameraToggles ?? []) + [.init(t: t, full: full)]
     }
 
     /// Stops tracking and returns what was recorded (the camera fields are filled in by the session).
@@ -180,6 +196,7 @@ final class StudioTracker {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
         cursorTimer?.invalidate()
+        WebcamOverlay.shared.onFullScreenChange = nil
         return data
     }
 
@@ -199,6 +216,9 @@ final class StudioTracker {
     }
 
     private func mouse(_ event: NSEvent) {
+        // Clicking or dragging the camera changes the camera, it isn't a click in the recording: only the pointer's
+        // path is kept.
+        if event.window?.title == WebcamOverlay.studioWindowTitle { append(.move, host: event.timestamp); return }
         let kind: StudioRecording.Kind = switch event.type {
         case .leftMouseDown: .down
         case .leftMouseUp: .up

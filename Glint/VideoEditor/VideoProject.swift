@@ -29,6 +29,44 @@ extension VideoZoom {
     }
 }
 
+/// A stretch of the output timeline (seconds) where the camera looks different from the Camera section (Studio Mode):
+/// full size, a bubble of its own (size, shape, corner) or hidden. The camera blends into and out of it. Clicking
+/// the camera while recording makes full-size ones.
+struct CameraLayout: Equatable, Identifiable, Codable {
+    enum Kind: String, Codable, CaseIterable {
+        case full, bubble, hidden
+        var title: String {
+            switch self {
+            case .full: "Full Size"
+            case .bubble: "Bubble"
+            case .hidden: "Hidden"
+            }
+        }
+    }
+
+    var id = UUID()
+    var start: Double
+    var end: Double
+    var kind: Kind = .full
+    /// The bubble's look (`kind == .bubble`), like the Camera section's.
+    var size: Double = 1
+    var shape = 0
+    var position: OverlayCorner = .bottomRight
+
+    static let shapeTitles = ["Circle", "Square", "Rectangle", "Vertical"]
+    /// "Full Size", "Circle", "Hidden".
+    var title: String { kind == .bubble ? Self.shapeTitles[min(max(shape, 0), 3)] : kind.title }
+}
+
+extension CameraLayout {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = CameraLayout(start: 0, end: 0)
+        self.init(id: c.value(.id, or: UUID()), start: try c.decode(Double.self, forKey: .start), end: try c.decode(Double.self, forKey: .end),
+                  kind: c.value(.kind, or: d.kind), size: c.value(.size, or: d.size), shape: c.value(.shape, or: d.shape),
+                  position: c.value(.position, or: d.position))
+    }
+}
+
 /// The Background section: the screenshot editor's fills around the video, with padding, shadow and corners.
 struct VideoBackground: Equatable, Codable {
     var fill: BackgroundStyle.Fill = .gradient(0)
@@ -62,6 +100,7 @@ struct VideoEdit: Equatable, Codable {
     var cursor = CursorSettings()
     var keystrokes = KeystrokeSettings()
     var camera = CameraSettings()
+    var cameraLayouts: [CameraLayout] = []
 }
 
 extension VideoEdit {
@@ -71,7 +110,8 @@ extension VideoEdit {
         self.init(clips: c.value(.clips, or: d.clips), zooms: c.value(.zooms, or: d.zooms), background: c.value(.background, or: d.background),
                   zoomAnimation: c.value(.zoomAnimation, or: d.zoomAnimation), motionBlur: c.value(.motionBlur, or: d.motionBlur),
                   volume: c.value(.volume, or: d.volume), includeAudio: c.value(.includeAudio, or: d.includeAudio),
-                  cursor: c.value(.cursor, or: d.cursor), keystrokes: c.value(.keystrokes, or: d.keystrokes), camera: c.value(.camera, or: d.camera))
+                  cursor: c.value(.cursor, or: d.cursor), keystrokes: c.value(.keystrokes, or: d.keystrokes), camera: c.value(.camera, or: d.camera),
+                  cameraLayouts: c.value(.cameraLayouts, or: d.cameraLayouts))
     }
 }
 
@@ -93,6 +133,7 @@ final class VideoProject: ObservableObject {
     var hasCamera: Bool { cameraAsset != nil }
     var clips: [VideoClip] { get { edit.clips } set { edit.clips = newValue } }
     var zooms: [VideoZoom] { get { edit.zooms } set { edit.zooms = newValue } }
+    var cameraLayouts: [CameraLayout] { get { edit.cameraLayouts } set { edit.cameraLayouts = newValue } }
     var background: VideoBackground { get { edit.background } set { edit.background = newValue } }
     var zoomAnimation: ZoomAnimation { get { edit.zoomAnimation } set { edit.zoomAnimation = newValue } }
     var motionBlur: Int { get { edit.motionBlur } set { edit.motionBlur = newValue } }
@@ -151,6 +192,7 @@ final class VideoProject: ObservableObject {
         next.camera.shape = min(max(studio.cameraShape, 0), 3)
         next.camera.size = [0.65, 1, 1.3, 1.95][min(max(studio.cameraSize, 0), 3)]
         next.camera.flip = studio.cameraFlipped
+        next.cameraLayouts = StudioCameraLayouts.make(studio, duration: sourceDuration, camera: next.camera)
         restoreSaved(next)
     }
 
@@ -273,8 +315,8 @@ final class VideoProject: ObservableObject {
         clips.replaceSubrange(i...i, with: [VideoClip(start: clip.start, end: source), VideoClip(start: source, end: clip.end)])
     }
 
-    /// The scissors dragged over a stretch: cuts output time `a…b` out in one step (at least 0.1 s stays). Zooms after
-    /// the cut move left with the video; ones inside it shrink or go.
+    /// The scissors dragged over a stretch: cuts output time `a…b` out in one step (at least 0.1 s stays). Zooms and
+    /// camera layouts after the cut move left with the video; ones inside it shrink or go.
     func removeRange(_ a: Double, _ b: Double) {
         let a = max(min(a, b), 0), b = min(max(a, b), duration)
         guard b - a > 0.05, duration - (b - a) > 0.1 else { return }
@@ -297,13 +339,19 @@ final class VideoProject: ObservableObject {
             z.end = shift(z.end)
             return z.end - z.start >= 0.3 ? z : nil
         }
+        next.cameraLayouts = cameraLayouts.compactMap { l in
+            var l = l
+            l.start = shift(l.start)
+            l.end = shift(l.end)
+            return l.end - l.start >= 0.3 ? l : nil
+        }
         edit = next
     }
 
     func deleteClip(_ id: UUID) {
         guard clips.count > 1, let i = clips.firstIndex(where: { $0.id == id }) else { return }
         clips.remove(at: i)
-        clampZooms()
+        clampToDuration()
     }
 
     /// Removes a cut marker: puts the removed stretch back, or joins the two clips of a split.
@@ -315,16 +363,21 @@ final class VideoProject: ObservableObject {
             let merged = VideoClip(start: clips[i - 1].start, end: clips[i].end)
             clips.replaceSubrange((i - 1)...i, with: [merged])
         }
-        clampZooms()
+        clampToDuration()
     }
 
-    /// Keeps zooms inside the (possibly shorter) timeline.
-    func clampZooms() {
+    /// Keeps zooms and camera layouts inside the (possibly shorter) timeline.
+    func clampToDuration() {
         let d = duration
         zooms = zooms.compactMap { z in
             var z = z
             z.end = min(z.end, d)
             return z.end - z.start >= 0.3 ? z : nil
+        }
+        cameraLayouts = cameraLayouts.compactMap { l in
+            var l = l
+            l.end = min(l.end, d)
+            return l.end - l.start >= 0.3 ? l : nil
         }
     }
 

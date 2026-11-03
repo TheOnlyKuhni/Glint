@@ -8,7 +8,10 @@ import ScreenCaptureKit
 ///     glint://debug-key?chars=r&code=15[&mods=cmd,shift,opt,ctrl]
 ///     glint://debug-click?x=100&y=40[&count=2][&mods=…][&closeMenu=1.5]   (closes a menu it opens after 1.5 s)
 ///     glint://debug-click?x=…&y=…&pick=Curved   (chooses the menu item with that title or tooltip)
+///     glint://debug-click?x=…&y=…&queue=1   (through the app's event queue, so event monitors see it)
 ///     glint://debug-drag?x1=…&y1=…&x2=…&y2=…[&mods=…]
+///     glint://debug-move?x=…&y=…   (the pointer moves there: hover effects)
+///     glint://debug-resize?w=…&h=…   (the window's size; "min" for its minimum)
 ///     glint://debug-screenshot?path=/tmp/x.png   (the main display, Glint's windows included)
 ///     glint://debug-film?dir=/tmp/f&x=&y=&w=&h=&seconds=2&fps=30   (frames of a rect, for animations)
 ///     glint://debug-ocr?path=/tmp/qr.png   (Capture Text on an image file: copy + toast)
@@ -119,9 +122,21 @@ enum DebugHooks {
             let p = point("x", "y")
             let count = Int(query["count"] ?? "") ?? 1
             for n in 1...count {
-                mouse(.leftMouseDown, p, mods, n, window)
-                mouse(.leftMouseUp, p, mods, n, window)
+                mouse(.leftMouseDown, p, mods, n, window, queued: query["queue"] == "1")
+                mouse(.leftMouseUp, p, mods, n, window, queued: query["queue"] == "1")
             }
+        case "debug-move":
+            let p = point("x", "y")
+            if let e = NSEvent.mouseEvent(with: .mouseMoved, location: p, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
+                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0),
+               let view = window.contentView?.hitTest(window.contentView!.convert(p, from: nil)) {
+                view.mouseMoved(with: e)
+                glintLog("debug-move: \(type(of: view))")
+            } else { glintLog("debug-move: no view") }
+        case "debug-resize":
+            func side(_ key: String, _ min: CGFloat) -> CGFloat { query[key] == "min" ? min : CGFloat(Double(query[key] ?? "") ?? 0) }
+            let size = CGSize(width: side("w", window.minSize.width), height: side("h", window.minSize.height))
+            window.setFrame(CGRect(x: window.frame.minX, y: window.frame.maxY - size.height, width: size.width, height: size.height), display: true)
         case "debug-drag":
             let a = point("x1", "y1"), b = point("x2", "y2")
             mouse(.leftMouseDown, a, mods, 1, window)
@@ -152,11 +167,12 @@ enum DebugHooks {
         }
     }
 
-    private static func mouse(_ type: NSEvent.EventType, _ p: NSPoint, _ mods: NSEvent.ModifierFlags, _ clicks: Int, _ window: NSWindow) {
+    private static func mouse(_ type: NSEvent.EventType, _ p: NSPoint, _ mods: NSEvent.ModifierFlags, _ clicks: Int, _ window: NSWindow,
+                              queued: Bool = false) {
         guard let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks,
                                          pressure: type == .leftMouseUp ? 0 : 1) else { return }
-        window.sendEvent(e)
+        if queued { NSApp.postEvent(e, atStart: false) } else { window.sendEvent(e) }
     }
 
     private static func modifiers(_ s: String?) -> NSEvent.ModifierFlags {

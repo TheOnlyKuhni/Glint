@@ -117,9 +117,6 @@ struct KeystrokesInspector: View {
 struct CameraInspector: View {
     @ObservedObject var project: VideoProject
     private var camera: CameraSettings { project.edit.camera }
-    private static let shapes: [(symbol: String, help: String)] = [
-        ("circle.fill", "Circle"), ("square.fill", "Square"), ("rectangle.fill", "Rectangle"), ("rectangle.portrait.fill", "Vertical"),
-    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -133,19 +130,7 @@ struct CameraInspector: View {
                     StepSlider(value: $project.edit.camera.size, range: 0.5...2, ticks: 7)
                         .help("How big the camera is (100% = the recorder's Medium)")
                     InspectorHeader("Shape").padding(.top, 8)
-                    HStack(spacing: 10) {
-                        ForEach(Self.shapes.indices, id: \.self) { i in
-                            Button { project.edit.camera.shape = i } label: {
-                                Image(systemName: Self.shapes[i].symbol).font(.system(size: 14))
-                                    .foregroundStyle(.white)
-                                    .frame(maxWidth: .infinity).frame(height: 30)
-                                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(camera.shape == i ? W.blue : W.box))
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .help(Self.shapes[i].help)
-                        }
-                    }
+                    CameraShapePicker(selected: camera.shape) { project.edit.camera.shape = $0 }
                     InspectorHeader("Position", value: camera.position.title).padding(.top, 8)
                     PositionPicker(options: [.topLeft, .topRight, .bottomLeft, .bottomRight], selected: camera.position,
                                    spot: CGSize(width: 18, height: 18), round: camera.shape == 0) { project.edit.camera.position = $0 }
@@ -156,6 +141,83 @@ struct CameraInspector: View {
                 }
                 .disabled(!camera.show)
                 .opacity(camera.show ? 1 : 0.45)
+            }
+        }
+    }
+}
+
+/// A selected camera layout (Studio Mode): full size, a bubble of its own (size, shape, corner) or hidden.
+struct CameraLayoutInspector: View {
+    @ObservedObject var project: VideoProject
+    @ObservedObject var state: VideoEditorState
+    /// A snapshot; edits go back by id (the layout may be removed while this view updates).
+    let layout: CameraLayout
+
+    private func edit(_ change: (inout CameraLayout) -> Void) {
+        guard let i = project.cameraLayouts.firstIndex(where: { $0.id == layout.id }) else { return }
+        change(&project.cameraLayouts[i])
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            let kinds = CameraLayout.Kind.allCases
+            InspectorHeader("Camera layout", value: String(format: "%.1f s", layout.end - layout.start))
+            ChoiceButtons(titles: kinds.map(\.title), selected: kinds.firstIndex(of: layout.kind) ?? 0,
+                          helps: ["The camera fills the whole video", "The camera as a bubble with its own size, shape and corner",
+                                  "No camera here"]) { i in edit { $0.kind = kinds[i] } }
+            if layout.kind == .bubble {
+                let size = Binding(get: { layout.size }, set: { v in edit { $0.size = v } })
+                InspectorHeader("Size", percent: size, range: 0.5...2).padding(.top, 8)
+                StepSlider(value: size, range: 0.5...2, ticks: 7)
+                    .help("How big the camera is here (100% = the recorder's Medium)")
+                InspectorHeader("Shape").padding(.top, 8)
+                CameraShapePicker(selected: layout.shape) { shape in edit { $0.shape = shape } }
+                InspectorHeader("Position", value: layout.position.title).padding(.top, 8)
+                PositionPicker(options: [.topLeft, .topRight, .bottomLeft, .bottomRight], selected: layout.position,
+                               spot: CGSize(width: 18, height: 18), round: layout.shape == 0) { corner in edit { $0.position = corner } }
+            } else {
+                InfoBox {
+                    Text(layout.kind == .full ? "The camera fills the video here and goes back into its bubble afterwards."
+                                              : "The camera fades out here and comes back afterwards.")
+                }
+            }
+            if !project.edit.camera.show {
+                InfoBox { Text("The camera is turned off in the Camera section, so it doesn't show anywhere.") }
+            }
+            Button {
+                state.selectedCamera = nil
+                state.section = .camera
+            } label: {
+                Text("Camera Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 14)
+            .help("The camera's look everywhere else: show, size, shape, corner, flip")
+        }
+    }
+}
+
+/// The recorder's four camera shapes as buttons; the selected one is blue.
+private struct CameraShapePicker: View {
+    let selected: Int
+    let pick: (Int) -> Void
+    private static let shapes: [(symbol: String, help: String)] = [
+        ("circle.fill", "Circle"), ("square.fill", "Square"), ("rectangle.fill", "Rectangle"), ("rectangle.portrait.fill", "Vertical"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(Self.shapes.indices, id: \.self) { i in
+                Button { pick(i) } label: {
+                    Image(systemName: Self.shapes[i].symbol).font(.system(size: 14))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 30)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected == i ? W.blue : W.box))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(Self.shapes[i].help)
             }
         }
     }

@@ -43,14 +43,15 @@ final class CaptureHistory {
 }
 
 enum HistoryFilter: CaseIterable {
-    case all, screenshots, videos, gifs, videoProjects
+    /// Studio: Studio Mode recordings (they stay editable), next to the videos.
+    case all, screenshots, videos, studio, gifs
     var title: String {
         switch self {
         case .all: "All"
         case .screenshots: "Screenshots"
         case .videos: "Videos"
         case .gifs: "GIFs"
-        case .videoProjects: "Video Projects"
+        case .studio: "Studio"
         }
     }
 }
@@ -71,7 +72,7 @@ final class HistoryModel: ObservableObject {
         case .screenshots: entries.filter { !$0.isVideo && !$0.isGIF }
         case .videos: entries.filter { $0.isVideo && !$0.isProject }
         case .gifs: entries.filter(\.isGIF)
-        case .videoProjects: entries.filter(\.isProject)
+        case .studio: entries.filter(\.isProject)
         }
     }
 
