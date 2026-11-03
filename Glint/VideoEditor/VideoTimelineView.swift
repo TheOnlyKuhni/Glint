@@ -43,6 +43,8 @@ final class VideoTimelineView: NSView {
         self.project = project
         self.state = state
         super.init(frame: CGRect(x: 0, y: 0, width: 1180, height: 258))
+        // Layer-backed, so new frames can cross-fade in.
+        wantsLayer = true
         scrollView.documentView = self
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
@@ -59,7 +61,8 @@ final class VideoTimelineView: NSView {
                 DispatchQueue.main.async {
                     guard let self, raw != self.showsRawFrames else { return }
                     self.showsRawFrames = raw
-                    self.thumbnails = []
+                    // The old frames stay (with "Loading…" over them) until all the new ones are there.
+                    self.switching = true
                     self.reloadThumbnails()
                 }
             },
@@ -904,33 +907,83 @@ final class VideoTimelineView: NSView {
         batchTask = Task { await makeThumbnails(generation: g) }
     }
 
-    /// The first time tiles fill in as they come; later the old ones stay until all the new ones are there.
+    /// The first time tiles fill in as they come; later the old ones stay until all the new ones are there, then
+    /// they cross-fade in. All frames are asked for at once (the generator works through them faster that way).
     private func makeThumbnails(generation g: Int) async {
-        guard let generator = makeGenerator(tolerance: CMTime(value: 1, timescale: 10)) else { return }
+        guard let generator = makeGenerator(tolerance: CMTime(value: 1, timescale: 10)) else { switching = false; return }
         let duration = project.sourceDuration
         let count = max(2, min(160, Int(duration / 0.25)))
         let progressive = thumbnails.isEmpty
-        var fresh: [(time: Double, image: CGImage)] = []
+        var sources: [CMTime: Double] = [:]
+        var times: [CMTime] = []
         for i in 0..<count {
-            guard !Task.isCancelled, g == generation else { return }
             let t = duration * Double(i) / Double(count - 1)
             guard let at = generatorTime(t) else { continue }
-            if let (image, _) = try? await generator.image(at: CMTime(seconds: at, preferredTimescale: 600)) {
-                guard g == generation else { return }
-                fresh.append((t, image))
-                if progressive {
-                    thumbnails.append((t, image))
-                    if i % 8 == 0 || i == count - 1 { needsDisplay = true }
-                }
+            let time = CMTime(seconds: at, preferredTimescale: 600)
+            if sources[time] == nil { times.append(time) }
+            sources[time] = t
+        }
+        var fresh: [(time: Double, image: CGImage)] = []
+        var n = 0
+        for await result in generator.images(for: times) {
+            guard !Task.isCancelled, g == generation else { return }
+            n += 1
+            guard let image = try? result.image, let t = sources[result.requestedTime] else { continue }
+            fresh.append((t, image))
+            if progressive {
+                thumbnails.append((t, image))
+                if n % 8 == 0 || n == times.count { needsDisplay = true }
             }
         }
         guard g == generation else { return }
         if !progressive {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.25
+            layer?.add(fade, forKey: "frames")
             thumbnails = fresh
             // Close-ups made meanwhile were of the old frames: they're asked for again.
             requested = []
         }
+        switching = false
         needsDisplay = true
+    }
+
+    /// Edited ↔ raw: "Loading frames…" over the strip while the new frames are made (only when it takes a moment).
+    private var switching = false {
+        didSet {
+            guard switching != oldValue else { return }
+            badgeWork?.cancel()
+            if switching {
+                let work = DispatchWorkItem { [weak self] in self?.showLoadingBadge(true) }
+                badgeWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+            } else {
+                showLoadingBadge(false)
+            }
+        }
+    }
+    private var badgeWork: DispatchWorkItem?
+    private lazy var loadingBadge = LoadingBadge()
+
+    private func showLoadingBadge(_ show: Bool) {
+        if show {
+            loadingBadge.text = showsRawFrames ? "Loading raw frames…" : "Loading edited frames…"
+            if loadingBadge.superview == nil {
+                scrollView.addSubview(loadingBadge)
+                loadingBadge.autoresizingMask = [.minXMargin, .maxXMargin]
+            }
+            let size = loadingBadge.fittingSize
+            let center = convert(CGPoint(x: visibleRect.midX, y: Metrics.clipTop + Metrics.clipHeight / 2), to: scrollView)
+            loadingBadge.frame = CGRect(x: (scrollView.bounds.midX - size.width / 2).rounded(), y: (center.y - size.height / 2).rounded(),
+                                        width: size.width, height: size.height)
+            loadingBadge.alphaValue = 0
+            loadingBadge.isHidden = false
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.15; loadingBadge.animator().alphaValue = 1 }
+        } else if loadingBadge.superview != nil, !loadingBadge.isHidden {
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.2; loadingBadge.animator().alphaValue = 0 },
+                                                 completionHandler: { [weak self] in self?.loadingBadge.isHidden = true })
+        }
     }
 
     private var onDemand: AVAssetImageGenerator?
@@ -949,7 +1002,8 @@ final class VideoTimelineView: NSView {
     }
 
     private func loadNext() {
-        guard !loading, !wanted.isEmpty else { return }
+        // While switching, close-ups wait for the new frames (they'd mix old and new).
+        guard !loading, !switching, !wanted.isEmpty else { return }
         if onDemand == nil { onDemand = makeGenerator(tolerance: CMTime(value: 1, timescale: 60)) }
         guard let generator = onDemand else { return }
         loading = true
@@ -1398,4 +1452,40 @@ final class VideoTimelineView: NSView {
         else if let id = state.selectedZoom { removeSpan(.zoom, id) }
         else if let id = state.selectedClip { project.deleteClip(id); state.selectedClip = nil }
     }
+}
+
+/// A dark pill with a spinner and a short text ("Loading edited frames…").
+final class LoadingBadge: NSView {
+    private let spinner = NSProgressIndicator()
+    private let label = NSTextField(labelWithString: "")
+    var text: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(white: 0.08, alpha: 0.92).cgColor
+        layer?.cornerRadius = 15
+        layer?.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
+        layer?.borderWidth = 1
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.appearance = NSAppearance(named: .darkAqua)
+        spinner.startAnimation(nil)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .white
+        let stack = NSStackView(views: [spinner, label])
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 7, left: 12, bottom: 7, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
 }

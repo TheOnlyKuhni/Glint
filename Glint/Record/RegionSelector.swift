@@ -332,6 +332,11 @@ private final class RegionView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         updateCursor(p)
         updateHintHover(p)
+        updateHoveredWindow(at: p)
+    }
+
+    /// Window mode: the window under `p` (view coordinates) is the one picked.
+    private func updateHoveredWindow(at p: CGPoint) {
         guard windowMode, let screen = owner?.screen else { return }
         let g = CGPoint(x: p.x + screen.cgFrame.minX, y: p.y + screen.cgFrame.minY)
         hoveredWindow = windows.first { $0.frame.contains(g) }.map { $0.frame.offsetBy(dx: -screen.cgFrame.minX, dy: -screen.cgFrame.minY) }
@@ -442,6 +447,8 @@ private final class RegionView: NSView {
             windowMode.toggle()
             windows = WindowInfo.onScreen()
             hoveredWindow = nil
+            // The window under the pointer is picked right away, without waiting for the mouse to move.
+            if let window { updateHoveredWindow(at: convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)) }
             needsDisplay = true
         default: super.keyDown(with: event)
         }

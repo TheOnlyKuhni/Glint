@@ -22,9 +22,6 @@ struct RecordingSettingsView: View {
     @AppStorage(Prefs.gifQuality) private var gifQuality
     /// Shown in the recorder's settings popover: switches, with Options… left of them.
     var compact = false
-    @State private var showClickOptions = false
-    @State private var showKeyOptions = false
-    @State private var showZoomOptions = false
     @AppStorage(Prefs.studioAutoZoom) private var autoZoom
 
     var body: some View {
@@ -48,8 +45,7 @@ struct RecordingSettingsView: View {
                 Toggle("Show cursor", isOn: $showCursor)
                 LabeledContent("Highlight clicks") {
                     HStack {
-                        Button("Options…") { showClickOptions = true }
-                            .popover(isPresented: $showClickOptions, arrowEdge: .bottom) { ClickOptionsView().frame(width: 300) }
+                        OptionsPopoverButton(width: 300) { ClickOptionsView() }
                         Toggle("Highlight clicks", isOn: $highlightClicks).labelsHidden()
                     }
                 }
@@ -57,8 +53,7 @@ struct RecordingSettingsView: View {
             Section("Keystrokes") {
                 LabeledContent("Show keystrokes") {
                     HStack {
-                        Button("Options…") { showKeyOptions = true }
-                            .popover(isPresented: $showKeyOptions, arrowEdge: .bottom) { KeystrokeOptionsView().frame(width: 400) }
+                        OptionsPopoverButton(width: 400) { KeystrokeOptionsView() }
                         Toggle("Show keystrokes", isOn: Binding(get: { showKeystrokes },
                                                                set: { if !$0 || KeystrokePermission.ensure() { showKeystrokes = $0 } }))
                             .labelsHidden()
@@ -68,8 +63,7 @@ struct RecordingSettingsView: View {
             Section("Studio Mode") {
                 LabeledContent {
                     HStack {
-                        Button("Options…") { showZoomOptions = true }
-                            .popover(isPresented: $showZoomOptions, arrowEdge: .bottom) { AutoZoomOptionsView().frame(width: 400) }
+                        OptionsPopoverButton(width: 400) { AutoZoomOptionsView() }
                         Toggle("Automatic zooms", isOn: $autoZoom).labelsHidden()
                     }
                 } label: {
@@ -344,9 +338,47 @@ struct ClickOptionsView: View {
                 Text("Filled").tag(true)
             }
             .pickerStyle(.segmented)
-            LabeledContent("Size") { Slider(value: $size, in: 0.6...1.8) }
+            HStack { Text("Size"); Spacer(minLength: 8); Slider(value: $size, in: 0.6...1.8).frame(width: 160) }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// "Options…" opening its panel in a popover. The panel is built once and kept (SwiftUI's `.popover` builds it anew
+/// on every open, which made the opening animation stutter), and the popover follows the panel's size.
+struct OptionsPopoverButton<Content: View>: NSViewRepresentable {
+    let width: CGFloat
+    @ViewBuilder let content: () -> Content
+
+    func makeCoordinator() -> Coordinator { Coordinator(rootView: AnyView(content().frame(width: width)), width: width) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: "Options…", target: context.coordinator, action: #selector(Coordinator.toggle(_:)))
+        button.bezelStyle = .push
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {}
+
+    final class Coordinator: NSObject {
+        private let popover = NSPopover()
+
+        init(rootView: AnyView, width: CGFloat) {
+            let controller = NSHostingController(rootView: rootView)
+            controller.sizingOptions = [.preferredContentSize]
+            // Laid out now at its width, so the first open doesn't wait for it either.
+            controller.view.frame.size = CGSize(width: width, height: 400)
+            controller.view.layoutSubtreeIfNeeded()
+            popover.contentViewController = controller
+            popover.contentSize = CGSize(width: width, height: controller.view.fittingSize.height)
+            popover.behavior = .transient
+            popover.animates = true
+        }
+
+        @objc func toggle(_ sender: NSButton) {
+            if popover.isShown { popover.performClose(nil) } else { popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: sender.isFlipped ? .maxY : .minY) }
+        }
     }
 }
 
@@ -393,11 +425,12 @@ struct AutoZoomOptionsView: View {
 
     private func row(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double, text: String,
                      scale: Double = 1, decimals: Int = 1) -> some View {
-        LabeledContent(title) {
-            HStack {
-                Slider(value: value, in: range, step: step).frame(width: 130)
-                EditableValue(text: text, value: value, range: range, scale: scale, decimals: decimals).monospacedDigit().frame(width: 52, alignment: .trailing)
-            }
+        // One line: title, slider, value.
+        HStack {
+            Text(title).fixedSize()
+            Spacer(minLength: 8)
+            Slider(value: value, in: range, step: step).frame(minWidth: 130, maxWidth: 150)
+            EditableValue(text: text, value: value, range: range, scale: scale, decimals: decimals).monospacedDigit().frame(width: 52, alignment: .trailing)
         }
     }
 }
@@ -423,11 +456,11 @@ struct KeystrokeOptionsView: View {
                 Text("Large").tag(2)
             }
             .pickerStyle(.segmented)
-            LabeledContent("Display time") {
-                HStack {
-                    Slider(value: $duration, in: 0.5...4, step: 0.5)
-                    EditableValue(text: String(format: "%.1f s", duration), value: $duration, range: 0.5...4, decimals: 1).monospacedDigit()
-                }
+            HStack {
+                Text("Display time")
+                Spacer(minLength: 8)
+                Slider(value: $duration, in: 0.5...4, step: 0.5).frame(width: 180)
+                EditableValue(text: String(format: "%.1f s", duration), value: $duration, range: 0.5...4, decimals: 1).monospacedDigit()
             }
             Picker(selection: Binding(get: { KeystrokeFilter(rawValue: filter) ?? .all }, set: { filter = $0.rawValue })) {
                 ForEach(KeystrokeFilter.allCases, id: \.self) { Text($0.title).tag($0) }
