@@ -8,8 +8,10 @@ final class VideoEditorState: ObservableObject {
     enum Section: CaseIterable { case cursor, keystrokes, audio, camera, background, animation }
     @Published var section: Section = .audio
     @Published var selectedZoom: UUID?
-    /// The selected camera layout (Studio Mode).
+    /// The selected camera action (Studio Mode).
     @Published var selectedCamera: UUID?
+    /// The selected action on the events track (`StudioEvent.id`).
+    @Published var selectedEvent: String?
     @Published var selectedClip: UUID?
     /// The cut tool. While it's on, the playhead stays where it is (cutting and clicking don't move it).
     @Published var scissors = false
@@ -21,6 +23,10 @@ final class VideoEditorState: ObservableObject {
     @Published var timelineZoom: Double = 0
     /// The zoom slider is being dragged: the thumbnail strip stretches instead of re-laying out.
     @Published var timelineZoomEditing = false
+    /// The slider position where the whole video fits (set by the timeline).
+    @Published var timelineFitZoom: Double = 0
+    /// The timeline's frames are the recording's own (no zooms, cursor, camera…) instead of the edited video's.
+    @Published var rawFrames = Defaults[Prefs.editorRawFrames] { didSet { Defaults[Prefs.editorRawFrames] = rawFrames } }
 }
 
 /// The video editor: a 1180×858 window with the file name in the middle of a 52pt
@@ -189,8 +195,18 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
             toStart: { [weak self] in self?.seek(0, reveal: true) },
             toEnd: { [weak self] in self.map { $0.seek($0.project.duration, reveal: true) } },
             frame: { [weak self] t in self?.frame(at: t) },
-            toggleFullScreen: { [weak self] in self?.window?.toggleFullScreen(nil) }
+            toggleFullScreen: { [weak self] in self?.window?.toggleFullScreen(nil) },
+            everyFrame: { [weak self] in self?.toggleEveryFrame() }
         )
+    }
+
+    /// One thumbnail per video frame, around the playhead; again: the whole video fits.
+    private func toggleEveryFrame() {
+        state.timelineZoom = state.timelineZoom > 0.999 ? state.timelineFitZoom : 1
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.timeline.reveal(self.state.time)
+        }
     }
 
     // MARK: Playback
@@ -253,11 +269,13 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         let settings = project.renderSettings(outputScale: previewScale, includeBackground: false)
         let renderSize = CGSize(width: (source.width * previewScale / 2).rounded() * 2, height: (source.height * previewScale / 2).rounded() * 2)
         let key = "\(project.clips.map { "\($0.start)-\($0.end)" })"
-        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)"
+        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)|\(project.edit.removedEvents)"
         if !force, key == structureKey, let renderer, let item = player.currentItem, let composition = item.videoComposition {
             if look != renderKey {
                 renderKey = look
                 renderer.update(settings)
+                thumbnailRenderer?.update(thumbnailSettings())
+                timeline.editedLookChanged()
                 item.videoComposition = composition.copy() as? AVVideoComposition
                 // A paused player doesn't redraw for a new composition: nudge it to the same moment again.
                 if !state.isPlaying { refreshPausedFrame() }
@@ -278,7 +296,15 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
                 self.renderer = renderer
                 let videoComposition = try await VideoFrameRenderer.videoComposition(for: composition, renderer: renderer,
                                                                                      renderSize: renderSize, frameRate: project.frameRate)
+                // The timeline's edited frames: the same video, rendered small.
+                let thumbnails = self.thumbnailRenderer ?? VideoFrameRenderer(thumbnailSettings())
+                thumbnails.update(thumbnailSettings())
+                self.thumbnailRenderer = thumbnails
+                let thumbnailComposition = try await VideoFrameRenderer.videoComposition(for: composition, renderer: thumbnails,
+                                                                                         renderSize: thumbnailSize, frameRate: project.frameRate)
                 guard !Task.isCancelled else { return }
+                editedFrames = (composition, thumbnailComposition)
+                timeline.setEditedSource(asset: composition, composition: thumbnailComposition)
                 let item = AVPlayerItem(asset: composition)
                 item.videoComposition = videoComposition
                 item.audioMix = mix
@@ -291,6 +317,29 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
                 glintLog("video editor: rebuild failed: \(error)")
             }
         }
+    }
+
+    // MARK: Edited frames (timeline and its hover preview)
+
+    private var thumbnailRenderer: VideoFrameRenderer?
+    private var editedFrames: (asset: AVAsset, composition: AVVideoComposition)?
+    /// 480px wide: sharp in the 240pt hover preview, and plenty for the timeline's tiles.
+    private var thumbnailScale: CGFloat { min(1, 480 / max(project.sourceSize.width, 1)) }
+    private var thumbnailSize: CGSize {
+        let s = project.sourceSize
+        return CGSize(width: max((s.width * thumbnailScale / 2).rounded() * 2, 2), height: max((s.height * thumbnailScale / 2).rounded() * 2, 2))
+    }
+    private func thumbnailSettings() -> VideoRenderSettings { project.renderSettings(outputScale: thumbnailScale, includeBackground: false) }
+
+    /// The edited video's frame at output time `t`.
+    private func editedStill(at t: Double, maxSize: CGSize) async -> CGImage? {
+        guard let editedFrames else { return nil }
+        let generator = AVAssetImageGenerator(asset: editedFrames.asset)
+        generator.videoComposition = editedFrames.composition
+        generator.maximumSize = maxSize
+        generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 60)
+        generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 60)
+        return try? await generator.image(at: CMTime(seconds: min(t, max(project.duration - 0.03, 0)), preferredTimescale: 600)).image
     }
 
     private func refreshPausedFrame() {
@@ -342,6 +391,9 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         if let at = state.selectedCut {
             state.selectedCut = nil
             project.restoreCut(at: at)
+        } else if let id = state.selectedEvent {
+            state.selectedEvent = nil
+            project.edit.removedEvents.append(id)
         } else if let id = state.selectedCamera {
             state.selectedCamera = nil
             project.cameraLayouts.removeAll { $0.id == id }
@@ -412,7 +464,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         guard let content = window?.contentView else { return }
         guard let hover, let frame = hover.frame else { hoverPreview.isHidden = true; return }
         if hoverPreview.superview == nil { content.addSubview(hoverPreview) }
-        let width: CGFloat = 176
+        let width: CGFloat = 240
         let aspect = project.renderSize.height / max(project.renderSize.width, 1)
         let size = CGSize(width: width, height: (width * aspect).rounded() + TimelineHoverPreview.labelHeight)
         let x = min(max(hover.x - size.width / 2, 8), content.bounds.width - size.width - 8)
@@ -423,9 +475,11 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, N
         if hoverSharpTime.map({ abs($0 - hover.time) > 0.02 }) ?? true { hoverPreview.show(frame, time: label) }
         hoverSharpTask?.cancel()
         let t = hover.time, pixels = CGSize(width: size.width * 2, height: (size.height - TimelineHoverPreview.labelHeight) * 2)
+        let raw = state.rawFrames
         hoverSharpTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(40))
-            guard !Task.isCancelled, let self, let sharp = await self.project.still(at: t, maxSize: pixels),
+            try? await Task.sleep(for: .milliseconds(30))
+            guard !Task.isCancelled, let self,
+                  let sharp = raw ? await self.project.still(at: t, maxSize: pixels) : await self.editedStill(at: t, maxSize: pixels),
                   !Task.isCancelled, !self.hoverPreview.isHidden else { return }
             self.hoverSharpTime = t
             self.hoverPreview.show(sharp, time: label)

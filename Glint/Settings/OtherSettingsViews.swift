@@ -24,6 +24,8 @@ struct RecordingSettingsView: View {
     var compact = false
     @State private var showClickOptions = false
     @State private var showKeyOptions = false
+    @State private var showZoomOptions = false
+    @AppStorage(Prefs.studioAutoZoom) private var autoZoom
 
     var body: some View {
         Form {
@@ -56,11 +58,23 @@ struct RecordingSettingsView: View {
                 LabeledContent("Show keystrokes") {
                     HStack {
                         Button("Options…") { showKeyOptions = true }
-                            .popover(isPresented: $showKeyOptions, arrowEdge: .bottom) { KeystrokeOptionsView().frame(width: 320) }
+                            .popover(isPresented: $showKeyOptions, arrowEdge: .bottom) { KeystrokeOptionsView().frame(width: 400) }
                         Toggle("Show keystrokes", isOn: Binding(get: { showKeystrokes },
                                                                set: { if !$0 || KeystrokePermission.ensure() { showKeystrokes = $0 } }))
                             .labelsHidden()
                     }
+                }
+            }
+            Section("Studio Mode") {
+                LabeledContent {
+                    HStack {
+                        Button("Options…") { showZoomOptions = true }
+                            .popover(isPresented: $showZoomOptions, arrowEdge: .bottom) { AutoZoomOptionsView().frame(width: 400) }
+                        Toggle("Automatic zooms", isOn: $autoZoom).labelsHidden()
+                    }
+                } label: {
+                    Text("Automatic zooms")
+                    Text("New Studio Mode recordings open with zooms where you click or type. Options sets what starts a zoom and how it looks.")
                 }
             }
             Section("Video") {
@@ -336,12 +350,65 @@ struct ClickOptionsView: View {
     }
 }
 
+/// Studio Mode's automatic zooms: what starts one, and its level and timing.
+struct AutoZoomOptionsView: View {
+    @AppStorage(Prefs.studioZoomClicks) private var clicks
+    @AppStorage(Prefs.studioZoomRightClicks) private var rightClicks
+    @AppStorage(Prefs.studioZoomDrags) private var drags
+    @AppStorage(Prefs.studioZoomTyping) private var typing
+    @AppStorage(Prefs.studioZoomScrolling) private var scrolling
+    @AppStorage(Prefs.studioZoomLevel) private var level
+    @AppStorage(Prefs.studioZoomBefore) private var before
+    @AppStorage(Prefs.studioZoomAfter) private var after
+    @AppStorage(Prefs.studioZoomMinLength) private var minLength
+    @AppStorage(Prefs.studioZoomJoin) private var join
+    @AppStorage(Prefs.studioZoomFollow) private var follow
+
+    var body: some View {
+        Form {
+            Section("Zoom in on") {
+                Toggle("Clicks", isOn: $clicks)
+                Toggle("Drags", isOn: $drags)
+                Toggle("Right-clicks", isOn: $rightClicks)
+                Toggle(isOn: $typing) {
+                    Text("Typing")
+                    Text("Three or more keys in a row. Shortcuts don't count.")
+                }
+                Toggle("Scrolling", isOn: $scrolling)
+            }
+            Section("Zooms") {
+                row("Zoom level", value: $level, range: 1.25...3, step: 0.05, text: "\(Int((level * 100).rounded()))%", scale: 100, decimals: 0)
+                row("Start before the action", value: $before, range: 0...2, step: 0.1, text: String(format: "%.1f s", before))
+                row("Stay after the action", value: $after, range: 0.5...4, step: 0.1, text: String(format: "%.1f s", after))
+                row("Shortest zoom", value: $minLength, range: 1...6, step: 0.5, text: String(format: "%.1f s", minLength))
+                row("Join zooms closer than", value: $join, range: 0...4, step: 0.5, text: String(format: "%.1f s", join))
+                Toggle("Follow the cursor", isOn: $follow)
+            }
+            Text("Applies to new Studio Mode recordings. In the video editor, right-click the zoom track and choose Redo Automatic Zooms to use these settings on a recording.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
+        .toggleStyle(.checkbox)
+    }
+
+    private func row(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double, text: String,
+                     scale: Double = 1, decimals: Int = 1) -> some View {
+        LabeledContent(title) {
+            HStack {
+                Slider(value: value, in: range, step: step).frame(width: 130)
+                EditableValue(text: text, value: value, range: range, scale: scale, decimals: decimals).monospacedDigit().frame(width: 52, alignment: .trailing)
+            }
+        }
+    }
+}
+
 /// Show keystrokes: where, how big, how long, and whether plain typing shows too.
 struct KeystrokeOptionsView: View {
     @AppStorage(Prefs.recKeysPosition) private var position
     @AppStorage(Prefs.recKeysSize) private var size
     @AppStorage(Prefs.recKeysDuration) private var duration
-    @AppStorage(Prefs.recKeysShortcutsOnly) private var shortcutsOnly
+    @AppStorage(Prefs.recKeysFilter) private var filter
+    @AppStorage(Prefs.recKeysExcluded) private var excluded
 
     var body: some View {
         Form {
@@ -362,8 +429,24 @@ struct KeystrokeOptionsView: View {
                     EditableValue(text: String(format: "%.1f s", duration), value: $duration, range: 0.5...4, decimals: 1).monospacedDigit()
                 }
             }
-            Toggle("Only shortcuts (keys with ⌘ ⌥ ⌃)", isOn: $shortcutsOnly)
+            Picker(selection: Binding(get: { KeystrokeFilter(rawValue: filter) ?? .all }, set: { filter = $0.rawValue })) {
+                ForEach(KeystrokeFilter.allCases, id: \.self) { Text($0.title).tag($0) }
+            } label: {
+                Text("Show")
+                Text("Also what Studio Mode recordings start with in the editor.")
+            }
+            .pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Never show")
+                Text("Keys and shortcuts that never appear, e.g. a password manager's shortcut. Studio Mode recordings start with these; each video can change them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ExcludedKeysEditor(keys: Binding(get: { (try? JSONDecoder().decode([ExcludedKey].self, from: Data(excluded.utf8))) ?? [] },
+                                                 set: { excluded = (try? String(decoding: JSONEncoder().encode($0), as: UTF8.self)) ?? "" }))
+                    .padding(.top, 2)
+            }
         }
         .formStyle(.grouped)
+        // Settings saved before the presets had "Only shortcuts".
+        .onAppear { filter = KeystrokeFilter.setting.rawValue }
     }
 }

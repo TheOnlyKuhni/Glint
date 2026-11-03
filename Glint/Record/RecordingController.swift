@@ -573,8 +573,14 @@ final class KeystrokeOverlay {
         case 126: "↑"
         default: (event.charactersIgnoringModifiers ?? "").uppercased()
         }
-        // "Only shortcuts": plain typing (no ⌘ ⌥ ⌃) isn't shown.
-        if Defaults[Prefs.recKeysShortcutsOnly], !f.contains(.command), !f.contains(.option), !f.contains(.control) { return }
+        // Settings → Keystrokes: which keys show, and the ones never shown.
+        if ExcludedKey.setting.contains(where: { $0.matches(code: Int(event.keyCode), flags: f.rawValue) }) { return }
+        let shortcut = f.contains(.command) || f.contains(.option) || f.contains(.control)
+        switch KeystrokeFilter.setting {
+        case .all: break
+        case .text: if shortcut || (event.keyCode != 49 && KeyLabel.special(Int(event.keyCode)) != nil) { return }
+        case .shortcuts: if !shortcut { return }
+        }
         parts.append(key)
         model.text = parts.joined(separator: " ")
         hideWork?.cancel()

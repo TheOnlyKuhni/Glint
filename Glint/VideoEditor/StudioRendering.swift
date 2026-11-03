@@ -65,14 +65,90 @@ struct CursorSettings: Equatable, Codable {
     var hideWhenTyping = false
 }
 
+/// Which keys keystroke labels show.
+enum KeystrokeFilter: String, Codable, CaseIterable {
+    /// Everything: typed text, special keys (↩, esc, arrows…) and shortcuts.
+    case all
+    /// Only typed text (letters, digits, punctuation, spaces).
+    case text
+    /// Only keys pressed with ⌘, ⌥ or ⌃.
+    case shortcuts
+
+    var title: String {
+        switch self {
+        case .all: "All Keys"
+        case .text: "Text"
+        case .shortcuts: "Shortcuts"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .all: "Everything you press: typed text, keys like ↩ or esc, and shortcuts"
+        case .text: "Only what you type: letters, digits, punctuation and spaces"
+        case .shortcuts: "Only shortcuts: keys pressed with ⌘, ⌥ or ⌃"
+        }
+    }
+
+    /// Glint's setting (Settings → Recording → Keystrokes), also what a new Studio project starts with. Before the
+    /// presets there was "Only shortcuts".
+    static var setting: KeystrokeFilter {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: Prefs.recKeysFilter.key), let filter = KeystrokeFilter(rawValue: raw) { return filter }
+            return Defaults[Prefs.recKeysShortcutsOnly] ? .shortcuts : .all
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Prefs.recKeysFilter.key) }
+    }
+}
+
+/// A key, with the modifiers held, that keystroke labels never show (e.g. ⌘ Tab, or a password manager's shortcut).
+nonisolated struct ExcludedKey: Codable, Hashable, Sendable {
+    var code: Int
+    /// ⌃ ⌥ ⇧ ⌘ only.
+    var flags: UInt
+    /// The key's character, for its label.
+    var chars: String
+
+    init(code: Int, flags: UInt, chars: String) {
+        self.code = code
+        self.flags = NSEvent.ModifierFlags(rawValue: flags).intersection(Self.modifiers).rawValue
+        self.chars = chars
+    }
+
+    private static let modifiers: NSEvent.ModifierFlags = [.control, .option, .shift, .command]
+
+    func matches(code: Int, flags: UInt) -> Bool {
+        code == self.code && NSEvent.ModifierFlags(rawValue: flags).intersection(Self.modifiers).rawValue == self.flags
+    }
+
+    /// "⌘ C", "esc", "⇧ A".
+    var label: String {
+        let f = NSEvent.ModifierFlags(rawValue: flags)
+        var parts: [String] = []
+        if f.contains(.control) { parts.append("⌃") }
+        if f.contains(.option) { parts.append("⌥") }
+        if f.contains(.shift) { parts.append("⇧") }
+        if f.contains(.command) { parts.append("⌘") }
+        parts.append(KeyLabel.special(code) ?? (chars.isEmpty ? "#\(code)" : chars.uppercased()))
+        return parts.joined(separator: " ")
+    }
+
+    /// Glint's setting (Settings → Recording → Keystrokes): what a new Studio project starts with.
+    static var setting: [ExcludedKey] {
+        get { (try? JSONDecoder().decode([ExcludedKey].self, from: Data(Defaults[Prefs.recKeysExcluded].utf8))) ?? [] }
+        set { Defaults[Prefs.recKeysExcluded] = (try? String(decoding: JSONEncoder().encode(newValue), as: UTF8.self)) ?? "" }
+    }
+}
+
 struct KeystrokeSettings: Equatable, Codable {
     var show = false
     /// 0.5…2.
     var size: Double = 1
     var light = false
     var position: OverlayCorner = .bottom
-    /// Everything typed (the default); off: only shortcuts (with ⌘, ⌥ or ⌃) and special keys.
-    var allKeys = true
+    var filter: KeystrokeFilter = .all
+    /// Keys never shown in this video.
+    var excluded: [ExcludedKey] = []
 }
 
 struct CameraSettings: Equatable, Codable {
@@ -103,10 +179,16 @@ extension CursorSettings {
 }
 
 extension KeystrokeSettings {
+    /// Edits saved before the presets had "allKeys" (on: all keys, off: shortcuts).
+    private enum LegacyKeys: String, CodingKey { case allKeys }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self), d = KeystrokeSettings()
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        let oldFilter: KeystrokeFilter = legacy.value(.allKeys, or: true) ? .all : .shortcuts
         self.init(show: c.value(.show, or: d.show), size: c.value(.size, or: d.size), light: c.value(.light, or: d.light),
-                  position: c.value(.position, or: d.position), allKeys: c.value(.allKeys, or: d.allKeys))
+                  position: c.value(.position, or: d.position), filter: c.value(.filter, or: oldFilter),
+                  excluded: c.value(.excluded, or: d.excluded))
     }
 }
 
@@ -119,9 +201,9 @@ extension CameraSettings {
     }
 }
 
-// MARK: - Camera layouts
+// MARK: - Camera actions
 
-/// The camera layouts a Studio Mode recording opens with: one full-size stretch for each time the camera was clicked
+/// The camera actions a Studio Mode recording opens with: one full-size stretch for each time the camera was clicked
 /// to full size while recording.
 enum StudioCameraLayouts {
     static func make(_ studio: StudioRecording, duration: Double, camera: CameraSettings) -> [CameraLayout] {
@@ -146,36 +228,79 @@ enum StudioCameraLayouts {
 
 /// The zooms a Studio Mode recording opens with: one around every burst of activity (clicks inside the area, typing),
 /// following the cursor. Close bursts share one zoom.
-enum StudioZooms {
-    static let scale = 1.8
+/// What starts an automatic zoom and how it looks (Settings → Recording → Studio Mode).
+struct AutoZoomSettings {
+    var clicks = true
+    var rightClicks = false
+    var drags = true
+    /// At least three keys, each less than 1.2 s after the one before (shortcuts aren't typing).
+    var typing = true
+    var scrolling = false
+    var scale = 1.8
+    /// Seconds the zoom starts before the action and stays after it.
+    var before = 0.6
+    var after = 1.6
+    var minLength = 2.0
+    /// Zooms less than this far apart become one.
+    var join = 1.0
+    var follow = true
 
-    static func make(_ studio: StudioRecording, duration: Double) -> [VideoZoom] {
+    static var current: AutoZoomSettings {
+        AutoZoomSettings(clicks: Defaults[Prefs.studioZoomClicks], rightClicks: Defaults[Prefs.studioZoomRightClicks],
+                         drags: Defaults[Prefs.studioZoomDrags], typing: Defaults[Prefs.studioZoomTyping],
+                         scrolling: Defaults[Prefs.studioZoomScrolling], scale: Defaults[Prefs.studioZoomLevel],
+                         before: Defaults[Prefs.studioZoomBefore], after: Defaults[Prefs.studioZoomAfter],
+                         minLength: Defaults[Prefs.studioZoomMinLength], join: Defaults[Prefs.studioZoomJoin],
+                         follow: Defaults[Prefs.studioZoomFollow])
+    }
+}
+
+/// The zooms a Studio Mode recording opens with: one around every burst of activity inside the area (by default
+/// clicks, drags and typing), following the cursor. Close bursts share one zoom.
+enum StudioZooms {
+    static func make(_ studio: StudioRecording, duration: Double, settings s: AutoZoomSettings = .current) -> [VideoZoom] {
         var windows: [(Double, Double)] = []
-        for m in studio.mouse where m.k == .down && (0...1).contains(m.x) && (0...1).contains(m.y) {
-            windows.append((m.t - 0.6, m.t + 1.6))
+        func add(_ a: Double, _ b: Double) { windows.append((a - s.before, b + s.after)) }
+        for event in StudioEvent.make(studio) {
+            switch event.kind {
+            case .click where s.clicks: add(event.start, event.end)
+            case .drag where s.drags: add(event.start, event.end)
+            case .rightClick where s.rightClicks: add(event.start, event.end)
+            case .scroll where s.scrolling: add(event.start, event.end)
+            default: break
+            }
         }
         // Typing: keys less than 1.2 s apart, at least three of them. Shortcuts (⌘, ⌥ or ⌃ held) aren't typing.
-        var run: [Double] = []
-        func flush() {
-            if run.count >= 3, let a = run.first, let b = run.last { windows.append((a - 0.5, b + 1.0)) }
-            run = []
+        if s.typing {
+            var run: [Double] = []
+            func flush() {
+                if run.count >= 3, let a = run.first, let b = run.last { add(a, b) }
+                run = []
+            }
+            let typed = studio.keys.filter { NSEvent.ModifierFlags(rawValue: $0.flags).isDisjoint(with: [.command, .option, .control]) }
+            for key in typed.sorted(by: { $0.t < $1.t }) {
+                if let last = run.last, key.t - last > 1.2 { flush() }
+                run.append(key.t)
+            }
+            flush()
         }
-        let typed = studio.keys.filter { NSEvent.ModifierFlags(rawValue: $0.flags).isDisjoint(with: [.command, .option, .control]) }
-        for key in typed.sorted(by: { $0.t < $1.t }) {
-            if let last = run.last, key.t - last > 1.2 { flush() }
-            run.append(key.t)
-        }
-        flush()
         var merged: [(Double, Double)] = []
         for w in windows.sorted(by: { $0.0 < $1.0 }) {
-            if let last = merged.last, w.0 - last.1 < 1.0 { merged[merged.count - 1].1 = max(last.1, w.1) } else { merged.append(w) }
+            if let last = merged.last, w.0 - last.1 < s.join { merged[merged.count - 1].1 = max(last.1, w.1) } else { merged.append(w) }
         }
-        return merged.compactMap { w in
+        // Too close to the next one to reach the shortest length: they join too.
+        var zooms: [VideoZoom] = []
+        for w in merged {
             let start = max(w.0, 0)
-            let end = min(max(w.1, start + 2), duration)
-            guard end - start >= 1 else { return nil }
-            return VideoZoom(start: start, end: end, scale: scale, follow: true)
+            let end = min(max(w.1, start + s.minLength), duration)
+            if var last = zooms.last, start < last.end + s.join {
+                last.end = max(last.end, end)
+                zooms[zooms.count - 1] = last
+            } else if end - start >= 0.5 {
+                zooms.append(VideoZoom(start: start, end: end, scale: s.scale, follow: s.follow))
+            }
         }
+        return zooms
     }
 }
 
@@ -287,15 +412,16 @@ nonisolated struct KeyLabel: Sendable {
     var end: Double
     var text: String
 
-    static func make(_ keys: [StudioRecording.Key], allKeys: Bool) -> [KeyLabel] {
+    static func make(_ keys: [StudioRecording.Key], filter: KeystrokeFilter, excluded: [ExcludedKey] = []) -> [KeyLabel] {
         var labels: [KeyLabel] = []
         var typing: KeyLabel?
         func endTyping() { if let t = typing { labels.append(t) }; typing = nil }
-        for key in keys.sorted(by: { $0.t < $1.t }) {
+        for key in keys.sorted(by: { $0.t < $1.t }) where !excluded.contains(where: { $0.matches(code: key.code, flags: key.flags) }) {
             let flags = NSEvent.ModifierFlags(rawValue: key.flags)
             let shortcut = flags.contains(.command) || flags.contains(.control) || flags.contains(.option)
-            let special = Self.special(key.code)
-            if !shortcut, special == nil, allKeys {
+            // Space is part of the text.
+            let special = key.code == 49 ? nil : Self.special(key.code)
+            if !shortcut, special == nil, filter != .shortcuts {
                 // Plain typing becomes one growing label (its last 24 characters).
                 if var t = typing, key.t - t.end < 0.2 {
                     t.text = String((t.text + key.chars).suffix(24))
@@ -307,7 +433,8 @@ nonisolated struct KeyLabel: Sendable {
                 }
                 continue
             }
-            guard shortcut || (allKeys && special != nil) || (special != nil && !flags.isDisjoint(with: [.command, .control, .option])) else { continue }
+            // Text shows nothing else; Shortcuts only keys held with ⌘, ⌥ or ⌃.
+            guard filter != .text, shortcut || filter == .all else { continue }
             endTyping()
             var parts: [String] = []
             if flags.contains(.control) { parts.append("⌃") }
@@ -347,10 +474,12 @@ nonisolated struct KeyLabel: Sendable {
 /// What happened while a Studio recording ran, for the timeline's events track (source time; points have
 /// `end == start`). Only what happened inside the recorded area counts.
 nonisolated struct StudioEvent: Sendable {
-    enum Kind: Sendable { case click, rightClick, drag, scroll, typing, shortcut, key }
+    enum Kind: String, Sendable { case click, rightClick, drag, scroll, typing, shortcut, key }
     var kind: Kind
     var start: Double
     var end: Double
+    /// Stays the same for the recording (what `VideoEdit.removedEvents` keeps).
+    var id: String { "\(kind.rawValue)@\(Int((start * 1000).rounded()))" }
     /// Typing: what was typed; shortcut or a lone key: its label ("⌘ C", "esc").
     var text: String?
 
@@ -402,7 +531,7 @@ nonisolated struct StudioEvent: Sendable {
             let flags = NSEvent.ModifierFlags(rawValue: key.flags)
             if !flags.isDisjoint(with: [.command, .option, .control]) {
                 endTyping()
-                let label = KeyLabel.make([key], allKeys: false).first?.text ?? key.chars
+                let label = KeyLabel.make([key], filter: .shortcuts).first?.text ?? key.chars
                 events.append(StudioEvent(kind: .shortcut, start: key.t, end: key.t, text: label))
                 continue
             }
@@ -468,8 +597,13 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         area = CGSize(width: max(studio.areaWidth, 1), height: max(studio.areaHeight, 1))
         self.path = path
         mouse = studio.mouse.sorted { $0.t < $1.t }
+        // Actions removed on the timeline: their click effects and keystroke labels go.
+        let removed = Set(edit.removedEvents)
+        let gone = removed.isEmpty ? [] : StudioEvent.make(studio).filter { removed.contains($0.id) }
+        let gonePresses = gone.filter { !$0.isKeyboard }.map(\.start)
+        let goneKeys = gone.filter(\.isKeyboard)
         var clicks: [Click] = []
-        for (i, m) in mouse.enumerated() where m.k == .down || m.k == .rightDown {
+        for (i, m) in mouse.enumerated() where (m.k == .down || m.k == .rightDown) && !gonePresses.contains(where: { abs($0 - m.t) < 0.0005 }) {
             let upKind: StudioRecording.Kind = m.k == .down ? .up : .rightUp
             let up = mouse[(i + 1)...].first { $0.k == upKind }?.t ?? m.t + 0.1
             clicks.append(Click(t: m.t, x: m.x, y: m.y, up: up))
@@ -477,7 +611,8 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         self.clicks = clicks
         cursors = studio.cursors
         self.cursorImages = cursorImages
-        labels = KeyLabel.make(studio.keys, allKeys: edit.keystrokes.allKeys)
+        let keys = studio.keys.filter { key in !goneKeys.contains { key.t >= $0.start - 0.0005 && key.t <= $0.end + 0.0005 } }
+        labels = KeyLabel.make(keys, filter: edit.keystrokes.filter, excluded: edit.keystrokes.excluded)
         clips = edit.clips
         var t = 0.0
         clipStarts = edit.clips.map { clip in defer { t += clip.duration }; return t }

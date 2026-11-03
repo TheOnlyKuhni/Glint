@@ -9,6 +9,8 @@ struct VideoEditorActions {
     var toEnd: () -> Void
     var frame: (Double) -> CGImage?
     var toggleFullScreen: () -> Void
+    /// The timeline: one thumbnail per video frame, or back to the whole video.
+    var everyFrame: () -> Void
 }
 
 private typealias W = VideoEditorWindowController
@@ -293,13 +295,19 @@ struct InspectorHeader: View {
     let title: String
     var value: String?
     /// A slider's value: clicking it lets the number be typed.
-    var edit: (binding: Binding<Double>, range: ClosedRange<Double>, scale: Double)?
+    var edit: (binding: Binding<Double>, range: ClosedRange<Double>, scale: Double, decimals: Int)?
     init(_ title: String, value: String? = nil) { self.title = title; self.value = value }
     /// Header of a percentage slider: "150%", typed as 150.
     init(_ title: String, percent binding: Binding<Double>, range: ClosedRange<Double>, suffix: String = "%") {
         self.title = title
         value = "\(Int((binding.wrappedValue * 100).rounded()))\(suffix)"
-        edit = (binding, range, 100)
+        edit = (binding, range, 100, 0)
+    }
+    /// A length in seconds: "2.5 s", typed as 2.5.
+    init(_ title: String, seconds binding: Binding<Double>, range: ClosedRange<Double>) {
+        self.title = title
+        value = String(format: "%.1f s", binding.wrappedValue)
+        edit = (binding, range, 1, 1)
     }
     var body: some View {
         HStack {
@@ -307,9 +315,28 @@ struct InspectorHeader: View {
             Spacer()
             if let value {
                 Group {
-                    if let edit { EditableValue(text: value, value: edit.binding, range: edit.range, scale: edit.scale) } else { Text(value) }
+                    if let edit {
+                        EditableValue(text: value, value: edit.binding, range: edit.range, scale: edit.scale, decimals: edit.decimals)
+                    } else { Text(value) }
                 }
                 .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
+            }
+        }
+    }
+}
+
+/// A zoom's or camera action's length: common lengths to pick, and the exact seconds (click the value to type it).
+struct LengthPicker: View {
+    let length: Double
+    let set: (Double) -> Void
+    private static let presets: [Double] = [1, 2, 3, 5, 10]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Length", seconds: Binding(get: { length }, set: set), range: 0.3...3600)
+            ChoiceButtons(titles: Self.presets.map { "\(Int($0)) s" }, selected: Self.presets.firstIndex { abs($0 - length) < 0.05 } ?? -1,
+                          helps: Self.presets.map { "Make it \(Int($0)) seconds long (it grows to the right, then to the left)" }) {
+                set(Self.presets[$0])
             }
         }
     }
@@ -477,8 +504,9 @@ private struct ZoomInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            LengthPicker(length: zoom.end - zoom.start) { project.setLength(zoom: zoom.id, $0) }
             let level = Binding(get: { zoom.scale }, set: { v in edit { $0.scale = v } })
-            InspectorHeader("Zoom level", percent: level, range: 1...4)
+            InspectorHeader("Zoom level", percent: level, range: 1...4).padding(.top, 14)
             StepSlider(value: level, range: 1.0...4.0, step: 0.05, ticks: 7)
                 .help("How far this zoom magnifies (100–400%)")
             Button { let s = zoom.scale; for i in project.zooms.indices { project.zooms[i].scale = s } } label: {
@@ -714,6 +742,31 @@ private struct VideoTransport: View {
                 Text(Self.format(project.duration)).foregroundStyle(Color(white: 0.55))
                     .help("Playhead position / length of the edited video")
                 Spacer()
+                Menu {
+                    Picker("Timeline frames", selection: $state.rawFrames) {
+                        Text("Edited Frames").tag(false)
+                        Text("Raw Frames").tag(true)
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: state.rawFrames ? "photo" : "photo.badge.checkmark").font(.system(size: 13))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(Color(white: 0.6))
+                .help(state.rawFrames ? "The timeline shows the recording's own frames (no zooms, cursor or camera)"
+                                      : "The timeline shows the edited frames (zooms, cursor, camera); switch to the raw recording")
+                .padding(.trailing, 6)
+                Button(action: actions.everyFrame) {
+                    Image(systemName: "film").font(.system(size: 12.5))
+                        .foregroundStyle(state.timelineZoom > 0.999 ? Color.white : Color(white: 0.6))
+                        .frame(width: 24, height: 24).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(state.timelineZoom > 0.999 ? "Show the whole video" : "Every frame: one thumbnail per video frame")
+                .accessibilityLabel("Every frame")
+                .padding(.trailing, 4)
                 HStack(spacing: 8) {
                     Image(systemName: "minus").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(white: 0.45))
                     Slider(value: $state.timelineZoom, in: 0...1) { state.timelineZoomEditing = $0 }.controlSize(.mini).frame(width: 100).tint(Color(white: 0.4))

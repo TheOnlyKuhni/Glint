@@ -29,16 +29,17 @@ extension VideoZoom {
     }
 }
 
-/// A stretch of the output timeline (seconds) where the camera looks different from the Camera section (Studio Mode):
-/// full size, a bubble of its own (size, shape, corner) or hidden. The camera blends into and out of it. Clicking
-/// the camera while recording makes full-size ones.
+/// A camera action (Studio Mode): a stretch of the output timeline (seconds) where the camera goes full size, is
+/// resized (its own size, shape and corner) or hidden. Outside camera actions the Camera section's settings (the
+/// defaults) apply; the camera blends into an action and back out of it. Clicking the camera while recording makes
+/// full-size ones.
 struct CameraLayout: Equatable, Identifiable, Codable {
     enum Kind: String, Codable, CaseIterable {
         case full, bubble, hidden
         var title: String {
             switch self {
             case .full: "Full Size"
-            case .bubble: "Bubble"
+            case .bubble: "Resize"
             case .hidden: "Hidden"
             }
         }
@@ -48,14 +49,13 @@ struct CameraLayout: Equatable, Identifiable, Codable {
     var start: Double
     var end: Double
     var kind: Kind = .full
-    /// The bubble's look (`kind == .bubble`), like the Camera section's.
+    /// The resized camera's look (`kind == .bubble`), like the Camera section's.
     var size: Double = 1
     var shape = 0
     var position: OverlayCorner = .bottomRight
 
     static let shapeTitles = ["Circle", "Square", "Rectangle", "Vertical"]
-    /// "Full Size", "Circle", "Hidden".
-    var title: String { kind == .bubble ? Self.shapeTitles[min(max(shape, 0), 3)] : kind.title }
+    var title: String { kind.title }
 }
 
 extension CameraLayout {
@@ -101,6 +101,8 @@ struct VideoEdit: Equatable, Codable {
     var keystrokes = KeystrokeSettings()
     var camera = CameraSettings()
     var cameraLayouts: [CameraLayout] = []
+    /// Studio Mode: actions removed on the timeline (`StudioEvent.id`); their click effects and keystrokes don't show.
+    var removedEvents: [String] = []
 }
 
 extension VideoEdit {
@@ -111,7 +113,7 @@ extension VideoEdit {
                   zoomAnimation: c.value(.zoomAnimation, or: d.zoomAnimation), motionBlur: c.value(.motionBlur, or: d.motionBlur),
                   volume: c.value(.volume, or: d.volume), includeAudio: c.value(.includeAudio, or: d.includeAudio),
                   cursor: c.value(.cursor, or: d.cursor), keystrokes: c.value(.keystrokes, or: d.keystrokes), camera: c.value(.camera, or: d.camera),
-                  cameraLayouts: c.value(.cameraLayouts, or: d.cameraLayouts))
+                  cameraLayouts: c.value(.cameraLayouts, or: d.cameraLayouts), removedEvents: c.value(.removedEvents, or: d.removedEvents))
     }
 }
 
@@ -186,9 +188,11 @@ final class VideoProject: ObservableObject {
     func applyStudioDefaults() {
         guard let studio else { return }
         var next = edit
-        next.zooms = StudioZooms.make(studio, duration: sourceDuration)
+        next.zooms = Defaults[Prefs.studioAutoZoom] ? StudioZooms.make(studio, duration: sourceDuration) : []
         next.cursor.ripple = studio.highlightedClicks
         next.keystrokes.show = studio.showedKeystrokes && !studio.keys.isEmpty
+        next.keystrokes.filter = KeystrokeFilter.setting
+        next.keystrokes.excluded = ExcludedKey.setting
         next.camera.shape = min(max(studio.cameraShape, 0), 3)
         next.camera.size = [0.65, 1, 1.3, 1.95][min(max(studio.cameraSize, 0), 3)]
         next.camera.flip = studio.cameraFlipped
@@ -316,7 +320,7 @@ final class VideoProject: ObservableObject {
     }
 
     /// The scissors dragged over a stretch: cuts output time `a…b` out in one step (at least 0.1 s stays). Zooms and
-    /// camera layouts after the cut move left with the video; ones inside it shrink or go.
+    /// camera actions after the cut move left with the video; ones inside it shrink or go.
     func removeRange(_ a: Double, _ b: Double) {
         let a = max(min(a, b), 0), b = min(max(a, b), duration)
         guard b - a > 0.05, duration - (b - a) > 0.1 else { return }
@@ -366,7 +370,57 @@ final class VideoProject: ObservableObject {
         clampToDuration()
     }
 
-    /// Keeps zooms and camera layouts inside the (possibly shorter) timeline.
+    /// Replaces the zooms with automatic ones made with the current settings (Studio Mode; one undo step). Zooms
+    /// are on the output timeline, so cut-out parts don't get any and the rest move with the cuts.
+    func redoAutomaticZooms() {
+        guard let studio else { return }
+        var result: [VideoZoom] = []
+        for zoom in StudioZooms.make(studio, duration: sourceDuration) {
+            // Clamp each to the clip it starts in, mapped to the edited timeline.
+            guard let a = outputTime(source: zoom.start) ?? outputTime(source: zoom.end) else { continue }
+            let b = outputTime(source: zoom.end) ?? min(a + (zoom.end - zoom.start), duration)
+            guard b - a >= 0.3 else { continue }
+            if let last = result.last, a < last.end { result[result.count - 1].end = max(last.end, b); continue }
+            result.append(VideoZoom(start: a, end: b, scale: zoom.scale, follow: zoom.follow))
+        }
+        zooms = result
+    }
+
+    /// Makes a zoom `length` seconds long (see `lengthened`).
+    func setLength(zoom id: UUID, _ length: Double) {
+        guard let i = zooms.firstIndex(where: { $0.id == id }) else { return }
+        let (a, b) = lengthened(zooms[i].start, zooms[i].end, to: length, others: zooms.filter { $0.id != id }.map { ($0.start, $0.end) })
+        var zoom = zooms[i]
+        zoom.start = a
+        zoom.end = b
+        zooms[i] = zoom
+    }
+
+    /// Makes a camera action `length` seconds long (see `lengthened`).
+    func setLength(cameraAction id: UUID, _ length: Double) {
+        guard let i = cameraLayouts.firstIndex(where: { $0.id == id }) else { return }
+        let (a, b) = lengthened(cameraLayouts[i].start, cameraLayouts[i].end, to: length,
+                                others: cameraLayouts.filter { $0.id != id }.map { ($0.start, $0.end) })
+        var layout = cameraLayouts[i]
+        layout.start = a
+        layout.end = b
+        cameraLayouts[i] = layout
+    }
+
+    /// A stretch made `length` long: it grows (or shrinks) at its end; when the next stretch or the video's end is in
+    /// the way, it grows to the left too. At least 0.3 s, at most the free gap it sits in.
+    private func lengthened(_ start: Double, _ end: Double, to length: Double, others: [(Double, Double)]) -> (Double, Double) {
+        var lo = 0.0, hi = duration
+        for (s, e) in others {
+            if e <= start + 0.0001 { lo = max(lo, e) }
+            if s >= end - 0.0001 { hi = min(hi, s) }
+        }
+        let length = min(max(length, 0.3), hi - lo)
+        let a = max(min(start, hi - length), lo)
+        return (a, a + length)
+    }
+
+    /// Keeps zooms and camera actions inside the (possibly shorter) timeline.
     func clampToDuration() {
         let d = duration
         zooms = zooms.compactMap { z in
