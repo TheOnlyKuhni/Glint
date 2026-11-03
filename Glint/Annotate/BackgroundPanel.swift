@@ -1,7 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Left sidebar of the Annotate editor for the Background tool.
+private typealias W = VideoEditorWindowController
+
+/// The screenshot editor's Background mode (sidebar): presets, fills, and padding, inset, shadow, corners,
+/// alignment and ratio.
 struct BackgroundPanel: View {
     @Bindable var doc: AnnotationDocument
     @State private var showAllGradients = false
@@ -15,20 +18,24 @@ struct BackgroundPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Background").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                    Text("Put the screenshot on a backdrop, with padding, shadow and round corners.")
+                        .font(.system(size: 12)).foregroundStyle(Color(white: 0.55)).fixedSize(horizontal: false, vertical: true)
+                }
                 presetRow
                 noneButton
                 gradientSection
                 wallpaperSection.id(wallpaperLoaded)
                 blurredSection.id(wallpaperLoaded)
                 colorSection
-                Divider().padding(.vertical, 2)
+                Divider().overlay(W.line).padding(.vertical, 2)
                 sliders
             }
-            .padding(14)
+            .padding(EdgeInsets(top: 22, leading: 22, bottom: 20, trailing: 22))
         }
         .scrollIndicators(.never)
-        .frame(width: 250)
-        .background(Color(.displayP3, red: 0x32 / 255.0, green: 0x32 / 255.0, blue: 0x35 / 255.0))
+        .frame(maxWidth: .infinity)
         .task {
             await images.prepare()
             wallpaperLoaded = true
@@ -50,9 +57,9 @@ struct BackgroundPanel: View {
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.1)))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -71,10 +78,9 @@ struct BackgroundPanel: View {
             // None keeps the slider values and shows no backdrop (transparent).
             if var bg = doc.background { bg.fill = .transparent; doc.background = bg }
         } label: {
-            Text("None").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity).frame(height: 32)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.08)))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(doc.background == nil || doc.background?.fill == .transparent ? Color.accentColor : .clear, lineWidth: 2.5))
+            let none = doc.background == nil || doc.background?.fill == .transparent
+            Text("None").font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(none ? W.blue : W.box))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -84,7 +90,7 @@ struct BackgroundPanel: View {
     private var gradientSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Gradients").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                sectionTitle("Gradients")
                 Spacer()
                 Button { showAllGradients.toggle() } label: {
                     HStack(spacing: 3) {
@@ -92,9 +98,9 @@ struct BackgroundPanel: View {
                         Image(systemName: showAllGradients ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .bold))
                     }
                 }
-                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                .buttonStyle(.plain).font(.system(size: 11.5)).foregroundStyle(Color(white: 0.62))
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(38), spacing: 9), count: 5), spacing: 9) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(38), spacing: 9), count: 5), spacing: 10) {
                 ForEach(0..<(showAllGradients ? BackgroundPalette.count : 10), id: \.self) { i in
                     Swatch(selected: doc.background?.fill == .gradient(i)) {
                         Image(nsImage: BackgroundPalette.swatch(i)).resizable()
@@ -146,7 +152,7 @@ struct BackgroundPanel: View {
             colorRow(BackgroundPalette.colorsDark) {
                 Button { select(.transparent) } label: {
                     Checker().frame(width: 18, height: 18).clipShape(Circle())
-                        .overlay(Circle().strokeBorder(doc.background?.fill == .transparent ? Color.accentColor : .white.opacity(0.2),
+                        .overlay(Circle().strokeBorder(doc.background?.fill == .transparent ? Color.white : .white.opacity(0.2),
                                                        lineWidth: doc.background?.fill == .transparent ? 2 : 0.5))
                 }
                 .buttonStyle(.plain).help("Transparent")
@@ -169,7 +175,7 @@ struct BackgroundPanel: View {
                 let selected = doc.background?.fill == .color(hex)
                 Button { select(.color(hex)) } label: {
                     Circle().fill(Color(nsColor: BackgroundPalette.nsColor(hex))).frame(width: 18, height: 18)
-                        .overlay(Circle().strokeBorder(selected ? Color.accentColor : .white.opacity(0.15), lineWidth: selected ? 2 : 0.5))
+                        .overlay(Circle().strokeBorder(selected ? Color.white : .white.opacity(0.15), lineWidth: selected ? 2 : 0.5))
                 }
                 .buttonStyle(.plain)
             }
@@ -239,7 +245,7 @@ struct BackgroundPanel: View {
     // MARK: Helpers
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+        Text(text).font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
     }
 
     private func labeledSlider(_ title: String, value: Binding<CGFloat>, range: CGFloat) -> some View {
@@ -387,7 +393,7 @@ private struct Swatch<Content: View>: View {
                 .frame(width: 38, height: 38)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2.5).padding(-3))
+                    .strokeBorder(selected ? Color.white : .clear, lineWidth: 2).padding(-3))
         }
         .buttonStyle(.plain)
     }
@@ -407,35 +413,24 @@ private struct Checker: View {
     }
 }
 
-/// Title + slider; while hovered or dragged, the value (real units) appears right-aligned on the title row in a
-/// light gray rounded box.
+/// Title and value (click it to type one) over the editor's slider.
 private struct ValueSlider: View {
     let title: String
     @Binding var value: CGFloat
     let range: CGFloat
-    @State private var hovering = false
-    @State private var dragging = false
-    @State private var typing = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                Text(title).font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
                 Spacer(minLength: 4)
                 EditableValue(text: "\(Int((value * range).rounded()))",
-                              value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }), range: 0...1,
-                              scale: Double(range), onEditing: { typing = $0 })
-                    .font(.system(size: 12)).monospacedDigit()
+                              value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }), range: 0...1, scale: Double(range))
+                    .font(.system(size: 12.5, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 6).frame(height: 18)
-                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white.opacity(0.13)))
-                    .opacity(hovering || dragging || typing ? 1 : 0)
             }
-            Slider(value: $value, in: 0...1) { editing in dragging = editing }
-                .controlSize(.small)
+            StepSlider(value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }), range: 0...1, ticks: 5)
         }
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
     }
 }
 
@@ -451,7 +446,7 @@ private struct PresetRowButton: View {
             Text(title).frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10).frame(height: 24)
                 .foregroundStyle(hovered && enabled ? .white : .primary)
-                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(hovered && enabled ? Color.accentColor : .clear))
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(hovered && enabled ? W.blue : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

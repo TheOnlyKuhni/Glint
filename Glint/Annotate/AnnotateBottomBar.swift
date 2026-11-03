@@ -74,10 +74,12 @@ struct AnnotateBottomBar: View {
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.displayP3, red: 0x40 / 255.0, green: 0x40 / 255.0, blue: 0x42 / 255.0))
+        // The editors' dark bar with a hairline above.
+        .background(Color(white: 0x21 / 255.0))
         .overlay(alignment: .top) {
-            Rectangle().fill(Color(.displayP3, red: 0x63 / 255.0, green: 0x63 / 255.0, blue: 0x65 / 255.0)).frame(height: 1)
+            Rectangle().fill(Color(white: 0x30 / 255.0)).frame(height: 1)
         }
+        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -100,7 +102,7 @@ private struct BarButtonBody: View {
             .foregroundStyle(isOn ? Color.white : Color.primary)
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(Capsule().fill(isOn ? Self.blue : Color.white.opacity(configuration.isPressed ? 0.26 : (hovering ? 0.18 : 0.12))))
+            .background(Capsule().fill(isOn ? Self.blue : Color(white: configuration.isPressed ? 0.26 : (hovering ? 0.21 : 0x2A / 255.0))))
             .overlay(Capsule().fill(Color.black.opacity(isOn && configuration.isPressed ? 0.24 : (isOn && hovering ? 0.1 : 0))))
             .animation(.easeOut(duration: 0.12), value: isOn)
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))

@@ -1,7 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// The Annotate editor window: native toolbar, zoomable canvas and the bottom action bar.
+/// The screenshot editor: the drawing tools and Save as… / Done in the toolbar; on the left the mode rail (Annotate,
+/// Background, Add Image, Crop & Resize) and the sidebar with the mode's settings; the zoomable canvas; the bottom
+/// action bar. Dark, in the video editor's design language.
 final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation {
     private static var open: [AnnotateWindowController] = []
     static var hasOpenEditors: Bool { !open.isEmpty }
@@ -17,45 +19,21 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
     private weak var bottomBar: NSView?
     private var spaceMonitor: Any?
     private var defaultsObserver: NSObjectProtocol?
-    private var showsColorNames = Defaults[Prefs.annotateColorNames]
     private var exportCache: (key: ExportKey, url: URL)?
     private var crop: CropState?
     private var cropOverlay: CropOverlayView?
-    private var cropBar: NSView?
     private var cropBackdrop: CropBackdropView?
     private var cropScrollObserver: NSObjectProtocol?
-    private var savedToolbarItems: [NSToolbarItem.Identifier] = []
-    fileprivate let cropFillControl = OptionControl()
-    fileprivate let cropRatioControl = OptionControl()
     /// Rotations/flips done during this crop session (Cancel undoes them).
     fileprivate var cropImageEdits = 0
-    fileprivate var panelOpenBeforeCrop = false
-    private lazy var cropToolbarDelegate: CropToolbarDelegate = {
-        let d = CropToolbarDelegate()
-        d.owner = self
-        return d
-    }()
-    private var panelWidth: NSLayoutConstraint?
-    private weak var backgroundItem: NSToolbarItem?
-    /// Per-tool options, shown in one stack after the tool picker (6pt apart).
-    private let optionStack: NSStackView = {
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 0)
-        return stack
-    }()
-    private lazy var optionStackWidth = optionStack.widthAnchor.constraint(equalToConstant: 0)
-    private let colorItem = OptionControl()
-    private let sizeItem = OptionControl()
-    private let styleItem = OptionControl()
-    private let lockItem = OptionControl(chevron: false)
-    private let amount = AmountSliderModel()
-    private lazy var amountView: NSView = {
-        let host = NSHostingView(rootView: AmountSlider(model: amount))
-        host.sizingOptions = [.intrinsicContentSize]
-        return host
-    }()
+    /// The mode rail's choice. Crop & Resize goes back to the mode before it.
+    let editorModel = AnnotateEditorModel()
+    fileprivate var modeBeforeCrop: AnnotateMode = .annotate
+
+    /// Rail, its hairline, sidebar and its hairline: the room left of the canvas.
+    private static let railWidth: CGFloat = 52
+    private static let sidebarWidth: CGFloat = 272
+    private static var sideWidth: CGFloat { railWidth + 1 + sidebarWidth + 1 }
 
     // MARK: Opening
 
@@ -144,7 +122,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 1010, height: 480)  // the full toolbar fits without overflow
+        window.minSize = NSSize(width: 960, height: 540)  // the toolbar's tools and the sidebar fit
         window.title = document.fileName
         if Defaults[Prefs.annotateAlwaysOnTop] { window.level = .floating }
         super.init(window: window)
@@ -160,7 +138,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
 
         buildContent()
         sizeWindowToFit()
-        canvas.onToolShortcut = { [weak self] tool in self?.select(tool) }
+        canvas.onToolShortcut = { [weak self] tool in self?.pickTool(tool) }
         canvas.onCommand = { [weak self] command in self?.handle(command) }
         doc.onSelectionChange = { [weak self] in self?.selectionChanged() }
         canvas.onGeometryChange = { [weak self] in self?.zoomToFit() }
@@ -180,16 +158,12 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
                 let grows = Defaults[Prefs.annotateExpandCanvas]
                 if self.doc.expandsCanvas != grows { self.doc.expandsCanvas = grows }
                 if self.bottomModel.growsCanvas != grows { self.bottomModel.growsCanvas = grows }
-                guard self.showsColorNames != Defaults[Prefs.annotateColorNames] else { return }
-                self.showsColorNames = Defaults[Prefs.annotateColorNames]
-                self.refreshColorItem()
             }
         }
         DispatchQueue.main.async { [weak self] in
-            self?.refreshSizeItem(); self?.refreshOptionItems()
-            // "Remember if background tool was opened".
+            // "Remember if background tool was opened": the editor opens in Background mode.
             if Defaults[Prefs.annotateRememberBackground], UserDefaults.standard.bool(forKey: "background.panelOpen") {
-                self?.setBackgroundPanel(open: true)
+                self?.setMode(.background)
             }
         }
 
@@ -201,7 +175,8 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         guard let window else { return }
         let content = NSView()
         content.wantsLayer = true
-        content.layer?.backgroundColor = NSColor(displayP3Red: 0x23 / 255, green: 0x24 / 255, blue: 0x27 / 255, alpha: 1).cgColor
+        // The canvas sits on the video editor's preview black.
+        content.layer?.backgroundColor = NSColor(white: 0x17 / 255.0, alpha: 1).cgColor
 
         let clip = CenteringClipView()
         clip.drawsBackground = false
@@ -222,46 +197,52 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
                                                name: NSScrollView.didEndLiveMagnifyNotification, object: scrollView)
 
         // Opaque band behind the toolbar with a hairline below it.
-        let band = NSView()
-        band.wantsLayer = true
-        band.layer?.backgroundColor = NSColor(displayP3Red: 0x40 / 255, green: 0x40 / 255, blue: 0x42 / 255, alpha: 1).cgColor
-        band.translatesAutoresizingMaskIntoConstraints = false
-        let hairline = NSView()
-        hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = NSColor(displayP3Red: 0x55 / 255, green: 0x56 / 255, blue: 0x59 / 255, alpha: 1).cgColor
-        hairline.translatesAutoresizingMaskIntoConstraints = false
+        let band = Self.solid(NSColor(white: 0x21 / 255.0, alpha: 1))
+        let hairline = Self.solid(NSColor(white: 0x30 / 255.0, alpha: 1))
 
         let bar = NSHostingView(rootView: AnnotateBottomBar(model: bottomModel, actions: bottomActions))
         bottomBar = bar
         bar.translatesAutoresizingMaskIntoConstraints = false
 
-        let panel = NSHostingView(rootView: BackgroundPanel(doc: doc))
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.sizingOptions = []
-        let panelWidth = panel.widthAnchor.constraint(equalToConstant: 0)
-        self.panelWidth = panelWidth
-        panel.isHidden = true
+        let rail = NSHostingView(rootView: AnnotateModeRail(model: editorModel) { [weak self] mode in self?.setMode(mode) })
+        rail.sizingOptions = []
+        rail.translatesAutoresizingMaskIntoConstraints = false
+        let sidebar = NSHostingView(rootView: AnnotateSidebar(model: editorModel, doc: doc, crop: { [weak self] in self?.crop },
+                                                              actions: sidebarActions))
+        sidebar.sizingOptions = []
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        let railLine = Self.solid(NSColor(white: 0x30 / 255.0, alpha: 1))
+        let sidebarLine = Self.solid(NSColor(white: 0x30 / 255.0, alpha: 1))
 
-        content.addSubview(scrollView)
-        content.addSubview(panel)
-        content.addSubview(band)
-        content.addSubview(hairline)
-        content.addSubview(bar)
+        for view in [scrollView, rail, railLine, sidebar, sidebarLine, band, hairline, bar] as [NSView] { content.addSubview(view) }
+        let top = content.safeAreaLayoutGuide.topAnchor
         NSLayoutConstraint.activate([
             band.topAnchor.constraint(equalTo: content.topAnchor),
             band.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             band.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            band.bottomAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            band.bottomAnchor.constraint(equalTo: top),
             hairline.topAnchor.constraint(equalTo: band.bottomAnchor, constant: -1),
             hairline.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             hairline.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             hairline.heightAnchor.constraint(equalToConstant: 1),
-            panel.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
-            panel.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            panel.bottomAnchor.constraint(equalTo: bar.topAnchor),
-            panelWidth,
-            scrollView.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: panel.trailingAnchor),
+            rail.topAnchor.constraint(equalTo: top),
+            rail.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            rail.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            rail.widthAnchor.constraint(equalToConstant: Self.railWidth),
+            railLine.topAnchor.constraint(equalTo: top),
+            railLine.leadingAnchor.constraint(equalTo: rail.trailingAnchor),
+            railLine.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            railLine.widthAnchor.constraint(equalToConstant: 1),
+            sidebar.topAnchor.constraint(equalTo: top),
+            sidebar.leadingAnchor.constraint(equalTo: railLine.trailingAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: Self.sidebarWidth),
+            sidebarLine.topAnchor.constraint(equalTo: top),
+            sidebarLine.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            sidebarLine.bottomAnchor.constraint(equalTo: bar.topAnchor),
+            sidebarLine.widthAnchor.constraint(equalToConstant: 1),
+            scrollView.topAnchor.constraint(equalTo: top),
+            scrollView.leadingAnchor.constraint(equalTo: sidebarLine.trailingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bar.topAnchor),
             bar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -272,25 +253,33 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         window.contentView = content
     }
 
+    private static func solid(_ color: NSColor) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = color.cgColor
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }
+
     private func sizeWindowToFit() {
         guard let window, let screen = NSScreen.withMouse ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
-        let chrome = CGSize(width: 0, height: 52 + 51)
+        let chrome = CGSize(width: Self.sideWidth, height: 52 + 51)
         let margin: CGFloat = 60
-        let maxContent = CGSize(width: visible.width * 0.85 - margin * 2, height: visible.height * 0.88 - chrome.height - margin * 2)
+        let maxContent = CGSize(width: visible.width * 0.9 - chrome.width - margin * 2, height: visible.height * 0.88 - chrome.height - margin * 2)
         let fit = min(1, maxContent.width / doc.imageSize.width, maxContent.height / doc.imageSize.height)
         // Small (area) captures still get a roomy editor, especially in height.
-        let minimum = CGSize(width: max(window.minSize.width, 1100), height: min(760, visible.height * 0.85))
+        let minimum = CGSize(width: max(window.minSize.width, 1100 + Self.sideWidth / 2), height: min(760, visible.height * 0.85))
         let aspect = doc.imageSize.height / max(doc.imageSize.width, 1), room = maxContent.height / maxContent.width
         if aspect > room * 2 || aspect < room / 2 {
             // Long scrolling capture: the tallest (widest) editor, filled edge to edge by `zoomToFit`.
-            window.setContentSize(CGSize(width: max(minimum.width, aspect > 1 ? 0 : maxContent.width + margin * 2),
+            window.setContentSize(CGSize(width: max(minimum.width, aspect > 1 ? 0 : maxContent.width + margin * 2 + chrome.width),
                                          height: maxContent.height + margin * 2 + chrome.height))
             window.center()
             DispatchQueue.main.async { [weak self] in self?.zoomToFit() }
             return
         }
-        let size = CGSize(width: max(minimum.width, doc.imageSize.width * fit + margin * 2),
+        let size = CGSize(width: max(minimum.width, doc.imageSize.width * fit + margin * 2 + chrome.width),
                           height: max(minimum.height, doc.imageSize.height * fit + margin * 2 + chrome.height))
         window.setContentSize(size)
         window.center()
@@ -300,16 +289,13 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
     // MARK: Toolbar
 
     private enum ID {
-        static let modes = NSToolbarItem.Identifier("modes")
-        static let crop = NSToolbarItem.Identifier("crop")
         static let tools = NSToolbarItem.Identifier("tools")
-        static let options = NSToolbarItem.Identifier("options")
         static let save = NSToolbarItem.Identifier("save")
         static let done = NSToolbarItem.Identifier("done")
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [ID.modes, ID.tools, ID.options, .flexibleSpace, ID.save, ID.done]
+        [ID.tools, .flexibleSpace, ID.save, ID.done]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -318,17 +304,9 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch id {
-        case ID.modes:
-            return modeButtons(id, label: "Modes", trailing: 4, [
-                ModeButton(doc: doc, glyph: .crop, tip: "Crop & Resize (K)", isActive: { $0.isCropping }) { [weak self] in self?.cropTapped() },
-                ModeButton(doc: doc, glyph: .addImage, tip: "Add screenshot", isActive: { _ in false }) { [weak self] in self?.addImageTapped() },
-                ModeButton(doc: doc, glyph: .background, tip: "Add background (B)", isActive: { $0.isBackgroundPanelOpen }) { [weak self] in
-                    self?.backgroundTapped()
-                },
-            ])
         case ID.tools:
             let picker = ToolPickerHostingView(rootView: ToolPicker(doc: doc, onSelect: { [weak self] tool in
-                self?.select(tool)
+                self?.pickTool(tool)
                 if let canvas = self?.canvas { self?.window?.makeFirstResponder(canvas) }
             }))
             picker.sizingOptions = [.intrinsicContentSize]
@@ -336,20 +314,6 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
             item.view = picker
             item.isBordered = false
             item.label = "Tools"
-            return item
-        case ID.options:
-            colorItem.toolTip = "Color"
-            colorItem.dropsDown = true
-            lockItem.onClick = { [weak self] in self?.lockTapped() }
-            amount.onChange = { [weak self] value in self?.amountChanged(value) }
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.view = optionStack
-            item.isBordered = false
-            item.label = "Options"
-            refreshColorItem()
-            refreshSizeItem()
-            refreshLock()
-            refreshOptionItems()
             return item
         case ID.save:
             return barButton(id, title: "Save as...", tip: "Save as... Choose export location and file name", prominent: false) { [weak self] in
@@ -364,11 +328,11 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         }
     }
 
-    /// Text button "Save as...": a 26pt capsule, blue when prominent. `trailing` widens the
-    /// toolbar's 8pt right margin to 13pt.
+    /// Text button "Save as...": a 26pt capsule, blue when prominent; dimmed and off while cropping. `trailing`
+    /// widens the toolbar's 8pt right margin to 13pt.
     private func barButton(_ id: NSToolbarItem.Identifier, title: String, tip: String, prominent: Bool, trailing: CGFloat = 0,
                            action: @escaping () -> Void) -> NSToolbarItem {
-        let host = NSHostingView(rootView: Button(title, action: action).buttonStyle(BarTextButtonStyle(prominent: prominent)).help(tip)
+        let host = NSHostingView(rootView: CropAwareBarButton(doc: doc, title: title, tip: tip, prominent: prominent, action: action)
             .padding(.trailing, trailing))
         host.sizingOptions = [.intrinsicContentSize]
         let item = NSToolbarItem(itemIdentifier: id)
@@ -376,73 +340,6 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         item.isBordered = false
         item.label = title
         return item
-    }
-
-    private func refreshColorItem() {
-        let item = colorItem
-        item.value = .image(OptionGlyph.swatch(doc.color.nsColor))
-        let menu = NSMenu()
-        for color in AnnotationColor.palette {
-            let entry = NSMenuItem(title: "", action: #selector(colorPicked(_:)), keyEquivalent: "")
-            entry.target = self
-            entry.image = SwatchImage.circle(color.nsColor, diameter: 24, ring: color == doc.color)
-            entry.representedObject = NSNumber(value: color.hex)
-            // Accessibility setting "Show color names": the name beside each swatch.
-            if Defaults[Prefs.annotateColorNames] { entry.title = Self.colorNames[color.hex] ?? "" } else { entry.toolTip = Self.colorNames[color.hex] }
-            Self.showImage(entry)
-            menu.addItem(entry)
-        }
-        menu.addItem(.separator())
-        let custom = NSMenuItem(title: "", action: #selector(customColor), keyEquivalent: "")
-        custom.target = self
-        custom.image = SwatchImage.colorWheel(diameter: 24)
-        if Defaults[Prefs.annotateColorNames] { custom.title = "Custom Color…" } else { custom.toolTip = "Custom color…" }
-        Self.showImage(custom)
-        menu.addItem(custom)
-        item.menu = menu
-    }
-
-    /// macOS 27 hides menu item images unless an item opts in.
-    private static func showImage(_ item: NSMenuItem) {
-        if #available(macOS 27.0, *) { item.preferredImageVisibility = .visible }
-    }
-
-    private static let colorNames: [UInt32: String] = [
-        0x000000: "Black", 0xE5484A: "Red", 0xF09235: "Orange", 0xFAE24C: "Yellow", 0x70D363: "Green",
-        0x66CCC1: "Teal", 0x3478F6: "Blue", 0x8254F6: "Purple", 0xEA456D: "Pink", 0xFFFFFF: "White",
-    ]
-
-    private func refreshSizeItem() {
-        let item = sizeItem
-        let menu = NSMenu()
-        if optionsTool == .text {
-            item.value = .text("\(Int(doc.fontSize)) pt")
-            item.toolTip = "Font size"
-            for size in AnnotationStyle.fontSizes {
-                let entry = NSMenuItem(title: "\(Int(size)) pt", action: #selector(fontSizePicked(_:)), keyEquivalent: "")
-                entry.target = self
-                entry.state = size == doc.fontSize ? .on : .off
-                entry.representedObject = NSNumber(value: Double(size))
-                menu.addItem(entry)
-            }
-        } else {
-            // Counters share one size; the thickness steps pick it.
-            let step = optionsTool == .counter ? doc.shownCounter.thicknessStep : doc.thickness
-            item.value = .glyph(OptionGlyph.thickness(AnnotationStyle.thicknesses[step]))
-            item.toolTip = optionsTool == .counter ? "Size" : "Thickness"
-            for (i, width) in AnnotationStyle.thicknesses.enumerated() {
-                let entry = NSMenuItem(title: "", action: #selector(thicknessPicked(_:)), keyEquivalent: "")
-                entry.target = self
-                entry.image = SwatchImage.stroke(width: 1 + width / 3.6, size: 22)
-                entry.toolTip = "\(Int(width)) pt"
-                Self.showImage(entry)
-                entry.state = i == step ? .on : .off
-                entry.tag = i
-                menu.addItem(entry)
-            }
-        }
-        item.menu = menu
-        fitOptionStack()
     }
 
     // MARK: Actions
@@ -453,90 +350,42 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         canvas.endTextEditing()
         doc.selectedID = nil
         doc.tool = tool
-        refreshSizeItem()
-        refreshOptionItems()
+    }
+
+    /// A tool picked in the toolbar (or by its key): the sidebar shows its options.
+    private func pickTool(_ tool: AnnotateTool) {
+        guard !doc.isCropping else { NSSound.beep(); return }
+        select(tool)
+        if editorModel.mode != .annotate { setMode(.annotate) }
     }
 
     /// The options shown are the selected object's,
     /// otherwise the current tool's.
     var optionsTool: AnnotateTool { doc.selected.map { AnnotateTool(drawing: $0.kind) } ?? doc.tool }
 
-    private func selectionChanged() {
-        doc.adoptStyleOfSelection()
-        refreshColorItem()
-        refreshSizeItem()
-        refreshOptionItems()
-    }
+    /// The sidebar shows the selection's options (they follow the document).
+    private func selectionChanged() { doc.adoptStyleOfSelection() }
 
-    @objc private func colorPicked(_ sender: NSMenuItem) {
-        guard let hex = (sender.representedObject as? NSNumber)?.uint32Value else { return }
-        doc.color = AnnotationColor(hex: hex)
-        refreshColorItem()
-        canvas.styleChanged()
-    }
+    // MARK: Modes
 
-    @objc private func customColor() {
-        let panel = NSColorPanel.shared
-        panel.setTarget(self)
-        panel.setAction(#selector(colorPanelChanged(_:)))
-        panel.color = doc.color.nsColor
-        panel.orderFront(nil)
-    }
-
-    @objc private func colorPanelChanged(_ sender: NSColorPanel) {
-        doc.color = AnnotationColor(sender.color)
-        refreshColorItem()
-        canvas.styleChanged()
-    }
-
-    @objc private func thicknessPicked(_ sender: NSMenuItem) {
-        if optionsTool == .counter {
-            doc.changeCounter { $0.setThicknessStep(sender.tag) }
-            refreshStyleItem()
-        } else {
-            doc.thickness = sender.tag
-            canvas.styleChanged()
+    /// The mode rail: Annotate, Background, Add Image or Crop & Resize. Another mode while cropping cancels the crop.
+    func setMode(_ mode: AnnotateMode) {
+        let current = editorModel.mode
+        if current == .crop {
+            guard mode != .crop else { return }
+            modeBeforeCrop = mode
+            cancelCrop()
+            return
         }
-        refreshSizeItem()
+        if mode == .crop { beginCrop(); return }
+        editorModel.mode = mode
+        doc.isBackgroundPanelOpen = mode == .background
+        // "Remember if background tool was opened".
+        UserDefaults.standard.set(mode == .background, forKey: "background.panelOpen")
+        window?.makeFirstResponder(canvas)
     }
 
-    @objc private func fontSizePicked(_ sender: NSMenuItem) {
-        doc.fontSize = CGFloat((sender.representedObject as? NSNumber)?.doubleValue ?? 30)
-        refreshSizeItem()
-        canvas.styleChanged()
-    }
-
-    /// One toolbar item holding the mode buttons 6pt apart (separate items would sit 8pt apart).
-    /// `trailing` widens the system's 8pt gap to the next item. Unbordered, so macOS adds no glass bezel.
-    fileprivate func modeButtons(_ id: NSToolbarItem.Identifier, label: String, trailing: CGFloat = 0, _ buttons: [ModeButton]) -> NSToolbarItem {
-        let host = NSHostingView(rootView: HStack(spacing: 6) { ForEach(buttons.indices, id: \.self) { buttons[$0] } }.padding(.trailing, trailing))
-        host.sizingOptions = [.intrinsicContentSize]
-        let item = NSToolbarItem(itemIdentifier: id)
-        item.view = host
-        item.isBordered = false
-        item.label = label
-        return item
-    }
-
-    @objc private func cropTapped() { doc.isCropping ? cancelCrop() : beginCrop() }
-    /// The Add screenshot menu: Take Screenshot (⇧⌘I) or Choose From File... (⌘I). The image becomes a
-    /// movable, corner-resizable object on the canvas (the canvas grows to fit it).
-    @objc private func addImageTapped() {
-        let menu = NSMenu()
-        let take = NSMenuItem(title: "Take Screenshot", action: #selector(addScreenshot(_:)), keyEquivalent: "I")
-        take.target = self
-        menu.addItem(take)
-        let file = NSMenuItem(title: "Choose From File...", action: #selector(addImageFromFile(_:)), keyEquivalent: "i")
-        file.target = self
-        menu.addItem(file)
-        let anchor = window?.toolbar?.items.first { $0.itemIdentifier == ID.modes }?.view
-        if let anchor {
-            // Below the Add screenshot button (the middle of the three mode buttons).
-            menu.popUp(positioning: nil, at: CGPoint(x: 42, y: anchor.isFlipped ? anchor.bounds.maxY + 6 : -6), in: anchor)
-        } else {
-            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        }
-    }
+    @objc private func cropTapped() { doc.isCropping ? cancelCrop() : setMode(.crop) }
 
     /// Hides the editor, lets the user capture an area, then adds it.
     @objc func addScreenshot(_ sender: Any?) {
@@ -587,24 +436,14 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSTo
         let limit = min(1, doc.imageSize.width / max(pointSize.width, 1), doc.imageSize.height / max(pointSize.height, 1))
         let size = CGSize(width: (pointSize.width * limit).rounded(), height: (pointSize.height * limit).rounded())
         // The move tool, so the new image can be dragged and resized right away.
-        select(.select)
+        pickTool(.select)
         doc.addImage(image, size: size, center: center)
         window?.makeFirstResponder(canvas)
     }
+    /// B: Background mode, or back to Annotate.
     @objc private func backgroundTapped() {
         guard !doc.isCropping else { NSSound.beep(); return }
-        setBackgroundPanel(open: !doc.isBackgroundPanelOpen)
-    }
-
-    /// Shows or hides the Background sidebar (and remembers it for the next editor).
-    fileprivate func setBackgroundPanel(open: Bool, remember: Bool = true) {
-        doc.isBackgroundPanelOpen = open
-        if remember { UserDefaults.standard.set(open, forKey: "background.panelOpen") }
-        guard let panel = (panelWidth?.firstItem as? NSView) else { return }
-        panel.isHidden = !open
-        panelWidth?.constant = open ? 250 : 0
-        window?.contentView?.layoutSubtreeIfNeeded()
-        zoomToFit()
+        setMode(editorModel.mode == .background ? .annotate : .background)
     }
 
     private func handle(_ command: String) {
@@ -870,33 +709,8 @@ final class CenteringClipView: NSClipView {
     }
 }
 
-/// Symbol size for the SF Symbol toolbar buttons (smaller than default toolbar symbols).
-enum ToolbarGlyph {
-    static let config = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .medium)
-}
-
-/// Small images for toolbar items and menus.
+/// Small images for the sidebar and menus.
 enum SwatchImage {
-    static func circle(_ color: NSColor, diameter: CGFloat, ring: Bool) -> NSImage {
-        let size = NSSize(width: diameter + 6, height: diameter + 6)
-        return NSImage(size: size, flipped: false) { rect in
-            let c = rect.insetBy(dx: 3, dy: 3)
-            if ring {
-                color.withAlphaComponent(0.45).setStroke()
-                let r = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
-                r.lineWidth = 2
-                r.stroke()
-            }
-            color.setFill()
-            NSBezierPath(ovalIn: c.insetBy(dx: ring ? 1.5 : 0, dy: ring ? 1.5 : 0)).fill()
-            NSColor.white.withAlphaComponent(0.25).setStroke()
-            let border = NSBezierPath(ovalIn: c.insetBy(dx: 0.5, dy: 0.5))
-            border.lineWidth = 0.5
-            border.stroke()
-            return true
-        }
-    }
-
     static func colorWheel(diameter: CGFloat) -> NSImage {
         let size = NSSize(width: diameter + 6, height: diameter + 6)
         return NSImage(size: size, flipped: false) { rect in
@@ -932,237 +746,89 @@ enum SwatchImage {
             return true
         }
     }
-
-    /// Diagonal stroke glyph used for the thickness menu (template, so it follows menu highlighting).
-    static func stroke(width: CGFloat, size: CGFloat) -> NSImage {
-        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            NSColor.black.setStroke()
-            let p = NSBezierPath()
-            p.lineWidth = width
-            p.lineCapStyle = .round
-            p.move(to: NSPoint(x: rect.minX + 3, y: rect.minY + 3))
-            p.line(to: NSPoint(x: rect.maxX - 3, y: rect.maxY - 3))
-            p.stroke()
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }
 }
 
-// MARK: - Per-tool options
+// MARK: - Sidebar actions
 
 extension AnnotateWindowController {
-    private func optionViews(for tool: AnnotateTool) -> [NSView] {
-        switch tool {
-        case .select: []
-        case .filledRectangle: [colorItem.view]
-        case .rectangle, .ellipse, .line: [colorItem.view, sizeItem.view]
-        case .arrow, .text, .counter: [colorItem.view, sizeItem.view, styleItem.view]
-        case .redact, .spotlight: [styleItem.view, amountView]
-        case .draw, .highlighter: [colorItem.view, sizeItem.view, lockItem.view]
-        }
+    var sidebarActions: AnnotateSidebarActions {
+        AnnotateSidebarActions(
+            setColor: { [weak self] color in
+                guard let self else { return }
+                self.doc.color = color
+                self.canvas.styleChanged()
+            },
+            customColor: { [weak self] in
+                guard let self else { return }
+                let panel = NSColorPanel.shared
+                panel.setTarget(self)
+                panel.setAction(#selector(self.colorPanelChangedForSidebar(_:)))
+                panel.color = self.doc.color.nsColor
+                panel.orderFront(nil)
+            },
+            setThickness: { [weak self] step in
+                guard let self else { return }
+                // Counters share one size; the thickness steps pick it.
+                if self.optionsTool == .counter {
+                    self.doc.changeCounter { $0.setThicknessStep(step) }
+                } else {
+                    self.doc.thickness = step
+                    self.canvas.styleChanged()
+                }
+            },
+            setFontSize: { [weak self] size in
+                self?.doc.fontSize = size
+                self?.canvas.styleChanged()
+            },
+            setArrowStyle: { [weak self] style in self?.doc.arrowStyle = style; self?.restyleSelection() },
+            setTextStyle: { [weak self] style in self?.doc.textStyle = style; self?.restyleSelection() },
+            setRedactMode: { [weak self] mode in self?.doc.redactMode = mode; self?.restyleSelection() },
+            setSpotlightShape: { [weak self] shape in self?.doc.spotlightShape = shape; self?.restyleSelection() },
+            setCounterStyle: { [weak self] style in self?.doc.changeCounter { $0.style = style } },
+            setCounterStart: { [weak self] start in self?.doc.counter.start = start },
+            setCounterSize: { [weak self] size in self?.doc.changeCounter { $0.size = size } },
+            setAmount: { [weak self] value in
+                guard let self else { return }
+                if self.optionsTool == .spotlight { self.doc.spotlightAmount = value } else { self.doc.redactAmount = value }
+                self.restyleSelection()
+            },
+            setCanvasUnlocked: { [weak self] unlocked in self?.doc.canvasUnlocked = unlocked },
+            takeScreenshot: { [weak self] in self?.addScreenshot(nil) },
+            chooseImage: { [weak self] in self?.addImageFromFile(nil) },
+            setCropRatio: { [weak self] ratio in self?.crop?.apply(ratio) },
+            setCropFill: { [weak self] fill in
+                self?.crop?.fill = fill
+                self?.updateCropFill()
+            },
+            customCropFill: { [weak self] in self?.cropCustomFill() },
+            rotate: { [weak self] in self?.transformCropImage(rotate: true) },
+            flip: { [weak self] in self?.transformCropImage(rotate: false) },
+            cancelCrop: { [weak self] in self?.cancelCrop() },
+            applyCrop: { [weak self] in self?.applyCrop() }
+        )
     }
 
-    /// Shows the options of the current tool after the tool picker.
-    func refreshOptionItems() {
-        let wanted = optionViews(for: optionsTool)
-        if optionStack.arrangedSubviews != wanted {
-            optionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            wanted.forEach { optionStack.addArrangedSubview($0) }
-        }
-        refreshStyleItem()
-        refreshAmount()
-        fitOptionStack()
+    @objc fileprivate func colorPanelChangedForSidebar(_ sender: NSColorPanel) {
+        doc.color = AnnotationColor(sender.color)
+        canvas.styleChanged()
     }
 
-    /// The toolbar keeps an item's first width, so the stack gets an explicit one whenever its buttons change
-    /// (after SwiftUI has measured new labels such as "36 pt").
-    func fitOptionStack() {
-        DispatchQueue.main.async { [self] in
-            optionStackWidth.isActive = false
-            optionStack.layoutSubtreeIfNeeded()
-            optionStackWidth.constant = optionStack.fittingSize.width
-            optionStackWidth.isActive = true
-        }
-    }
-
-    private func menuItem(_ title: String, image: NSImage?, checked: Bool, tag: Int, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.image = image
-        item.tag = tag
-        item.state = checked ? .on : .off
-        if #available(macOS 27.0, *) { item.preferredImageVisibility = .visible }
-        return item
-    }
-
-    func refreshStyleItem() {
-        let item = styleItem
-        let menu = NSMenu()
-        switch optionsTool {
-        case .arrow:
-            item.value = .glyph(OptionGlyph.arrowStyle(doc.arrowStyle))
-            item.toolTip = "Arrow style"
-            for style in ArrowStyle.allCases {
-                menu.addItem(menuItem(style.title, image: OptionGlyph.arrowPreview(style), checked: style == doc.arrowStyle,
-                                      tag: style.rawValue, action: #selector(arrowStylePicked(_:))))
-            }
-        case .text:
-            item.value = .glyph(OptionGlyph.textStyle)
-            item.toolTip = "Text style"
-            for style in TextStyle.allCases {
-                menu.addItem(menuItem(style.title, image: SwatchImage.textStyleSample(style), checked: style == doc.textStyle,
-                                      tag: style.rawValue, action: #selector(textStylePicked(_:))))
-            }
-        case .redact:
-            item.value = .glyph(OptionGlyph.redact(doc.redactMode))
-            item.toolTip = "Redact mode"
-            for mode in RedactMode.allCases {
-                menu.addItem(menuItem(mode.title, image: OptionGlyph.redact(mode), checked: mode == doc.redactMode,
-                                      tag: mode.rawValue, action: #selector(redactModePicked(_:))))
-            }
-        case .spotlight:
-            item.value = .glyph(OptionGlyph.spotlight(doc.spotlightShape))
-            item.toolTip = "Spotlight shape"
-            for shape in SpotlightShape.allCases {
-                let entry = menuItem("", image: OptionGlyph.spotlight(shape), checked: shape == doc.spotlightShape,
-                                     tag: shape.rawValue, action: #selector(spotlightShapePicked(_:)))
-                entry.toolTip = shape.title
-                menu.addItem(entry)
-            }
-        case .counter:
-            item.value = .glyph(OptionGlyph.counterStyle)
-            item.toolTip = "Numbering style, starting number and size"
-            for style in CounterStyle.allCases {
-                menu.addItem(menuItem(style.title, image: nil, checked: style == doc.shownCounter.style,
-                                      tag: style.rawValue, action: #selector(counterStylePicked(_:))))
-            }
-            menu.addItem(.separator())
-            let start = NSMenuItem()
-            start.view = CounterStartView(value: doc.counter.start) { [weak self] value in self?.doc.counter.start = value }
-            menu.addItem(start)
-            menu.addItem(.separator())
-            let size = NSMenuItem()
-            size.view = CounterSizeView(value: doc.shownCounter.size) { [weak self] value in
-                self?.doc.changeCounter { $0.size = value }
-                self?.refreshSizeItem()
-            }
-            menu.addItem(size)
-        default:
-            break
-        }
-        item.menu = menu
-    }
-
-    func refreshAmount() {
-        amount.value = optionsTool == .spotlight ? doc.spotlightAmount : doc.redactAmount
-        amountView.toolTip = optionsTool == .spotlight ? "Dimming" : "Strength"
-    }
-
-    private func refreshLock() {
-        lockItem.value = .glyph(OptionGlyph.symbol(doc.canvasUnlocked ? "lock.open.fill" : "lock.fill", 13))
-        lockItem.toolTip = doc.canvasUnlocked ? "Lock canvas" : "Unlock canvas"
-    }
-
-    private func lockTapped() {
-        doc.canvasUnlocked.toggle()
-        refreshLock()
-    }
-
-    private func amountChanged(_ value: CGFloat) {
-        if optionsTool == .spotlight { doc.spotlightAmount = value } else { doc.redactAmount = value }
-        restyleSelection()
-    }
-
-    @objc private func arrowStylePicked(_ sender: NSMenuItem) {
-        doc.arrowStyle = ArrowStyle(rawValue: sender.tag) ?? .standard
-        refreshStyleItem(); restyleSelection()
-    }
-
-    @objc private func textStylePicked(_ sender: NSMenuItem) {
-        doc.textStyle = TextStyle(rawValue: sender.tag) ?? .standard
-        refreshStyleItem(); restyleSelection()
-    }
-
-    @objc private func redactModePicked(_ sender: NSMenuItem) {
-        doc.redactMode = RedactMode(rawValue: sender.tag) ?? .pixelate
-        refreshStyleItem(); restyleSelection()
-    }
-
-    @objc private func spotlightShapePicked(_ sender: NSMenuItem) {
-        doc.spotlightShape = SpotlightShape(rawValue: sender.tag) ?? .rounded
-        refreshStyleItem(); restyleSelection()
-    }
-
-    @objc private func counterStylePicked(_ sender: NSMenuItem) {
-        doc.changeCounter { $0.style = CounterStyle(rawValue: sender.tag) ?? .numbers }
-        refreshStyleItem()
-    }
-
-    /// Applies the toolbar options to the selected object (the options shown are always the selection's).
-    private func restyleSelection() {
+    /// Applies the sidebar's options to the selected object (the options shown are always the selection's).
+    fileprivate func restyleSelection() {
         if doc.selected != nil || doc.editingTextID != nil { canvas.styleChanged() }
     }
 }
 
-/// "Starting number:" row inside the counter menu.
-final class CounterStartView: NSView, NSTextFieldDelegate {
-    private let onChange: (Int) -> Void
-    private let field = NSTextField()
-
-    init(value: Int, onChange: @escaping (Int) -> Void) {
-        self.onChange = onChange
-        super.init(frame: NSRect(x: 0, y: 0, width: 230, height: 30))
-        let label = NSTextField(labelWithString: "Starting number:")
-        label.font = .menuFont(ofSize: 13)
-        label.frame = NSRect(x: 20, y: 6, width: 130, height: 18)
-        field.integerValue = value
-        field.alignment = .right
-        field.frame = NSRect(x: 160, y: 4, width: 50, height: 22)
-        field.delegate = self
-        addSubview(label)
-        addSubview(field)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func controlTextDidChange(_ obj: Notification) { onChange(max(1, field.integerValue)) }
-}
-
-/// "Size:" slider inside the counter menu; resizes every counter.
-final class CounterSizeView: NSView {
-    private let onChange: (CGFloat) -> Void
-
-    init(value: CGFloat, onChange: @escaping (CGFloat) -> Void) {
-        self.onChange = onChange
-        super.init(frame: NSRect(x: 0, y: 0, width: 230, height: 34))
-        let label = NSTextField(labelWithString: "Size:")
-        label.font = .menuFont(ofSize: 13)
-        label.frame = NSRect(x: 20, y: 8, width: 40, height: 18)
-        let slider = NSSlider(value: Double(value), minValue: 0, maxValue: 1, target: self, action: #selector(changed(_:)))
-        slider.controlSize = .small
-        slider.isContinuous = true
-        slider.frame = NSRect(x: 64, y: 7, width: 146, height: 20)
-        addSubview(label)
-        addSubview(slider)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func changed(_ sender: NSSlider) { onChange(sender.doubleValue) }
-}
-
 extension SwatchImage {
-    /// "Text" rendered in a text style, for the style menu.
-    static func textStyleSample(_ style: TextStyle) -> NSImage {
+    /// "Text" rendered in a text style, for the style choices.
+    static func textStyleSample(_ style: TextStyle, color: AnnotationColor = AnnotationColor(hex: 0x8E8E93)) -> NSImage {
         let size: CGFloat = 15
         let font = style.font(size: size)
         let textSize = AnnotationRenderer.styledTextSize("Text", size: size, style: style)
         let image = NSImage(size: NSSize(width: 52, height: 24), flipped: true) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             let origin = CGPoint(x: (rect.width - textSize.width) / 2, y: (rect.height - textSize.height) / 2)
-            AnnotationRenderer.drawStyledText("Text", at: origin, size: size, color: AnnotationColor(hex: 0x8E8E93), style: style, ctx: ctx)
+            AnnotationRenderer.drawStyledText("Text", at: origin, size: size, color: color, style: style, ctx: ctx)
             _ = font
             return true
         }
@@ -1173,19 +839,9 @@ extension SwatchImage {
 // MARK: - Crop & Resize mode
 
 extension AnnotateWindowController {
-    private enum CropID {
-        static let ratio = NSToolbarItem.Identifier("crop.ratio")
-        static let size = NSToolbarItem.Identifier("crop.size")
-        static let fill = NSToolbarItem.Identifier("crop.fill")
-        static let rotate = NSToolbarItem.Identifier("crop.rotate")
-        static let imageSize = NSToolbarItem.Identifier("crop.imageSize")
-        static let cancel = NSToolbarItem.Identifier("crop.cancel")
-        static let apply = NSToolbarItem.Identifier("crop.apply")
-        static let all = [ratio, size, fill, rotate, imageSize, cancel, apply]
-    }
-
+    /// Crop & Resize: the sidebar shows its settings, the tools rest; Cancel, Crop or another mode ends it.
     func beginCrop() {
-        guard let window, let toolbar = window.toolbar, !doc.isCropping else { return }
+        guard window != nil, !doc.isCropping else { return }
         canvas.endTextEditing()
         doc.selectedID = nil
         // Crop works on the screenshot itself; the background is hidden meanwhile and kept afterwards.
@@ -1200,9 +856,10 @@ extension AnnotateWindowController {
         doc.isCropping = true
         doc.backgroundBeforeCrop = doc.background
         cropImageEdits = 0
-        // The Background tool would edit that room: it's hidden while cropping and comes back afterwards.
-        panelOpenBeforeCrop = doc.isBackgroundPanelOpen
-        if panelOpenBeforeCrop { setBackgroundPanel(open: false, remember: false) }
+        // Background mode would edit that room: it's left while cropping and comes back afterwards.
+        modeBeforeCrop = editorModel.mode
+        doc.isBackgroundPanelOpen = false
+        editorModel.mode = .crop
 
         let overlay = CropOverlayView(state: state)
         overlay.magnification = { [weak self] in self?.scrollViewMagnification ?? 1 }
@@ -1236,27 +893,9 @@ extension AnnotateWindowController {
         // The crop may go anywhere: the screenshot sits in a room as big as the view (and the frame) need, filled
         // like the result.
         updateCropRoom()
-        observeCropRatio()
+        updateCropFill()
 
-        if let bottomBar {
-            let bar = NSHostingView(rootView: CropBottomBar(state: state))
-            // The zoom menu on the left stays usable.
-            var frame = bottomBar.frame
-            frame.origin.x += 110
-            frame.size.width -= 110
-            bar.frame = frame
-            bar.autoresizingMask = [.width, .maxYMargin]
-            bottomBar.superview?.addSubview(bar, positioned: .above, relativeTo: bottomBar)
-            cropBar = bar
-        }
-
-        savedToolbarItems = toolbar.items.map(\.itemIdentifier)
-        toolbar.delegate = cropToolbarDelegate
-        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
-        for (i, id) in ([ID.crop, .space] + CropID.all.prefix(5) + [.flexibleSpace] + CropID.all.suffix(2)).enumerated() {
-            toolbar.insertItem(withItemIdentifier: id, at: i)
-        }
-        window.makeFirstResponder(canvas)
+        window?.makeFirstResponder(canvas)
         DispatchQueue.main.async { self.zoomToFit() }
     }
 
@@ -1265,7 +904,7 @@ extension AnnotateWindowController {
     @objc func applyCrop() { endCrop(apply: true) }
 
     private func endCrop(apply: Bool) {
-        guard let window, let toolbar = window.toolbar, let state = crop else { return }
+        guard let state = crop else { return }
         if apply, let flat = doc.flattened(), let result = state.render(flat, scale: doc.scale) {
             doc.replaceImage(result, name: "Crop")
             doc.cropRatio = (state.ratio, state.ratio == .customRatio ? state.typedRatio : nil)
@@ -1273,151 +912,33 @@ extension AnnotateWindowController {
             for _ in 0..<cropImageEdits where doc.undoManager.canUndo { doc.undoManager.undo() }
         }
         cropImageEdits = 0
-        if panelOpenBeforeCrop { setBackgroundPanel(open: true, remember: false) }
         let restored = doc.backgroundBeforeCrop
         doc.isCropping = false
         doc.background = restored
         cropOverlay?.removeFromSuperview()
-        cropBar?.removeFromSuperview()
         cropBackdrop?.removeFromSuperview()
         cropBackdrop = nil
         if let cropScrollObserver { NotificationCenter.default.removeObserver(cropScrollObserver) }
         cropScrollObserver = nil
         canvas.isCropRoom = false
-        cropOverlay = nil; cropBar = nil; crop = nil
-        toolbar.delegate = self
-        while !toolbar.items.isEmpty { toolbar.removeItem(at: 0) }
-        for (i, id) in savedToolbarItems.enumerated() { toolbar.insertItem(withItemIdentifier: id, at: i) }
-        refreshOptionItems()
+        cropOverlay = nil
+        // Back to the mode before (the sidebar no longer needs the crop's state).
+        editorModel.mode = modeBeforeCrop
+        doc.isBackgroundPanelOpen = modeBeforeCrop == .background
+        crop = nil
         canvas.window?.makeFirstResponder(canvas)
         DispatchQueue.main.async { self.zoomToFit() }
     }
 
     fileprivate var scrollViewMagnification: CGFloat { canvas.enclosingScrollView?.magnification ?? 1 }
 
-    fileprivate func cropItem(_ id: NSToolbarItem.Identifier) -> NSToolbarItem? {
-        guard let state = crop else { return nil }
-        switch id {
-        case ID.crop:
-            return modeButtons(id, label: "Crop", [
-                ModeButton(doc: doc, glyph: .crop, tip: "Leave Crop & Resize", isActive: { $0.isCropping }) { [weak self] in self?.cancelCrop() },
-            ])
-        case CropID.ratio:
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.view = cropRatioControl.view
-            item.isBordered = false
-            item.label = "Ratio"
-            refreshCropRatio()
-            return item
-        case CropID.size, CropID.imageSize:
-            let host = NSHostingView(rootView: CropControls(state: state, part: id == CropID.size ? .ratioTerms : .imageSize))
-            host.sizingOptions = [.intrinsicContentSize]
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.view = host
-            item.isBordered = false
-            return item
-        case CropID.fill:
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.view = cropFillControl.view
-            item.isBordered = false
-            item.label = "Fill"
-            refreshCropFill()
-            return item
-        case CropID.rotate:
-            // Rotate and Flip, two icon buttons like the mode buttons.
-            let host = NSHostingView(rootView: HStack(spacing: 8) {
-                ToolbarIconButton(symbol: "rotate.right", tip: "Rotate 90°") { [weak self] in self?.transformCropImage(rotate: true) }
-                ToolbarIconButton(symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right", tip: "Flip horizontally") { [weak self] in
-                    self?.transformCropImage(rotate: false)
-                }
-            })
-            host.sizingOptions = [.intrinsicContentSize]
-            let item = NSToolbarItem(itemIdentifier: id)
-            item.view = host
-            item.isBordered = false
-            item.label = "Rotate"
-            return item
-        case CropID.cancel:
-            return barButton(id, title: "Cancel", tip: "Leave Crop & Resize without changes", prominent: false) { [weak self] in self?.cancelCrop() }
-        case CropID.apply:
-            return barButton(id, title: "Crop", tip: "Apply the crop", prominent: true, trailing: 5) { [weak self] in self?.applyCrop() }
-        default:
-            return nil
-        }
-    }
-
-
-    /// The fill menu: Transparent | Auto | White, Gray, Black | Custom Color...
-    private func refreshCropFill() {
+    /// The crop backdrop shows the fill (the sidebar's Fill).
+    fileprivate func updateCropFill() {
         guard let state = crop else { return }
-        let control = cropFillControl
-        let color = state.fillColor(for: doc.baseImage)
-        // Same swatch as the annotation color button.
-        control.value = .image(color.map { OptionGlyph.swatch(NSColor(cgColor: $0) ?? .white) } ?? SwatchImage.transparentCircle(diameter: 15))
-        control.toolTip = "Fill: \(state.fill.title)"
         cropBackdrop?.fill = state.fillColor(for: doc.baseImage)
-        let menu = NSMenu()
-        let entries: [CropState.Fill?] = [.transparent, nil, .auto, nil, .white, .gray, .black, nil]
-        for (i, fill) in entries.enumerated() {
-            guard let fill else { menu.addItem(.separator()); continue }
-            let entry = NSMenuItem(title: fill.title, action: #selector(cropFillPicked(_:)), keyEquivalent: "")
-            entry.target = self
-            entry.tag = i
-            entry.state = state.fill == fill ? .on : .off
-            entry.image = fill == .transparent ? SwatchImage.transparentCircle(diameter: 18)
-                : SwatchImage.circle(fill.color(for: doc.baseImage).flatMap { NSColor(cgColor: $0) } ?? .white, diameter: 18, ring: false)
-            Self.showImage(entry)
-            menu.addItem(entry)
-        }
-        let custom = NSMenuItem(title: "Custom Color...", action: #selector(cropCustomFill), keyEquivalent: "")
-        custom.target = self
-        custom.image = SwatchImage.colorWheel(diameter: 18)
-        if case .custom = state.fill { custom.state = .on }
-        Self.showImage(custom)
-        menu.addItem(custom)
-        control.menu = menu
     }
 
-    /// The ratio menu: Custom, Original, Square, then the fixed ratios.
-    fileprivate func refreshCropRatio() {
-        guard let state = crop else { return }
-        let control = cropRatioControl
-        control.value = .text(state.ratio.title)
-        control.toolTip = "Aspect ratio"
-        let menu = NSMenu()
-        for (i, ratio) in CropState.Ratio.allCases.enumerated() {
-            if ratio == .original || ratio == .r4x3 || ratio == .r3x4 { menu.addItem(.separator()) }
-            let entry = NSMenuItem(title: ratio.title, action: #selector(cropRatioPicked(_:)), keyEquivalent: "")
-            entry.target = self
-            entry.tag = i
-            entry.state = state.ratio == ratio ? .on : .off
-            menu.addItem(entry)
-        }
-        control.menu = menu
-    }
-
-    /// Keeps the ratio button current when the fields or a rotation change the ratio.
-    fileprivate func observeCropRatio() {
-        guard let state = crop else { return }
-        withObservationTracking { _ = state.ratio; _ = state.typedRatio } onChange: { [weak self] in
-            DispatchQueue.main.async { self?.refreshCropRatio(); self?.observeCropRatio() }
-        }
-    }
-
-    @objc private func cropRatioPicked(_ sender: NSMenuItem) {
-        crop?.apply(CropState.Ratio.allCases[sender.tag])
-        refreshCropRatio()
-    }
-
-    private static let cropFills: [Int: CropState.Fill] = [0: .transparent, 2: .auto, 4: .white, 5: .gray, 6: .black]
-
-    @objc private func cropFillPicked(_ sender: NSMenuItem) {
-        guard let fill = Self.cropFills[sender.tag] else { return }
-        crop?.fill = fill
-        refreshCropFill()
-    }
-
-    @objc private func cropCustomFill() {
+    @objc fileprivate func cropCustomFill() {
         let panel = NSColorPanel.shared
         panel.setTarget(self)
         panel.setAction(#selector(cropFillColorChanged(_:)))
@@ -1427,11 +948,8 @@ extension AnnotateWindowController {
     @objc private func cropFillColorChanged(_ sender: NSColorPanel) {
         guard crop != nil else { return }
         crop?.fill = .custom(AnnotationColor(sender.color).hex)
-        refreshCropFill()
+        updateCropFill()
     }
-
-    @objc private func cropToggleFromToolbar() { cancelCrop() }
-    @objc private func cancelCropAction() { cancelCrop() }
 
     /// Rotate and Flip turn the screenshot right away, annotations included (they stay editable). Each is an undo step; Cancel undoes them.
     fileprivate func transformCropImage(rotate: Bool) {
@@ -1444,7 +962,7 @@ extension AnnotateWindowController {
 
     fileprivate func layOutCropRoom() {
         updateCropRoom(growOnly: true)
-        refreshCropFill()
+        updateCropFill()
         DispatchQueue.main.async { self.zoomToFit() }
     }
 
@@ -1507,123 +1025,11 @@ extension AnnotateWindowController {
     }
 }
 
-/// Toolbar delegate used while cropping (keeps the crop items separate from the annotate toolbar).
-final class CropToolbarDelegate: NSObject, NSToolbarDelegate {
-    weak var owner: AnnotateWindowController?
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [] }
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [] }
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        owner?.cropItem(id)
-    }
-}
-
-/// Ratio fields and Image size for the crop toolbar, in the Annotate toolbar's language: 26pt gray capsules with
-/// 13pt medium text (the ratio menu and fill are `OptionControl`s like the tool options). The two
-/// fields set a ratio such as 1 : 2; the pixel size lives in Image size.
-struct CropControls: View {
-    enum Part { case ratioTerms, imageSize }
-    @Bindable var state: CropState
-    let part: Part
-    @State private var showsImageSize = false
-
-    var body: some View {
-        switch part {
-        case .ratioTerms:
-            HStack(spacing: 0) {
-                CropRatioField(state: state, width: true)
-                Text(verbatim: ":").font(.system(size: 13, weight: .medium)).foregroundStyle(BarStyle.secondary)
-                CropRatioField(state: state, width: false)
-            }
-            .padding(.horizontal, 4)
-            .frame(height: 26)
-            .background(Capsule().fill(BarStyle.fill))
-            .help("Aspect ratio, e.g. 16 : 9 (the side you edit changes)")
-        case .imageSize:
-            Button { showsImageSize.toggle() } label: {
-                let px = state.outputPixels
-                HStack(spacing: 6) {
-                    Text("Image size").foregroundStyle(BarStyle.secondary)
-                    // Plain digits: a localized "1.066" read as "1".
-                    Text(verbatim: "\(Int(px.width)) × \(Int(px.height)) px").monospacedDigit().foregroundStyle(OptionButton.glyphColor)
-                    OptionChevron()
-                }
-            }
-            .buttonStyle(BarMenuButtonStyle(isOpen: showsImageSize))
-            .help("Size of the cropped image")
-            .popover(isPresented: $showsImageSize, arrowEdge: .bottom) { CropImageSizePopover(state: state) }
-        }
-    }
-}
-
 /// Shared look of the Annotate/crop toolbar controls.
 enum BarStyle {
     static let fill = Color.white.opacity(0.2)
     static let secondary = Color.white.opacity(0.5)
     static let font = Font.system(size: 13, weight: .medium)
-}
-
-/// A text capsule with a chevron that opens a popover, like an `OptionButton` (lighter while open).
-struct BarMenuButtonStyle: ButtonStyle {
-    let isOpen: Bool
-    func makeBody(configuration: Configuration) -> some View { BarMenuButtonBody(configuration: configuration, isOpen: isOpen) }
-}
-
-private struct BarMenuButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let isOpen: Bool
-    @State private var hovering = false
-
-    var body: some View {
-        configuration.label
-            .font(BarStyle.font)
-            .padding(.leading, 9)
-            .padding(.trailing, 7)
-            .frame(height: 26)
-            .background(Capsule().fill(Color.white.opacity(isOpen ? 0.4 : 0.2)))
-            .overlay(Capsule().fill(Color.black.opacity(configuration.isPressed ? 0.24 : (hovering && !isOpen ? 0.1 : 0))))
-            .contentShape(Capsule())
-            .animation(.easeOut(duration: 0.15), value: hovering)
-            .onHover { hovering = $0 }
-    }
-}
-
-/// An SF Symbol in a mode-button capsule (Rotate, Flip, the size lock); `active` = blue, as a selected mode.
-struct ToolbarIconButton: View {
-    let symbol: String
-    let tip: String
-    var active = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 12.5, weight: .medium))
-        }
-        .buttonStyle(ModeButtonStyle(active: active))
-        .help(tip)
-    }
-}
-
-/// A two-way segmented capsule in the toolbar's look (px / %).
-struct BarSegments<Value: Hashable>: View {
-    let options: [(String, Value)]
-    @Binding var selection: Value
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(options, id: \.1) { title, value in
-                Button { selection = value } label: {
-                    Text(title).font(BarStyle.font).foregroundStyle(selection == value ? Color.white : BarStyle.secondary)
-                        .frame(minWidth: 30).frame(height: 22)
-                        .background(Capsule().fill(selection == value ? Color.white.opacity(0.25) : .clear))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(2)
-        .background(Capsule().fill(BarStyle.fill))
-        .animation(.easeOut(duration: 0.15), value: selection)
-    }
 }
 
 /// Plain-digit number parsing for the crop fields: "1.600" and "1,600" are 1600 (a localized formatter read the
@@ -1667,7 +1073,7 @@ struct CropDraftField: View {
             }
             .textFieldStyle(.plain)
             .font(BarStyle.font)
-            .foregroundStyle(OptionButton.glyphColor)
+            .foregroundStyle(Color(white: 0.9))
             .monospacedDigit()
             .multilineTextAlignment(.center)
             .frame(width: width)
@@ -1696,85 +1102,19 @@ struct CropRatioField: View {
     }
 }
 
-/// Image size: width and height of the result, a lock that keeps their ratio, pixels or percent. Built from the
-/// toolbar's parts: field capsules, the lock as an icon button (blue while locked), a px/% segment.
-struct CropImageSizePopover: View {
-    @Bindable var state: CropState
-
-    var body: some View {
-        HStack(spacing: 8) {
-            field(width: true)
-            ToolbarIconButton(symbol: state.lockOutputRatio ? "lock.fill" : "lock.open",
-                          tip: state.lockOutputRatio ? "Unlock the ratio" : "Lock the ratio", active: state.lockOutputRatio) {
-                state.lockOutputRatio.toggle()
-            }
-            field(width: false)
-            BarSegments(options: [("px", false), ("%", true)], selection: $state.outputInPercent)
-        }
-        .padding(10)
-    }
-
-    private func field(width: Bool) -> some View {
-        let px = state.outputPixels
-        let value = state.outputInPercent ? ((width ? state.outputScaleX : state.outputScaleY) * 100).rounded()
-                                          : (width ? px.width : px.height)
-        return HStack(spacing: 2) {
-            Text(width ? "W" : "H").font(BarStyle.font).foregroundStyle(BarStyle.secondary)
-            CropDraftField(current: CropNumber.text(value), width: 52) { text in
-                guard let v = CropNumber.parse(text), v > 0 else { return }
-                state.setOutput(v, width: width)
-            }
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .background(Capsule().fill(BarStyle.fill))
-    }
-}
-
-/// The mode button: a 36×26 gray capsule with a light glyph; solid blue with a white glyph while active.
-/// In an inactive window the active button keeps its white glyph but goes gray. Hover darkens; press darkens more and shrinks.
-struct ModeButton: View {
+/// Save as… / Done in the toolbar: off (dimmed) while cropping, like the tools.
+struct CropAwareBarButton: View {
     let doc: AnnotationDocument
-    let glyph: ModeGlyph
+    let title: String
     let tip: String
-    let isActive: (AnnotationDocument) -> Bool
+    let prominent: Bool
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(nsImage: glyph.image)
-        }
-        .buttonStyle(ModeButtonStyle(active: isActive(doc)))
-        .help(tip)
-    }
-}
-
-private struct ModeButtonStyle: ButtonStyle {
-    let active: Bool
-    func makeBody(configuration: Configuration) -> some View { ModeButtonBody(configuration: configuration, active: active) }
-}
-
-private struct ModeButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let active: Bool
-    @State private var hovering = false
-    @Environment(\.controlActiveState) private var windowState
-
-    private static let fill = Color.white.opacity(0.2)
-    private static let activeFill = Color(.displayP3, red: 0x34 / 255.0, green: 0x78 / 255.0, blue: 0xF6 / 255.0)
-    private static let glyph = Color(.displayP3, red: 0xE5 / 255.0, green: 0xE5 / 255.0, blue: 0xE5 / 255.0)
-
-    var body: some View {
-        configuration.label
-            .foregroundStyle(active ? Color.white : Self.glyph)
-            .frame(width: 36, height: 26)
-            .background(Capsule().fill(active && windowState != .inactive ? Self.activeFill : Self.fill))
-            .overlay(Capsule().fill(Color.black.opacity(configuration.isPressed ? 0.24 : (hovering ? 0.1 : 0))).allowsHitTesting(false))
-            .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .animation(.easeOut(duration: 0.12), value: active)
-            .animation(.easeOut(duration: 0.15), value: hovering)
-            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: configuration.isPressed)
-            .onHover { hovering = $0 }
+        Button(title, action: action)
+            .buttonStyle(BarTextButtonStyle(prominent: prominent))
+            .help(doc.isCropping ? "Finish Crop & Resize first (Crop or Cancel in the sidebar)" : tip)
+            .disabled(doc.isCropping)
+            .opacity(doc.isCropping ? 0.45 : 1)
     }
 }

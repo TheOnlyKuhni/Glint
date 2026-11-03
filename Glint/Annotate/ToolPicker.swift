@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Tool selector for the Annotate toolbar: a 24pt capsule of 35pt cells with 1pt separators.
 /// The selected tool is a full-cell blue capsule (gray while the window is inactive); hovering shows a faint one.
-/// Separators next to either disappear. Selection changes without animation.
+/// Separators next to either disappear. Selection changes without animation. While cropping the tools rest: none is
+/// selected and they're dimmed and off until Crop & Resize ends.
 struct ToolPicker: View {
     let doc: AnnotationDocument
     let onSelect: (AnnotateTool) -> Void
@@ -17,16 +18,17 @@ struct ToolPicker: View {
     var body: some View {
         let tools = AnnotateTool.allCases
         let inactive = windowState == .inactive
+        let resting = doc.isCropping
         HStack(spacing: 0) {
             ForEach(Array(tools.enumerated()), id: \.element) { index, tool in
                 if index > 0 {
-                    let highlighted: Set<AnnotateTool> = [doc.tool, hovered].compactMap { $0 }.reduce(into: []) { $0.insert($1) }
+                    let highlighted: Set<AnnotateTool> = [resting ? nil : doc.tool, hovered].compactMap { $0 }.reduce(into: []) { $0.insert($1) }
                     let hidden = highlighted.contains(tool) || highlighted.contains(tools[index - 1])
                     Rectangle()
                         .fill(Color.white.opacity(hidden ? 0 : 0.1))
                         .frame(width: 1, height: 14)
                 }
-                let selected = tool == doc.tool
+                let selected = !resting && tool == doc.tool
                 Button { onSelect(tool) } label: {
                     Image(nsImage: ToolGlyph.image(for: tool))
                         .foregroundStyle(inactive ? Color.white.opacity(0.65) : (selected ? Color.white : Self.glyph))
@@ -36,10 +38,13 @@ struct ToolPicker: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .onHover { hovered = $0 ? tool : (hovered == tool ? nil : hovered) }
+                .onHover { hovered = $0 && !resting ? tool : (hovered == tool ? nil : hovered) }
             }
         }
         .background(Capsule().fill(Color.white.opacity(0.1)))
+        .opacity(resting ? 0.4 : 1)
+        .allowsHitTesting(!resting)
+        .animation(.easeOut(duration: 0.15), value: resting)
     }
 }
 
