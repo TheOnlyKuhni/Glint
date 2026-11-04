@@ -67,7 +67,7 @@ final class EditorHeadBar: NSView {
     }
 }
 
-/// Share in a head bar: the gray capsule of "Save as…" with the share symbol; reports itself as the anchor for the
+/// Share in a head bar: the capsule of "Save as…" with the share symbol; reports itself as the anchor for the
 /// sharing picker.
 struct HeadShareButton: NSViewRepresentable {
     let help: String
@@ -96,6 +96,6 @@ struct HeadShareButton: NSViewRepresentable {
 
     final class AnchorView: NSView {
         var action: ((NSView) -> Void)?
-        override var intrinsicContentSize: NSSize { NSSize(width: 36, height: 26) }
+        override var intrinsicContentSize: NSSize { NSSize(width: 46, height: 32) }
     }
 }

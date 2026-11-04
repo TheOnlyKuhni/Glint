@@ -150,6 +150,8 @@ enum Prefs {
     static let add2xSuffix = Pref(key: "advanced.add2xSuffix", defaultValue: false)
     static let clipboardMode = Pref(key: "advanced.clipboardMode", defaultValue: ClipboardMode.fileAndImage)
     static let historyDays = Pref(key: "advanced.historyDays", defaultValue: 3)
+    /// Days until a capture in the Trash is deleted for good; 0 = only when the Trash is emptied by hand.
+    static let trashDays = Pref(key: "advanced.trashDays", defaultValue: 30)
     /// Capture Text language: "auto" (the system languages) or one recognizer language code.
     static let ocrLanguage = Pref(key: "advanced.ocrLanguage", defaultValue: "auto")
     static let ocrKeepLineBreaks = Pref(key: "advanced.ocrKeepLineBreaks", defaultValue: true)
@@ -251,10 +253,20 @@ enum WallpaperSource: String, CaseIterable, Identifiable {
 }
 
 enum ImageFormat: String, CaseIterable, Identifiable {
-    case png, jpeg, heic
+    case png, jpeg, heic, tiff
     var id: String { rawValue }
     var title: String { rawValue.uppercased() }
     var fileExtension: String { self == .jpeg ? "jpg" : rawValue }
+
+    init?(fileExtension: String) {
+        switch fileExtension.lowercased() {
+        case "png": self = .png
+        case "jpg", "jpeg": self = .jpeg
+        case "heic": self = .heic
+        case "tif", "tiff": self = .tiff
+        default: return nil
+        }
+    }
 }
 
 enum WindowBackground: String { case wallpaper, transparent }

@@ -3,6 +3,45 @@ import SwiftUI
 
 private typealias W = VideoEditorWindowController
 
+/// Saving and deleting background presets. The screenshot and video editors share one list.
+enum BackgroundPresets {
+    /// Asks for a name, then saves `style`.
+    static func save(_ style: BackgroundStyle) {
+        var style = style
+        let number = BackgroundStyle.presets.count + 1
+        let alert = NSAlert()
+        alert.messageText = "Save Preset"
+        alert.informativeText = "Name this background preset."
+        let field = NSTextField(frame: CGRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = "Preset \(number)"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        style.name = name.isEmpty ? "Preset \(number)" : name
+        style.expansion = nil
+        BackgroundStyle.presets.append(style)
+    }
+
+    static func confirmDelete(_ index: Int) {
+        var presets = BackgroundStyle.presets
+        guard presets.indices.contains(index) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(presets[index].name ?? "Preset \(index + 1)")”?"
+        alert.informativeText = "This preset will be removed. This can't be undone."
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        presets.remove(at: index)
+        BackgroundStyle.presets = presets
+        // Keep the Screenshots setting "Background preset" pointing at the same preset.
+        let chosen = Defaults[Prefs.backgroundPreset]
+        if chosen == index { Defaults[Prefs.backgroundPreset] = -1 } else if chosen > index { Defaults[Prefs.backgroundPreset] = chosen - 1 }
+    }
+}
+
 /// The screenshot editor's Background mode (sidebar): presets, fills, and padding, inset, shadow, corners,
 /// alignment and ratio.
 struct BackgroundPanel: View {
@@ -336,38 +375,15 @@ struct BackgroundPanel: View {
     }
 
     private func confirmDelete(_ index: Int) {
-        guard presets.indices.contains(index) else { return }
-        let alert = NSAlert()
-        alert.messageText = "Delete “\(presets[index].name ?? "Preset \(index + 1)")”?"
-        alert.informativeText = "This preset will be removed. This can't be undone."
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        presets.remove(at: index)
-        BackgroundStyle.presets = presets
-        // Keep the Screenshots setting "Background preset" pointing at the same preset.
-        let chosen = Defaults[Prefs.backgroundPreset]
-        if chosen == index { Defaults[Prefs.backgroundPreset] = -1 } else if chosen > index { Defaults[Prefs.backgroundPreset] = chosen - 1 }
+        BackgroundPresets.confirmDelete(index)
+        presets = BackgroundStyle.presets
     }
 
     /// "+": asks for a name, then saves the current background as a preset.
     private func savePreset() {
-        guard var bg = doc.background else { return }
-        let alert = NSAlert()
-        alert.messageText = "Save Preset"
-        alert.informativeText = "Name this background preset."
-        let field = NSTextField(frame: CGRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = "Preset \(presets.count + 1)"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-        bg.name = name.isEmpty ? "Preset \(presets.count + 1)" : name
-        bg.expansion = nil
-        presets.append(bg)
-        BackgroundStyle.presets = presets
+        guard let bg = doc.background else { return }
+        BackgroundPresets.save(bg)
+        presets = BackgroundStyle.presets
     }
 
     /// "+" → Choose Image…: any picture file.

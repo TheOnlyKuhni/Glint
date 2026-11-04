@@ -173,7 +173,9 @@ struct AdvancedSettingsView: View {
     @AppStorage(Prefs.pinShadow) private var pinShadow
     @AppStorage(Prefs.pinBorder) private var pinBorder
     @AppStorage(Prefs.allowURLScheme) private var allowURLScheme
+    @AppStorage(Prefs.trashDays) private var trashDays
     @State private var editingFormat = false
+    @State private var trashCount = HistoryStore.shared.trashCount
 
     var body: some View {
         Form {
@@ -201,8 +203,33 @@ struct AdvancedSettingsView: View {
                     Text("Forever").tag(0)
                 } label: {
                     Text("Keep history")
-                    Text("You can restore old files with \"Capture History\" option from the menu bar.")
+                    Text("You can restore old files with \"Capture History\" option from the menu bar. Captures past this time are deleted for good, without going through the Trash.")
                 }
+            }
+            Section("Trash") {
+                Picker(selection: $trashDays) {
+                    Text("Manually").tag(0)
+                    Divider()
+                    ForEach([1, 7, 14, 30, 90], id: \.self) { Text($0 == 1 ? "After 1 day" : "After \($0) days").tag($0) }
+                } label: {
+                    Text("Empty Trash")
+                    Text("Captures you remove from the history wait in the Trash, so you can put them back. Manually: they stay until you empty it.")
+                }
+                .onChange(of: trashDays) { _, _ in
+                    HistoryStore.shared.prune()
+                    trashCount = HistoryStore.shared.trashCount
+                }
+                LabeledContent(trashCount == 1 ? "1 capture in the Trash" : "\(trashCount) captures in the Trash") {
+                    HStack {
+                        Button("Show Trash") { CaptureHistory.shared.show(trash: true) }
+                        Button("Empty Trash…") {
+                            CaptureHistory.shared.confirmEmptyTrash()
+                            trashCount = HistoryStore.shared.trashCount
+                        }
+                        .disabled(trashCount == 0)
+                    }
+                }
+                .onAppear { trashCount = HistoryStore.shared.trashCount }
             }
             Section("Text Recognition") {
                 Picker("Language", selection: $ocrLanguage) {

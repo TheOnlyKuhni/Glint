@@ -11,6 +11,9 @@ struct VideoEditorActions {
     var toggleFullScreen: () -> Void
     /// The timeline: one thumbnail per video frame, or back to the whole video.
     var everyFrame: () -> Void
+    /// Moves through the video while held (-1 back, 1 forward), as ← and → do.
+    var beginScrub: (Double) -> Void
+    var endScrub: () -> Void
 }
 
 private typealias W = VideoEditorWindowController
@@ -45,7 +48,7 @@ struct VideoEditorContent: View {
                             Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(Color.white.opacity(0.6)).frame(width: 24, height: 24).contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain).help("Full screen preview").padding(10)
+                        .buttonStyle(HoverButtonStyle(lift: 1.12)).help("Full screen preview").padding(10)
                     }
                     .background(W.dark)
                     VideoTransport(project: project, state: state, actions: actions)
@@ -200,7 +203,7 @@ private struct VideoRail: View {
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? W.blue : .clear))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle(lift: 1.1))
         .help(help)
         .accessibilityLabel(title)
     }
@@ -392,7 +395,7 @@ struct ChoiceButtons: View {
                         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(i == selected ? W.blue : W.box))
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverButtonStyle())
                 .disabled(disabled.contains(i))
                 .help(i < helps.count ? helps[i] : "")
             }
@@ -514,7 +517,7 @@ private struct ZoomInspector: View {
                 Text("Apply Zoom Level to All").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle())
             .help("Give every zoom this zoom level")
             InspectorHeader("Zoom mode").padding(.top, 14)
             // Following the cursor needs the pointer positions a Studio Mode recording keeps.
@@ -540,7 +543,7 @@ private struct ZoomInspector: View {
                 Text("Animation Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle())
             .help("Motion blur and zoom easing for all zooms")
         }
     }
@@ -618,19 +621,23 @@ private struct VideoBackgroundInspector: View {
     @ObservedObject var project: VideoProject
     @State private var showAllGradients = false
     @State private var wallpaperReady = BackgroundImages.shared.wallpaper != nil
+    @State private var presets = BackgroundStyle.presets
     private var bg: VideoBackground { project.background }
     private let grid = Array(repeating: GridItem(.fixed(38), spacing: 10), count: 5)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Background")
+            HStack {
+                InspectorHeader("Background")
+                presetMenu
+            }
             Button { project.background.padding = 0; project.background.ratio = .auto } label: {
                 Text("None").font(.system(size: 13.5, weight: .semibold)).frame(maxWidth: .infinity).frame(height: 40)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(W.box))
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(bg.isVisible ? .clear : W.blue, lineWidth: 2.5))
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle())
             .help("No background around the video")
             HStack {
                 InspectorHeader("Gradients")
@@ -641,7 +648,7 @@ private struct VideoBackgroundInspector: View {
                     }
                     .font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverButtonStyle())
                 .help(showAllGradients ? "Show fewer gradients" : "Show all gradients")
             }
             .padding(.top, 8)
@@ -668,7 +675,7 @@ private struct VideoBackgroundInspector: View {
                         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3])).foregroundStyle(Color(white: 0.45)))
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).help("Choose your own image as the background")
+                .buttonStyle(HoverButtonStyle()).help("Choose your own image as the background")
             }
             InspectorHeader("Plain color").padding(.top, 8)
             ForEach([BackgroundPalette.colorsDark, BackgroundPalette.colorsLight], id: \.self) { row in
@@ -678,7 +685,7 @@ private struct VideoBackgroundInspector: View {
                             Circle().fill(Color(nsColor: BackgroundPalette.nsColor(hex))).frame(width: 19, height: 19)
                                 .overlay(Circle().strokeBorder(bg.isVisible && bg.fill == .color(hex) ? W.blue : .clear, lineWidth: 2).padding(-3))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(HoverButtonStyle(lift: 1.18))
                         .help("Plain color background")
                     }
                 }
@@ -706,12 +713,44 @@ private struct VideoBackgroundInspector: View {
         }
     }
 
+    /// The screenshot editor's presets, for the video too.
+    private var presetMenu: some View {
+        Menu {
+            if presets.isEmpty { Text("No presets yet") }
+            ForEach(Array(presets.enumerated()), id: \.offset) { i, preset in
+                Button(preset.name ?? "Preset \(i + 1)") { project.background = VideoBackground(preset: preset) }
+            }
+            Divider()
+            Button("Save Current Background as Preset…") {
+                BackgroundPresets.save(bg.preset)
+                presets = BackgroundStyle.presets
+            }
+            .disabled(!bg.isVisible)
+            if !presets.isEmpty {
+                Menu("Delete Preset") {
+                    ForEach(Array(presets.enumerated()), id: \.offset) { i, preset in
+                        Button(preset.name ?? "Preset \(i + 1)") {
+                            BackgroundPresets.confirmDelete(i)
+                            presets = BackgroundStyle.presets
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text("Presets").font(.system(size: 12.5))
+        }
+        .menuStyle(.button)
+        .fixedSize()
+        .help("Apply, save or delete background presets (shared with the screenshot editor)")
+        .onAppear { presets = BackgroundStyle.presets }
+    }
+
     private func swatch(selected: Bool, @ViewBuilder content: () -> some View, pick: @escaping () -> Void) -> some View {
         Button(action: pick) {
             content().frame(width: 38, height: 38).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(selected ? W.blue : .clear, lineWidth: 2).padding(-3))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle(lift: 1.07))
     }
 
     /// Picking a fill shows the background: without padding there'd be nothing to see.
@@ -728,6 +767,52 @@ private struct VideoBackgroundInspector: View {
 }
 
 // MARK: - Transport
+
+/// ‹ or ›: a click moves a little, holding it moves faster and faster, like the arrow keys.
+private struct ScrubButton: View {
+    let symbol: String
+    let help: String
+    let direction: Double
+    let actions: VideoEditorActions
+
+    var body: some View {
+        Button {} label: {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(Style(onPress: { pressed in
+            if pressed { actions.beginScrub(direction) } else { actions.endScrub() }
+        }))
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAction {
+            actions.beginScrub(direction)
+            actions.endScrub()
+        }
+    }
+
+    private struct Style: ButtonStyle {
+        let onPress: (Bool) -> Void
+        func makeBody(configuration: Configuration) -> some View { Label(configuration: configuration, onPress: onPress) }
+    }
+
+    private struct Label: View {
+        let configuration: ButtonStyleConfiguration
+        let onPress: (Bool) -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(hovering ? Color.white : Color(white: 0.75))
+                .scaleEffect(configuration.isPressed ? 0.9 : (hovering ? 1.15 : 1))
+                .animation(.easeOut(duration: 0.15), value: hovering)
+                .animation(.spring(response: 0.22, dampingFraction: 0.65), value: configuration.isPressed)
+                .onHover { hovering = $0 }
+                .onChange(of: configuration.isPressed) { _, pressed in onPress(pressed) }
+        }
+    }
+}
 
 /// "00:00 / 00:05" on the left, back / play / forward in the middle, the timeline zoom slider on the right.
 private struct VideoTransport: View {
@@ -764,10 +849,15 @@ private struct VideoTransport: View {
                         .foregroundStyle(state.timelineZoom > 0.999 ? Color.white : Color(white: 0.6))
                         .frame(width: 24, height: 24).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverButtonStyle())
                 .help(state.timelineZoom > 0.999 ? "Show the whole video" : "Every frame: one thumbnail per video frame")
                 .accessibilityLabel("Every frame")
                 .padding(.trailing, 4)
+                HStack(spacing: 2) {
+                    ScrubButton(symbol: "chevron.left", help: "Move back through the video; hold to go faster (←)", direction: -1, actions: actions)
+                    ScrubButton(symbol: "chevron.right", help: "Move forward through the video; hold to go faster (→)", direction: 1, actions: actions)
+                }
+                .padding(.trailing, 6)
                 HStack(spacing: 8) {
                     Image(systemName: "minus").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(white: 0.45))
                     Slider(value: $state.timelineZoom, in: 0...1) { state.timelineZoomEditing = $0 }.controlSize(.mini).frame(width: 100).tint(Color(white: 0.4))
@@ -777,9 +867,9 @@ private struct VideoTransport: View {
             }
             .font(.system(size: 13, weight: .medium).monospacedDigit())
             HStack(spacing: 34) {
-                transportButton("backward.end.fill", help: "Go to start", action: actions.toStart)
-                transportButton(state.isPlaying ? "pause.fill" : "play.fill", help: state.isPlaying ? "Pause" : "Play", size: 19, action: actions.togglePlay)
-                transportButton("forward.end.fill", help: "Go to end", action: actions.toEnd)
+                transportButton("backward.end.fill", help: "Go to start (⌘← or Home)", action: actions.toStart)
+                transportButton(state.isPlaying ? "pause.fill" : "play.fill", help: state.isPlaying ? "Pause (Space or K)" : "Play (Space)", size: 19, action: actions.togglePlay)
+                transportButton("forward.end.fill", help: "Go to end (⌘→ or End)", action: actions.toEnd)
             }
         }
         .padding(.horizontal, 20)
@@ -790,7 +880,7 @@ private struct VideoTransport: View {
             Image(systemName: symbol).font(.system(size: size)).foregroundStyle(.white).frame(width: 28, height: 28).contentShape(Rectangle())
         }
         // The symbols' built-in names read "Go To End" for backward.end and vice versa.
-        .buttonStyle(.plain).help(help).accessibilityLabel(help)
+        .buttonStyle(HoverButtonStyle(lift: 1.14)).help(help).accessibilityLabel(help)
     }
 
     static func format(_ t: Double) -> String {

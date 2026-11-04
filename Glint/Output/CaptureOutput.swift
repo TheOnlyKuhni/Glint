@@ -166,7 +166,7 @@ enum FileNaming {
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         // The extension comes from the format.
         var name = field.stringValue
-        if ["png", "jpg", "jpeg", "heic", "gif", "mp4", "mov"].contains((name as NSString).pathExtension.lowercased()) {
+        if ["png", "jpg", "jpeg", "heic", "tif", "tiff", "gif", "mp4", "mov"].contains((name as NSString).pathExtension.lowercased()) {
             name = (name as NSString).deletingPathExtension
         }
         return sanitized(name)
@@ -212,10 +212,17 @@ enum FileSaver {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = item.fileURL.lastPathComponent
         panel.directoryURL = exportDirectory
-        // The file is copied as it is, so its extension has to stay.
-        panel.allowedContentTypes = UTType(filenameExtension: item.fileURL.pathExtension).map { [$0] } ?? []
+        let source = ImageFormat(fileExtension: item.fileURL.pathExtension)
+        // A screenshot can be saved in any image format; a recording is copied as it is, so its extension has to stay.
+        let chooser = item.isRecording ? nil : source.map { SaveFormatChooser(panel: panel, format: $0) }
+        if chooser == nil { panel.allowedContentTypes = UTType(filenameExtension: item.fileURL.pathExtension).map { [$0] } ?? [] }
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return copy(item.fileURL, to: url)
+        guard let format = chooser?.format, format != source else { return copy(item.fileURL, to: url) }
+        guard let data = ImageEncoder.data(for: item.image, format: format, scale: item.scale), (try? data.write(to: url)) != nil else {
+            NSSound.beep()
+            return nil
+        }
+        return url
     }
 
     static func save(_ item: CaptureItem, to directory: URL) -> URL? {
@@ -244,6 +251,39 @@ enum FileSaver {
             n += 1
         }
         return candidate
+    }
+}
+
+/// The "Format" pop-up in an image's save panel. The file name's extension follows it.
+final class SaveFormatChooser: NSObject {
+    private(set) var format: ImageFormat
+    private weak var panel: NSSavePanel?
+    private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+
+    init(panel: NSSavePanel, format: ImageFormat) {
+        self.format = format
+        self.panel = panel
+        super.init()
+        popup.addItems(withTitles: ImageFormat.allCases.map(\.title))
+        popup.selectItem(withTitle: format.title)
+        popup.target = self
+        popup.action = #selector(formatChanged)
+        let row = NSStackView(views: [NSTextField(labelWithString: "Format:"), popup])
+        row.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
+        row.setFrameSize(row.fittingSize)
+        panel.accessoryView = row
+        apply()
+    }
+
+    @objc private func formatChanged() {
+        format = ImageFormat.allCases[popup.indexOfSelectedItem]
+        apply()
+    }
+
+    private func apply() {
+        guard let panel, let type = UTType(filenameExtension: format.fileExtension) else { return }
+        panel.allowedContentTypes = [type]
+        panel.nameFieldStringValue = ((panel.nameFieldStringValue as NSString).deletingPathExtension as NSString).appendingPathExtension(format.fileExtension) ?? panel.nameFieldStringValue
     }
 }
 

@@ -78,7 +78,7 @@ struct AnnotateBottomBar: View {
                 }
             }
             DragMeHandle(fileProvider: actions.dragFile, prepare: actions.prepareDrag, dropped: actions.dropped)
-                .frame(width: 150, height: 32)
+                .frame(width: 136, height: 32)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -98,9 +98,10 @@ private struct BarButtonStyle: ButtonStyle {
 }
 
 /// Hover brightens slightly; press brightens more and shrinks, starting from the hovered state.
-private struct BarButtonBody: View {
+struct BarButtonBody: View {
     let configuration: ButtonStyleConfiguration
     var isOn = false
+    var horizontalPadding: CGFloat = 10
     @State private var hovering = false
     private static let blue = Color(.displayP3, red: 0x34 / 255.0, green: 0x78 / 255.0, blue: 0xF6 / 255.0)
 
@@ -108,7 +109,7 @@ private struct BarButtonBody: View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(isOn ? Color.white : Color.primary)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, horizontalPadding)
             .frame(height: 32)
             .background(Capsule().fill(isOn ? Self.blue : Color(white: configuration.isPressed ? 0.26 : (hovering ? 0.21 : 0x2A / 255.0))))
             .overlay(Capsule().fill(Color.black.opacity(isOn && configuration.isPressed ? 0.24 : (isOn && hovering ? 0.1 : 0))))
@@ -157,6 +158,24 @@ private struct DragMeHandle: NSViewRepresentable {
         var prepare: (() -> Void)?
         var dropped: (() -> Void)?
         private var downEvent: NSEvent?
+        /// Brightens the pill on hover (fades by itself, as a layer).
+        private lazy var hoverLayer: CALayer = {
+            let layer = CALayer()
+            layer.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
+            layer.opacity = 0
+            wantsLayer = true
+            self.layer?.addSublayer(layer)
+            return layer
+        }()
+
+        override func layout() {
+            super.layout()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            hoverLayer.frame = bounds
+            hoverLayer.cornerRadius = bounds.height / 2
+            CATransaction.commit()
+        }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -164,24 +183,31 @@ private struct DragMeHandle: NSViewRepresentable {
             addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self))
         }
 
-        override func mouseEntered(with event: NSEvent) { prepare?() }
+        override func mouseEntered(with event: NSEvent) {
+            hoverLayer.opacity = 1
+            prepare?()
+        }
+
+        override func mouseExited(with event: NSEvent) { hoverLayer.opacity = 0 }
 
         override func draw(_ dirtyRect: NSRect) {
-            let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: bounds.height / 2, yRadius: bounds.height / 2)
-            NSColor.white.withAlphaComponent(0.07).setFill()
-            pill.fill()
-            NSColor.white.withAlphaComponent(0.14).setStroke()
-            pill.stroke()
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor]
+            // The bar's other buttons: the same gray capsule and hairline.
+            NSColor(white: 0x2A / 255.0, alpha: 1).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+            NSColor.white.withAlphaComponent(0.08).setStroke()
+            let hairline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25), xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+            hairline.lineWidth = 0.5
+            hairline.stroke()
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white]
             let text = "Drag Me" as NSString
             let size = text.size(withAttributes: attrs)
             text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2), withAttributes: attrs)
             if let grip = NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: 10, weight: .medium)) {
-                let tinted = grip.tinted(.tertiaryLabelColor)
+                let tinted = grip.tinted(NSColor(white: 0.5, alpha: 1))
                 let g = tinted.size
-                tinted.draw(in: NSRect(x: bounds.midX - size.width / 2 - g.width - 12, y: bounds.midY - g.height / 2, width: g.width, height: g.height))
-                tinted.draw(in: NSRect(x: bounds.midX + size.width / 2 + 12, y: bounds.midY - g.height / 2, width: g.width, height: g.height))
+                tinted.draw(in: NSRect(x: bounds.midX - size.width / 2 - g.width - 9, y: bounds.midY - g.height / 2, width: g.width, height: g.height))
+                tinted.draw(in: NSRect(x: bounds.midX + size.width / 2 + 9, y: bounds.midY - g.height / 2, width: g.width, height: g.height))
             }
         }
 

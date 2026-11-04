@@ -63,7 +63,7 @@ struct CursorInspector: View {
                         Circle().fill(Color(nsColor: color.color)).frame(width: 19, height: 19)
                             .overlay(Circle().strokeBorder(cursor.rippleColor == color ? W.blue : .clear, lineWidth: 2).padding(-3))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(HoverButtonStyle())
                     .help(color.title)
                 }
             }
@@ -126,7 +126,7 @@ struct KeystrokesInspector: View {
                         Text("Use Glint Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
                             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(HoverButtonStyle())
                     .padding(.top, 8)
                     .help("Show and hide keys like Settings → Recording → Keystrokes (what new Studio recordings start with)")
                 }
@@ -222,7 +222,7 @@ struct CameraLayoutInspector: View {
                 Text("Default Camera Settings").font(.system(size: 13.5, weight: .medium)).frame(maxWidth: .infinity).frame(height: 30)
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box)).contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle())
             .padding(.top, 14)
             .help("How the camera looks wherever no camera action is set: show, size, shape, corner, flip")
         }
@@ -247,7 +247,7 @@ private struct CameraShapePicker: View {
                         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected == i ? W.blue : W.box))
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverButtonStyle())
                 .help(Self.shapes[i].help)
             }
         }
@@ -297,7 +297,7 @@ private struct StyleTile<Content: View>: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle())
         .help(help)
     }
 }
@@ -366,7 +366,7 @@ private struct PositionPicker: View {
                             .frame(width: spot.width, height: spot.height)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(HoverButtonStyle())
                     .help(option.title)
                     .offset(x: origin.x, y: origin.y)
                 }

@@ -184,6 +184,88 @@ final class VideoTimelineView: NSView {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
+    /// Keeps the playhead at `t` in view while it's being moved: the strip moves along, without an animation.
+    func follow(_ t: Double) {
+        let visible = scrollView.contentView.bounds, px = x(t), margin = min(80, visible.width / 4)
+        var origin = visible.minX
+        if px > visible.maxX - margin { origin = px - visible.width + margin } else if px < visible.minX + margin { origin = px - margin }
+        origin = min(max(origin, 0), max(bounds.width - visible.width, 0))
+        guard origin != visible.minX else { return }
+        scrollView.contentView.setBoundsOrigin(CGPoint(x: origin, y: visible.minY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    // MARK: Hover glow
+
+    /// The zoom, camera action, clip or event under the pointer brightens and lifts: each item's glow (0…1) eases
+    /// toward 1 while hovered and back to 0 after.
+    private var hoveredItem: AnyHashable?
+    private var glow: [AnyHashable: CGFloat] = [:]
+    private var glowTimer: Timer?
+
+    private func item(at p: CGPoint) -> AnyHashable? {
+        guard !state.scissors else { return nil }
+        if let hit = spanHit(p) { return AnyHashable(hit.span.id) }
+        if let e = studioEvent(at: p) { return AnyHashable(e.id) }
+        guard p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight else { return nil }
+        return clipRects().first { $0.1.contains(p) }.map { AnyHashable($0.0.id) }
+    }
+
+    private func setHoveredItem(_ item: AnyHashable?) {
+        guard item != hoveredItem else { return }
+        hoveredItem = item
+        guard glowTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stepGlow() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        glowTimer = timer
+    }
+
+    private func stepGlow() {
+        let step: CGFloat = 1 / (60 * 0.14)
+        for key in glow.keys where key != hoveredItem {
+            let value = (glow[key] ?? 0) - step
+            glow[key] = value > 0 ? value : nil
+        }
+        if let hoveredItem { glow[hoveredItem] = min((glow[hoveredItem] ?? 0) + step, 1) }
+        setNeedsDisplay(visibleRect)
+        let settled = hoveredItem == nil ? glow.isEmpty : glow.count == 1 && glow[hoveredItem!] == 1
+        if settled { glowTimer?.invalidate(); glowTimer = nil }
+    }
+
+    /// Ease-out of an item's glow.
+    private func glowAmount(_ key: AnyHashable) -> CGFloat {
+        guard let g = glow[key] else { return 0 }
+        return 1 - (1 - g) * (1 - g)
+    }
+
+    private func drawClipGlow() {
+        for (clip, rect) in clipRects() {
+            let g = glowAmount(AnyHashable(clip.id))
+            guard g > 0 else { continue }
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), xRadius: 8, yRadius: 8)
+            NSColor(white: 1, alpha: 0.07 * g).setFill()
+            path.fill()
+            NSColor(white: 1, alpha: 0.55 * g).setStroke()
+            path.lineWidth = 1.5
+            path.stroke()
+        }
+    }
+
+    private func drawEventGlow() {
+        guard !glow.isEmpty else { return }
+        for e in events {
+            let g = glowAmount(AnyHashable(e.id))
+            guard g > 0, let r = eventRect(e)?.insetBy(dx: -2 * g, dy: -2 * g) else { continue }
+            let path = NSBezierPath(roundedRect: r, xRadius: min(r.height / 2, 6), yRadius: min(r.height / 2, 6))
+            NSColor(white: 1, alpha: 0.18 * g).setFill()
+            path.fill()
+            NSColor(white: 1, alpha: 0.6 * g).setStroke()
+            path.stroke()
+        }
+    }
+
     // MARK: Lanes (camera actions and zooms)
 
     /// The tracks of stretches above the clip: camera actions (Studio Mode recordings with a camera) and zooms.
@@ -341,8 +423,10 @@ final class VideoTimelineView: NSView {
         drawRuler()
         lanes.forEach(drawLane)
         drawClips()
+        drawClipGlow()
         drawCuts()
         drawEvents()
+        drawEventGlow()
         drawPlayhead()
         drawScissors()
         drawHoverInfo()
@@ -636,10 +720,16 @@ final class VideoTimelineView: NSView {
             text.draw(at: CGPoint(x: (visible.isEmpty ? track : visible).midX - size.width / 2, y: track.midY - size.height / 2), withAttributes: attrs)
         }
         for span in spans(lane) {
-            let r = spanRect(lane, span)
+            let g = glowAmount(AnyHashable(span.id))
+            // Lifts a little out of its track while hovered.
+            let r = spanRect(lane, span).insetBy(dx: 0, dy: -1.5 * g)
             let isSelected = selected(lane) == span.id
-            (isSelected ? Self.blue : NSColor(white: 0x3A / 255.0, alpha: 1)).setFill()
+            (isSelected ? Self.blue : NSColor(white: (0x3A + 0x16 * g) / 255.0, alpha: 1)).setFill()
             NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1).fill()
+            if isSelected, g > 0 {
+                NSColor(white: 1, alpha: 0.12 * g).setFill()
+                NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1).fill()
+            }
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium),
                                                         .foregroundColor: isSelected ? NSColor.white : NSColor(white: 0.7, alpha: 1)]
             // Zooms: "Zoom 150%", with a cursor before it when following the cursor. Camera: its symbol and look.
@@ -1103,6 +1193,7 @@ final class VideoTimelineView: NSView {
         if over?.lane != hoverSpanEdge?.lane || over?.id != hoverSpanEdge?.id || over?.edge != hoverSpanEdge?.edge { hoverSpanEdge = over; needsDisplay = true }
         let cut = scissorsTime(at: p)
         if cut != hoverCut { hoverCut = cut; needsDisplay = true }
+        setHoveredItem(item(at: p))
         updateCursor(p)
         reportHover(p)
         updateHoverInfo(p)
@@ -1112,6 +1203,7 @@ final class VideoTimelineView: NSView {
         if hoverEdge != nil || hoverGhost != nil || hoverCut != nil || hoverSpanEdge != nil {
             hoverEdge = nil; hoverGhost = nil; hoverCut = nil; hoverSpanEdge = nil; needsDisplay = true
         }
+        setHoveredItem(nil)
         onHoverFrame?(nil)
         updateHoverInfo(nil)
     }

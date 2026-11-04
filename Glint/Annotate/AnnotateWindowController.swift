@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// The screenshot editor: the drawing tools, Share, Save as… and Done in the head bar (under the title bar and any
 /// tabs); on the left the mode rail (Annotate,
@@ -25,6 +24,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var crop: CropState?
     private var cropOverlay: CropOverlayView?
     private var cropBackdrop: CropBackdropView?
+    private var cropLens: CropLensView?
     private var cropScrollObserver: NSObjectProtocol?
     /// Rotations/flips done during this crop session (Cancel undoes them).
     fileprivate var cropImageEdits = 0
@@ -79,10 +79,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     static func open(url: URL) {
-        guard let rep = NSImage(contentsOf: url)?.representations.first,
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-        else { glintLog("annotate: could not load \(url.path)"); NSSound.beep(); return }
+        guard let file = ImageFile.load(url) else { glintLog("annotate: could not load \(url.path)"); NSSound.beep(); return }
         let name = url.deletingPathExtension().lastPathComponent
         if let saved = ImageEdit.load(for: url) {
             let doc = open(image: saved.original, scale: saved.edit.scale, name: name).doc
@@ -90,8 +87,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
             doc.restore(saved.edit)
             return
         }
-        let scale = rep.size.width > 0 ? CGFloat(rep.pixelsWide) / rep.size.width : 1
-        open(image: image, scale: scale, name: name)
+        open(image: file.image, scale: file.scale, name: name)
     }
 
     static func openFromPanel() {
@@ -512,13 +508,11 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         let panel = NSSavePanel()
         panel.nameFieldStringValue = file.lastPathComponent
         panel.directoryURL = FileSaver.exportDirectory
-        // The rendered file is copied as it is, so its extension has to stay.
-        panel.allowedContentTypes = UTType(filenameExtension: file.pathExtension).map { [$0] } ?? []
+        let chooser = SaveFormatChooser(panel: panel, format: Defaults[Prefs.fileFormat])
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            try? FileManager.default.removeItem(at: url)
-            guard (try? FileManager.default.copyItem(at: file, to: url)) != nil else { NSSound.beep(); return }
-            guard let doc = self?.doc else { return }
+            guard response == .OK, let url = panel.url, let doc = self?.doc else { return }
+            guard let image = doc.renderedImage(), let data = ImageEncoder.data(for: image, format: chooser.format, scale: doc.scale),
+                  (try? data.write(to: url)) != nil else { NSSound.beep(); return }
             ImageEdit.store(doc, for: url)
             doc.markSaved()
         }
@@ -824,6 +818,8 @@ extension AnnotateWindowController {
         // The room grows with the frame and never shrinks while cropping: shrinking it moved the view (the canvas
         // origin shifted under the clip view), which made the view jump after a drag.
         overlay.onRectChange = { [weak self] _ in self?.updateCropRoom(growOnly: true) }
+        overlay.onHandleDrag = { [weak self] anchor, pointer in self?.showCropLens(anchor: anchor, pointer: pointer) }
+        overlay.onHandleDragEnd = { [weak self] in self?.hideCropLens() }
         canvas.addSubview(overlay)
         cropOverlay = overlay
         canvas.isCropRoom = true
@@ -857,6 +853,30 @@ extension AnnotateWindowController {
         DispatchQueue.main.async { self.zoomToFit() }
     }
 
+    /// The lens beside the pointer, on whichever side has room.
+    private func showCropLens(anchor: CGPoint, pointer: CGPoint) {
+        guard let state = crop, let overlay = cropOverlay, let host = scrollView.superview else { return }
+        let lens = cropLens ?? {
+            let lens = CropLensView(state: state)
+            host.addSubview(lens, positioned: .above, relativeTo: scrollView)
+            cropLens = lens
+            return lens
+        }()
+        if lens.image == nil { lens.image = doc.flattened() }
+        lens.anchor = anchor
+        let p = overlay.convert(pointer, to: host), area = scrollView.frame, side = CropLensView.side, gap: CGFloat = 30
+        var origin = CGPoint(x: p.x + gap, y: p.y + gap)
+        if origin.x + side > area.maxX { origin.x = p.x - gap - side }
+        if origin.y + side > area.maxY { origin.y = p.y - gap - side }
+        lens.frame.origin = CGPoint(x: min(max(origin.x, area.minX + 8), area.maxX - side - 8), y: min(max(origin.y, area.minY + 8), area.maxY - side - 8))
+        if lens.alphaValue < 1 { NSAnimationContext.runAnimationGroup { $0.duration = 0.12; lens.animator().alphaValue = 1 } }
+    }
+
+    private func hideCropLens() {
+        guard let lens = cropLens else { return }
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; lens.animator().alphaValue = 0 }
+    }
+
     func cancelCrop() { endCrop(apply: false) }
 
     @objc func applyCrop() { endCrop(apply: true) }
@@ -876,6 +896,8 @@ extension AnnotateWindowController {
         cropOverlay?.removeFromSuperview()
         cropBackdrop?.removeFromSuperview()
         cropBackdrop = nil
+        cropLens?.removeFromSuperview()
+        cropLens = nil
         if let cropScrollObserver { NotificationCenter.default.removeObserver(cropScrollObserver) }
         cropScrollObserver = nil
         canvas.isCropRoom = false
@@ -914,6 +936,7 @@ extension AnnotateWindowController {
     fileprivate func transformCropImage(rotate: Bool) {
         guard let state = crop else { return }
         doc.transform(rotate: rotate)
+        cropLens?.image = nil
         cropImageEdits += 1
         state.imageTransformed(rotated: rotate, newSize: doc.imageSize)
         layOutCropRoom()
