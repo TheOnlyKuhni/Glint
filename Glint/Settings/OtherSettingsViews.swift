@@ -128,7 +128,6 @@ struct AnnotateSettingsView: View {
     @AppStorage(Prefs.annotateExpandCanvas) private var expandCanvas
     @AppStorage(Prefs.annotateAlwaysOnTop) private var alwaysOnTop
     @AppStorage(Prefs.annotateShowDockIcon) private var showDockIcon
-    @AppStorage(Prefs.annotateColorNames) private var colorNames
 
     var body: some View {
         Form {
@@ -152,9 +151,6 @@ struct AnnotateSettingsView: View {
             Section("Window") {
                 Toggle("Always on top", isOn: $alwaysOnTop)
                 Toggle("Show Dock icon", isOn: $showDockIcon)
-            }
-            Section("Accessibility") {
-                Toggle("Show color names", isOn: $colorNames)
             }
         }
         .formStyle(.grouped)
@@ -268,7 +264,7 @@ private struct FileNameFormatSheet: View {
             Text("File Name Format").font(.headline)
             TextField("Format", text: $format).textFieldStyle(.roundedBorder)
             Text("Placeholders: {yyyy} {MM} {dd} {HH} {mm} {ss}").font(.callout).foregroundStyle(.secondary)
-            Text("Preview: \(FileNaming.name(for: Date(), template: format)).png").font(.callout)
+            Text("Preview: \(FileNaming.name(for: Date(), template: format)).\(Defaults[Prefs.fileFormat].fileExtension)").font(.callout)
             HStack {
                 Button("Reset") { format = Prefs.fileNameFormat.defaultValue }
                 Spacer()

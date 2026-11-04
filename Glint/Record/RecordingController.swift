@@ -111,6 +111,28 @@ final class RecordingController {
     }
 }
 
+#if DEBUG
+extension RecordingController {
+    /// Records `rect` for `seconds` without the selection UI (`glint://debug-record`).
+    func debugRecord(rect: CGRect, screen: NSScreen, mode: RecordMode, seconds: Double) {
+        let session = RecordingSession(rect: rect, screen: screen, mode: mode)
+        session.prepare()
+        session.onFinish = { [weak self] in
+            self?.session = nil
+            self?.isRecording = false
+            NotificationCenter.default.post(name: .recordingStateChanged, object: nil)
+        }
+        self.session = session
+        isRecording = true
+        Task {
+            await session.begin()
+            try? await Task.sleep(for: .seconds(seconds))
+            session.stop()
+        }
+    }
+}
+#endif
+
 extension Notification.Name {
     /// Posted when a recording starts, ticks (once a second) or ends; the status item shows the time.
     static let recordingStateChanged = Notification.Name("GlintRecordingStateChanged")
@@ -170,7 +192,8 @@ final class RecordingSession {
         // The control bar fades in a moment after recording starts.
         try? await Task.sleep(for: .milliseconds(450))
         guard !finished else { return }
-        showControls()
+        await showControls()
+        guard !finished else { return }
         // Studio Mode records clicks and keys as data; the editor draws them.
         guard mode != .studio else { return }
         if Defaults[Prefs.recHighlightClicks] { startClickHighlights() }
@@ -339,7 +362,7 @@ final class RecordingSession {
         dimWindow = window
     }
 
-    private func showControls() {
+    private func showControls() async {
         guard Defaults[Prefs.recShowControls] else { return }
         let view = ControlBar(state: state, actions: ControlBarActions(
             stop: { [weak self] in self?.stop() },
@@ -366,10 +389,13 @@ final class RecordingSession {
         panel.isReleasedWhenClosed = false
         host.frame = CGRect(origin: .zero, size: size)
         panel.contentView = host
-        panel.alphaValue = 0
+        // Barely there until the recorder leaves it out (a fully transparent window isn't listed yet).
+        panel.alphaValue = 0.02
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.2; panel.animator().alphaValue = 1 }
         controls = panel
+        await recorder?.updateExcludedWindows()
+        guard !finished else { return }
+        NSAnimationContext.runAnimationGroup({ $0.duration = 0.2; panel.animator().alphaValue = 1 }, completionHandler: nil)
     }
 
     private func startClickHighlights() {

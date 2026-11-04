@@ -6,6 +6,8 @@ nonisolated func glintLog(_ message: String) {
     let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/Glint")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let url = dir.appendingPathComponent("glint.log")
+    // Started over past 2 MB, so it can't grow forever.
+    if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 2_000_000 { try? FileManager.default.removeItem(at: url) }
     let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
     if let handle = try? FileHandle(forWritingTo: url) {
         handle.seekToEndOfFile()

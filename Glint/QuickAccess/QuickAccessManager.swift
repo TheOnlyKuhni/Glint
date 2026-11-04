@@ -66,6 +66,8 @@ final class QuickAccessManager {
 
     func closeAll() { entries.forEach { close($0) } }
 
+    func isShowing(_ file: URL) -> Bool { entries.contains { $0.item.fileURL == file } }
+
     func saveAll() {
         entries.forEach { FileSaver.saveToExportLocation($0.item) }
         closeAll()

@@ -21,7 +21,10 @@ struct GeneralSettingsView: View {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
                         }
                     }
-                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                Toggle(isOn: $showMenuBarIcon) {
+                    Text("Show menu bar icon")
+                    Text("Glint keeps running without it and shortcuts still work. Open Glint again from your Applications folder to get back here; ⌘Q quits it from this window.")
+                }
             }
 
             Section("Updates") {

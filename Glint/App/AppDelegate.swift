@@ -20,6 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ShortcutManager.shared.onTrigger = { action in AppRouter.perform(action) }
         ShortcutManager.shared.start()
         HistoryStore.shared.prune()
+        // Glint can run for weeks: "Keep history" can't wait for the next launch.
+        Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
+            MainActor.assumeIsolated { HistoryStore.shared.prune() }
+        }
         _ = Updater.shared
     }
 

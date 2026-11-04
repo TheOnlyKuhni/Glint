@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// What should happen after a capture, either from settings or forced by a shortcut like "Capture Area & Save".
 struct AfterCaptureOptions {
@@ -29,6 +30,9 @@ enum CaptureOutput {
                         windowImage: CGImage? = nil, windowOnWallpaper: Bool = false, windowPadding: CGFloat = 0,
                         screenRect: CGRect? = nil) {
         let sourceApp = NSWorkspace.shared.frontmostApplication.flatMap { $0 == .current ? nil : $0.bundleIdentifier }
+        // The raw window gets the same scale and colors, or the editor would open it at the wrong size.
+        var windowScale = scale
+        let windowImage = windowImage.map { ImageProcessing.applyOutputSettings($0, scale: &windowScale, border: false) }
         var scale = scale
         var processed = ImageProcessing.applyOutputSettings(image, scale: &scale)
         // Background preset from Screenshots settings (hold Shift to skip).
@@ -68,7 +72,8 @@ enum CaptureOutput {
         if opts.save { _ = FileSaver.saveToExportLocation(item) }
         if opts.openAnnotate { AnnotateWindowController.open(item: item) }
         if opts.pin { PinManager.shared.pin(item) }
-        if opts.showQuickAccess { QuickAccessManager.shared.show(item) }
+        // The editor hands the capture to Quick Access when it closes.
+        if opts.showQuickAccess, !opts.openAnnotate { QuickAccessManager.shared.show(item) }
     }
 }
 
@@ -131,7 +136,21 @@ enum FileNaming {
             "{mm}": String(format: "%02d", c.minute ?? 0), "{ss}": String(format: "%02d", c.second ?? 0),
         ]
         for (k, v) in fields { result = result.replacingOccurrences(of: k, with: v) }
-        return result.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+        if let name = sanitized(result) { return name }
+        return template == Prefs.fileNameFormat.defaultValue ? "Glint" : name(for: date, template: Prefs.fileNameFormat.defaultValue)
+    }
+
+    /// Something every format and volume can store as a file name; nil when nothing usable is left. A leading dot
+    /// would hide the file from the history.
+    private static func sanitized(_ name: String) -> String? {
+        var result = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: ".")
+        result = String(result.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.map(Character.init))
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        while result.hasPrefix(".") { result.removeFirst() }
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        // File names are limited to 255 bytes; leave room for "@2x", " (1)" and the extension.
+        while result.utf8.count > 200 { result.removeLast() }
+        return result.isEmpty ? nil : result
     }
 
     static func askForName(defaultName: String) -> String? {
@@ -145,8 +164,12 @@ enum FileNaming {
         alert.addButton(withTitle: "Use Default")
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? nil : name
+        // The extension comes from the format.
+        var name = field.stringValue
+        if ["png", "jpg", "jpeg", "heic", "gif", "mp4", "mov"].contains((name as NSString).pathExtension.lowercased()) {
+            name = (name as NSString).deletingPathExtension
+        }
+        return sanitized(name)
     }
 }
 
@@ -189,6 +212,8 @@ enum FileSaver {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = item.fileURL.lastPathComponent
         panel.directoryURL = exportDirectory
+        // The file is copied as it is, so its extension has to stay.
+        panel.allowedContentTypes = UTType(filenameExtension: item.fileURL.pathExtension).map { [$0] } ?? []
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return copy(item.fileURL, to: url)
     }

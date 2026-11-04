@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The screenshot editor: the drawing tools, Share, Save as… and Done in the head bar (under the title bar and any
 /// tabs); on the left the mode rail (Annotate,
@@ -108,7 +109,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Shows a Dock icon while an editor is open (Annotate setting "Show Dock icon").
     private static func updateActivationPolicy() {
-        let wantsDock = !open.isEmpty && Defaults[Prefs.annotateShowDockIcon]
+        let wantsDock = (!open.isEmpty || VideoEditorWindowController.hasOpenEditors) && Defaults[Prefs.annotateShowDockIcon]
         NSApp.setActivationPolicy(wantsDock ? .regular : .accessory)
     }
 
@@ -143,10 +144,11 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
             else { self.canvas.endPanMode() }
             return nil
         }
-        // "Show color names" applies to open editors right away.
+        // Settings apply to open editors right away.
         defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.window?.level = Defaults[Prefs.annotateAlwaysOnTop] ? .floating : .normal
                 // "Grow canvas" is one setting for every editor (bottom bar button or Settings).
                 let grows = Defaults[Prefs.annotateExpandCanvas]
                 if self.doc.expandsCanvas != grows { self.doc.expandsCanvas = grows }
@@ -510,10 +512,13 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         let panel = NSSavePanel()
         panel.nameFieldStringValue = file.lastPathComponent
         panel.directoryURL = FileSaver.exportDirectory
+        // The rendered file is copied as it is, so its extension has to stay.
+        panel.allowedContentTypes = UTType(filenameExtension: file.pathExtension).map { [$0] } ?? []
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             try? FileManager.default.removeItem(at: url)
-            guard (try? FileManager.default.copyItem(at: file, to: url)) != nil, let doc = self?.doc else { return }
+            guard (try? FileManager.default.copyItem(at: file, to: url)) != nil else { NSSound.beep(); return }
+            guard let doc = self?.doc else { return }
             ImageEdit.store(doc, for: url)
             doc.markSaved()
         }
