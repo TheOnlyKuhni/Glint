@@ -5,6 +5,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private var defaultsObserver: NSObjectProtocol?
+    private var appliedVisibility: Bool?
 
     override init() {
         super.init()
@@ -28,7 +29,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func updateRecording() {
         guard let button = statusItem.button else { return }
         if RecordingController.shared.isRecording {
-            statusItem.isVisible = true
+            updateVisibility()
             statusItem.menu = nil
             button.image = NSImage(systemSymbolName: RecordingStatus.paused ? "pause.circle" : "stop.circle", accessibilityDescription: "Stop recording")?
                 .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
@@ -50,9 +51,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func stopRecording() { RecordingController.shared.toggle() }
 
+    /// Hidden by the setting, but always there while recording: it's the one way to stop without the control bar.
+    /// `isVisible` writes to UserDefaults itself, and that notification brings us back here before the getter has
+    /// changed, so what was applied is remembered first.
     private func updateVisibility() {
-        let visible = Defaults[Prefs.showMenuBarIcon]
-        if statusItem.isVisible != visible { statusItem.isVisible = visible }
+        let visible = Defaults[Prefs.showMenuBarIcon] || RecordingController.shared.isRecording
+        guard visible != appliedVisibility else { return }
+        appliedVisibility = visible
+        statusItem.isVisible = visible
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

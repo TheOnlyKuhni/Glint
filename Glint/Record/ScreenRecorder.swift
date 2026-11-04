@@ -68,16 +68,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     func start() async throws {
         let content = try await ScreenCapturer.content()
         guard let display = content.displays.first(where: { $0.displayID == options.screen.displayID }) else { throw CaptureError.noDisplay }
-        // Glint's controls stay out of the movie; click highlights and keystrokes are meant to be recorded.
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let excluded = content.windows.filter { $0.owningApplication?.processID == pid && $0.title != RecordingOverlayTitle.recorded }
-        // Studio Mode records none of Glint: the whole app is left out, so a window that appears or is replaced
-        // later (the camera bubble) can't slip in the way one missing from this snapshot of the windows would.
-        let filter = if options.isStudio, let glint = content.applications.first(where: { $0.processID == pid }) {
-            SCContentFilter(display: display, excludingApplications: [glint], exceptingWindows: [])
-        } else {
-            SCContentFilter(display: display, excludingWindows: excluded)
-        }
+        let filter = contentFilter(display: display, content: content)
         let size = pixelSize
         let config = SCStreamConfiguration()
         config.sourceRect = options.rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
@@ -136,6 +127,26 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         if #available(macOS 15.0, *), micInput != nil { try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue) }
         self.stream = stream
         try await stream.startCapture()
+    }
+
+    private func contentFilter(display: SCDisplay, content: SCShareableContent) -> SCContentFilter {
+        // Glint's controls stay out of the movie; click highlights and keystrokes are meant to be recorded.
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let excluded = content.windows.filter { $0.owningApplication?.processID == pid && $0.title != RecordingOverlayTitle.recorded }
+        // Studio Mode records none of Glint: the whole app is left out, so a window that appears or is replaced
+        // later (the camera bubble) can't slip in the way one missing from this snapshot of the windows would.
+        if options.isStudio, let glint = content.applications.first(where: { $0.processID == pid }) {
+            return SCContentFilter(display: display, excludingApplications: [glint], exceptingWindows: [])
+        }
+        return SCContentFilter(display: display, excludingWindows: excluded)
+    }
+
+    /// Leaves out windows opened since the recording started (the filter lists them one by one): the control bar.
+    /// All windows, as the on-screen list doesn't have one that was just opened.
+    func updateExcludedWindows() async {
+        guard let stream, let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let display = content.displays.first(where: { $0.displayID == options.screen.displayID }) else { return }
+        try? await stream.updateContentFilter(contentFilter(display: display, content: content))
     }
 
     func setPaused(_ value: Bool) {
@@ -314,6 +325,9 @@ nonisolated private final class GIFFrameWriter {
     private let ciContext = CIContext()
     private var pending: (pixels: [UInt32], delay: Double)?
     private var previousWritten: [UInt32]?
+    /// The frames' exact length so far and what their rounded delays add up to, in hundredths of a second.
+    private var exactTime = 0.0
+    private var writtenTime = 0.0
 
     init(destination: CGImageDestination, size: CGSize, optimize: Bool, posterizeLevels: Int?) {
         self.destination = destination
@@ -342,7 +356,13 @@ nonisolated private final class GIFFrameWriter {
         }
         previousWritten = p.pixels
         guard let image = makeImage(out) else { return }
-        let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: p.delay, kCGImagePropertyGIFUnclampedDelayTime: p.delay]] as CFDictionary
+        // GIF delays are whole hundredths of a second. The rounding error carries over to the next frame, or a 30 fps
+        // GIF (3 instead of 3.33) would run 10% fast. Under 2, players slow a frame down instead.
+        exactTime += p.delay * 100
+        let hundredths = max((exactTime - writtenTime).rounded(), 2)
+        writtenTime += hundredths
+        let delay = hundredths / 100
+        let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay, kCGImagePropertyGIFUnclampedDelayTime: delay]] as CFDictionary
         CGImageDestinationAddImage(destination, image, props)
     }
 

@@ -143,7 +143,6 @@ enum Prefs {
     static let annotateSelectPlaced = Pref(key: "annotate.selectPlaced", defaultValue: false)
     static let annotateAlwaysOnTop = Pref(key: "annotate.alwaysOnTop", defaultValue: false)
     static let annotateShowDockIcon = Pref(key: "annotate.showDockIcon", defaultValue: true)
-    static let annotateColorNames = Pref(key: "annotate.colorNames", defaultValue: false)
 
     // MARK: Advanced
     static let askForName = Pref(key: "advanced.askForName", defaultValue: false)

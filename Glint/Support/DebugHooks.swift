@@ -17,11 +17,44 @@ import ScreenCaptureKit
 ///     glint://debug-film?dir=/tmp/f&x=&y=&w=&h=&seconds=2&fps=30   (frames of a rect, for animations)
 ///     glint://debug-ocr?path=/tmp/qr.png   (Capture Text on an image file: copy + toast)
 ///     glint://debug-action?sel=undo:   (a menu action through the window's responder chain, e.g. undo:, redo:)
+///     glint://debug-preset   (stores one Background tool preset)
+///     glint://debug-capture-area?x=&y=&w=&h=   (the capture flow for a rect, no selection UI)
+///     glint://debug-capture-window?id=   (window capture of a CGWindowID)
+///     glint://debug-record?x=&y=&w=&h=&seconds=3&mode=video|gif|studio   (a recording of a rect, no selection UI)
 ///
 /// Each accepts `win=<window number>`; the default is Glint's frontmost regular window.
 enum DebugHooks {
     static func handle(_ command: String, _ query: [String: String]) -> Bool {
         guard command.hasPrefix("debug-") else { return false }
+        func rect() -> CGRect {
+            CGRect(x: Double(query["x"] ?? "") ?? 100, y: Double(query["y"] ?? "") ?? 100,
+                   width: Double(query["w"] ?? "") ?? 400, height: Double(query["h"] ?? "") ?? 300)
+        }
+        if command == "debug-preset" {
+            // One Background tool preset, for testing Settings → Screenshots → Background preset.
+            var style = BackgroundStyle(fill: .color(0x3478F6))
+            style.padding = 0.2
+            BackgroundStyle.presets = [style]
+            return true
+        }
+        if command == "debug-capture-area", let screen = NSScreen.main {
+            CaptureCoordinator.shared.captureSelected(rect(), on: screen)
+            return true
+        }
+        if command == "debug-capture-window", let id = query["id"].flatMap(UInt32.init), let screen = NSScreen.main {
+            Task {
+                let content = try? await ScreenCapturer.content()
+                guard let window = content?.windows.first(where: { $0.windowID == id }) else { glintLog("debug: no window \(id)"); return }
+                await CaptureCoordinator.shared.captureWindow(id: id, frame: window.frame, screen: screen, options: nil)
+            }
+            return true
+        }
+        if command == "debug-record", let screen = NSScreen.main {
+            let mode: RecordMode = query["mode"] == "gif" ? .gif : query["mode"] == "studio" ? .studio : .video
+            let r = query["full"] == "1" ? screen.cgFrame : rect()
+            RecordingController.shared.debugRecord(rect: r, screen: screen, mode: mode, seconds: Double(query["seconds"] ?? "") ?? 3)
+            return true
+        }
         if command == "debug-film", let dir = query["dir"] {
             // Frames of a screen rect (points, top left) for animation studies: dir/0000.png … at about `fps`.
             let seconds = Double(query["seconds"] ?? "") ?? 2, fps = Double(query["fps"] ?? "") ?? 30

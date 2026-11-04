@@ -90,16 +90,17 @@ enum ImageProcessing {
     }
 
     /// Applies the Screenshots settings (1x scaling, sRGB, 1px border).
-    static func applyOutputSettings(_ image: CGImage, scale: inout CGFloat) -> CGImage {
+    static func applyOutputSettings(_ image: CGImage, scale: inout CGFloat, border: Bool = true) -> CGImage {
         var result = image
         if Defaults[Prefs.scaleRetinaTo1x], scale > 1 {
             result = resized(result, to: CGSize(width: CGFloat(result.width) / scale, height: CGFloat(result.height) / scale)) ?? result
             scale = 1
         }
-        if Defaults[Prefs.convertToSRGB], let srgb = CGColorSpace(name: CGColorSpace.sRGB) {
-            result = result.copy(colorSpace: srgb) ?? redraw(result, colorSpace: srgb) ?? result
+        // Drawn, not `copy(colorSpace:)`: that only relabels the pixels, which shifts the colors.
+        if Defaults[Prefs.convertToSRGB], let srgb = CGColorSpace(name: CGColorSpace.sRGB), result.colorSpace?.name != srgb.name {
+            result = redraw(result, colorSpace: srgb) ?? result
         }
-        if Defaults[Prefs.addBorder] {
+        if border, Defaults[Prefs.addBorder] {
             result = bordered(result) ?? result
         }
         return result

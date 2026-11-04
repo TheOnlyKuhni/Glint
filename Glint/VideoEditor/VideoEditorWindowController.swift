@@ -34,6 +34,7 @@ final class VideoEditorState: ObservableObject {
 /// and a timeline with a zoom track and the clip's thumbnails underneath.
 final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     private static var open: [VideoEditorWindowController] = []
+    static var hasOpenEditors: Bool { !open.isEmpty }
 
     let project: VideoProject
     let state = VideoEditorState()

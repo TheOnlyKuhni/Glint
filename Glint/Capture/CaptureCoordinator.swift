@@ -45,8 +45,6 @@ final class CaptureCoordinator {
         case .allInOne: AllInOne.shared.start()
         case .toggleCameraFullscreen:
             if WebcamOverlay.shared.isVisible { WebcamOverlay.shared.toggleFullScreen() } else { NSSound.beep() }
-        default:
-            ComingSoon.show(action.title)
         }
     }
 
@@ -159,7 +157,7 @@ final class CaptureCoordinator {
         }
     }
 
-    private func captureWindow(id: CGWindowID, frame: CGRect, screen: NSScreen, options: AfterCaptureOptions?) async {
+    func captureWindow(id: CGWindowID, frame: CGRect, screen: NSScreen, options: AfterCaptureOptions?) async {
         // A full-screen window has no shadow or rounded corners, so it's treated like a normal screenshot in the editor;
         // other windows keep their raw (transparent, shadowed) image so the editor can re-pad them on the wallpaper.
         let isFullScreenWindow = abs(frame.width - screen.frame.width) < 2 && abs(frame.height - screen.frame.height) < 2
@@ -243,24 +241,5 @@ enum Countdown {
             try? await Task.sleep(for: .seconds(1))
         }
         panel.orderOut(nil)
-    }
-}
-
-/// Placeholder for features scheduled in later milestones.
-enum ComingSoon {
-    static func show(_ feature: String) {
-        // Overlays (recording area, All-In-One) sit above the modal-panel level; lower them while the alert is up
-        // so it can be clicked, then put them and their key focus back.
-        let key = NSApp.keyWindow
-        let raised = NSApp.windows.filter { $0.isVisible && $0.level > .modalPanel }
-        let levels = raised.map(\.level)
-        raised.forEach { $0.level = .floating }
-        NSApp.activate()
-        let alert = NSAlert()
-        alert.messageText = "\(feature) isn't built yet"
-        alert.informativeText = "This feature is planned for a later version of Glint."
-        alert.runModal()
-        zip(raised, levels).forEach { $0.level = $1 }
-        key?.makeKeyAndOrderFront(nil)
     }
 }

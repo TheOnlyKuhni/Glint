@@ -74,6 +74,6 @@ final class HistoryStore {
         // "Never" still keeps the last hour, so open overlays and editors keep their files.
         let age: TimeInterval = days < 0 ? 3600 : Double(days) * 86_400
         let cutoff = Date().addingTimeInterval(-age)
-        for entry in entries() where entry.date < cutoff { delete(entry) }
+        for entry in entries() where entry.date < cutoff && !QuickAccessManager.shared.isShowing(entry.fileURL) { delete(entry) }
     }
 }
