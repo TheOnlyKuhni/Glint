@@ -81,6 +81,22 @@ struct VideoBackground: Equatable, Codable {
     var isVisible: Bool { padding > 0 || ratio != .auto }
 }
 
+/// Background presets are shared with the screenshot editor; the sliders' positions carry over.
+extension VideoBackground {
+    init(preset: BackgroundStyle) {
+        self.init(fill: preset.fill, padding: Double(preset.padding), shadow: Double(preset.shadow), corners: Double(preset.corners), ratio: preset.ratio)
+    }
+
+    var preset: BackgroundStyle {
+        var style = BackgroundStyle(fill: fill)
+        style.padding = CGFloat(padding)
+        style.shadow = CGFloat(shadow)
+        style.corners = CGFloat(corners)
+        style.ratio = ratio
+        return style
+    }
+}
+
 enum ZoomAnimation: String, Codable { case smooth, dynamic }
 
 /// Every setting of an edit in one value. Undo/redo snapshot this whole value, so any setting added here later is

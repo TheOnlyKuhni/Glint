@@ -18,6 +18,10 @@ import ScreenCaptureKit
 ///     glint://debug-ocr?path=/tmp/qr.png   (Capture Text on an image file: copy + toast)
 ///     glint://debug-action?sel=undo:   (a menu action through the window's responder chain, e.g. undo:, redo:)
 ///     glint://debug-preset   (stores one Background tool preset)
+///     glint://debug-history?trash=1   (opens the Capture History, on the Trash)
+///     glint://debug-state   (logs the frontmost video editor's playhead and timeline scroll)
+///     glint://debug-key?…&queue=1   (through the app's event queue, so event monitors see it)
+///     glint://debug-drag?…&hold=1   (no mouse-up at the end), glint://debug-mouseup?x=&y=
 ///     glint://debug-capture-area?x=&y=&w=&h=   (the capture flow for a rect, no selection UI)
 ///     glint://debug-capture-window?id=   (window capture of a CGWindowID)
 ///     glint://debug-record?x=&y=&w=&h=&seconds=3&mode=video|gif|studio   (a recording of a rect, no selection UI)
@@ -30,11 +34,15 @@ enum DebugHooks {
             CGRect(x: Double(query["x"] ?? "") ?? 100, y: Double(query["y"] ?? "") ?? 100,
                    width: Double(query["w"] ?? "") ?? 400, height: Double(query["h"] ?? "") ?? 300)
         }
+        if command == "debug-history" {
+            CaptureHistory.shared.show(trash: query["trash"] == "1")
+            return true
+        }
         if command == "debug-preset" {
             // One Background tool preset, for testing Settings → Screenshots → Background preset.
             var style = BackgroundStyle(fill: .color(0x3478F6))
             style.padding = 0.2
-            BackgroundStyle.presets = [style]
+            BackgroundStyle.presets.append(style)
             return true
         }
         if command == "debug-capture-area", let screen = NSScreen.main {
@@ -133,6 +141,10 @@ enum DebugHooks {
             NSPoint(x: Double(query[x] ?? "") ?? 0, y: window.frame.height - (Double(query[y] ?? "") ?? 0))
         }
         switch command {
+        case "debug-state":
+            glintLog((window.windowController as? VideoEditorWindowController)?.debugState ?? "no video editor")
+        case "debug-mouseup":
+            mouse(.leftMouseUp, point("x", "y"), mods, 1, window)
         case "debug-add-image":
             (window.windowController as? AnnotateWindowController)?.addImage(fromFile: URL(fileURLWithPath: query["path"] ?? ""))
         case "debug-action":
@@ -143,11 +155,12 @@ enum DebugHooks {
         case "debug-key":
             let chars = query["chars"] ?? ""
             let code = UInt16(query["code"] ?? "") ?? 0
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
+            // `phase=down` or `up` sends only that half (a held key).
+            for type in [NSEvent.EventType.keyDown, .keyUp] where query["phase"] == nil || query["phase"] == (type == .keyDown ? "down" : "up") {
                 if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
                                             windowNumber: window.windowNumber, context: nil, characters: chars,
                                             charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
-                    window.sendEvent(e)
+                    if query["queue"] == "1" { NSApp.postEvent(e, atStart: false) } else { window.sendEvent(e) }
                 }
             }
         case "debug-click":
@@ -179,7 +192,7 @@ enum DebugHooks {
                 let t = CGFloat(i) / 12
                 mouse(.leftMouseDragged, NSPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t), mods, 1, window)
             }
-            mouse(.leftMouseUp, b, mods, 1, window)
+            if query["hold"] != "1" { mouse(.leftMouseUp, b, mods, 1, window) }
         default:
             glintLog("debug: unknown \(command)")
         }

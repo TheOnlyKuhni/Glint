@@ -38,6 +38,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var pausedTotal = CMTime.zero
     private var pauseBegan: CMTime?
     private var lastVideoTime = CMTime.zero
+    /// The newest frame: frames only come when the screen changes, so it's repeated at the end.
+    private var lastVideoFrame: CMSampleBuffer?
 
     init(options: Options, clock: RecordingClock = RecordingClock()) {
         self.options = options
@@ -167,12 +169,26 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         return await withCheckedContinuation { cont in
             queue.async { [self] in
                 guard let writer, started else { cont.resume(returning: nil); return }
+                appendFinalFrame()
                 videoInput?.markAsFinished()
                 audioInput?.markAsFinished()
                 micInput?.markAsFinished()
                 writer.finishWriting { [outputURL] in cont.resume(returning: writer.status == .completed ? outputURL : nil) }
             }
         }
+    }
+
+    /// Holds the picture until Stop: a screen that stopped changing delivers no frames, and the video would end early
+    /// (long before the sound). The stream's timestamps run on the host clock.
+    private func appendFinalFrame() {
+        guard !paused, let frame = lastVideoFrame else { return }
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
+        lastVideoFrame = nil
+        guard now > lastVideoTime else { return }
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: now, decodeTimeStamp: .invalid)
+        var copy: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: frame, sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy)
+        if let copy { append(copy, to: videoInput) }
     }
 
     func discard() {
@@ -207,6 +223,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 clock.resumed(at: time.seconds)
             }
             lastVideoTime = time
+            lastVideoFrame = buffer
             append(buffer, to: videoInput)
         } else {
             guard started, !paused else { return }

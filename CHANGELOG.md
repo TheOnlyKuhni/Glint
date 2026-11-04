@@ -4,7 +4,33 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 
 ## [Unreleased]
 
+### Added
+
+- Trash: captures removed from the Capture History can be put back. Open it from the history's "…" menu or Settings →
+  Advanced, and empty it by hand or automatically after 1 to 90 days
+- Open images in Annotate from Finder: Open With, the "Open in Glint Annotate" service, or by dropping them on the Dock
+  icon, including images not made with Glint
+- Video editor: ←/→ and the ‹ › buttons move through the video: a tap nudges, holding speeds up. ⌥←/→ step one frame,
+  ⌘←/→ go to the start or end, K pauses
+- Video editor: background presets, shared with the screenshot editor
+- Video editor: export as MP4, MOV or GIF
+- Crop & Resize: a zoom lens shows the exact pixels while a handle is dragged
+- TIFF as a screenshot format, and a Format choice in the Save panels for screenshots
+- Hover animations on the video editor's buttons and on the timeline's zooms, camera actions, clips and events
+
+### Changed
+
+- Screenshot editor: a new toolbar (a dark dock with the tools in groups and a sliding selection); the head bars'
+  buttons and Drag Me now match the bottom bar's buttons
+- Stepping one frame in the video editor is now ⌥←/→
+
 ### Fixed
+
+- Recordings ending on a still screen had a video track shorter than their sound, and such recordings couldn't be
+  exported from the video editor
+- Alerts opened from the Capture History sat below it and couldn't be clicked
+- Rotated photos (EXIF orientation) opened sideways in Annotate; grayscale, indexed and 16-bit images are converted on
+  opening, and a file's DPI only counts as a screen scale at 144 or 216
 
 - Glint crashed when "Show menu bar icon" was switched in Settings. With the icon hidden, it now still appears during
   a recording, so a recording can always be stopped

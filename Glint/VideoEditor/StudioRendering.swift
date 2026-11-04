@@ -989,18 +989,27 @@ nonisolated final class GlintVideoCompositor: NSObject, AVVideoCompositing {
     let sourcePixelBufferAttributes: [String: any Sendable]? = [kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
     let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
 
+    private let lastScreenLock = NSLock()
+    private var lastScreen: CVPixelBuffer?
+
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {}
 
     func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
         guard let instruction = request.videoCompositionInstruction as? GlintCompositionInstruction,
-              let screen = request.sourceFrame(byTrackID: instruction.screenTrack),
               let output = request.renderContext.newPixelBuffer() else {
             request.finish(with: NSError(domain: "Glint", code: 1))
             return
         }
-        let camera = instruction.cameraTrack.flatMap { request.sourceFrame(byTrackID: $0) }.map { CIImage(cvPixelBuffer: $0) }
-        let image = instruction.renderer.render(CIImage(cvPixelBuffer: screen), camera: camera, time: request.compositionTime.seconds)
         let bounds = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(output), height: CVPixelBufferGetHeight(output))
+        // A recording's sound can outlast its picture (the screen stopped changing before the end): the last frame
+        // holds, as it does in a player. Without one yet (a seek straight there), black.
+        lastScreenLock.lock()
+        if let frame = request.sourceFrame(byTrackID: instruction.screenTrack) { lastScreen = frame }
+        let screen = lastScreen
+        lastScreenLock.unlock()
+        let camera = instruction.cameraTrack.flatMap { request.sourceFrame(byTrackID: $0) }.map { CIImage(cvPixelBuffer: $0) }
+        let picture = screen.map { CIImage(cvPixelBuffer: $0) } ?? CIImage(color: .black).cropped(to: bounds)
+        let image = instruction.renderer.render(picture, camera: camera, time: request.compositionTime.seconds)
         context.render(image.composited(over: CIImage(color: .black).cropped(to: bounds)), to: output, bounds: bounds, colorSpace: colorSpace)
         request.finish(withComposedVideoFrame: output)
     }

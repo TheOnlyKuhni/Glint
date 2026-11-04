@@ -73,31 +73,8 @@ enum OptionGlyph {
     }
 }
 
-/// The "Save as..." button: a 26pt capsule with 13pt medium text; gray, or blue when prominent.
-/// Hover darkens; press darkens more and shrinks.
+/// The head bars' buttons (Save as…, Done, Save, Export, Share): the bottom bar's capsules, blue when prominent.
 struct BarTextButtonStyle: ButtonStyle {
     let prominent: Bool
-    func makeBody(configuration: Configuration) -> some View { BarTextButtonBody(configuration: configuration, prominent: prominent) }
-}
-
-private struct BarTextButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let prominent: Bool
-    @State private var hovering = false
-
-    var body: some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(Color.white)
-            .padding(.horizontal, 8.75)
-            .frame(height: 26)
-            .background(Capsule().fill(prominent ? Color(.displayP3, red: 0x34 / 255.0, green: 0x78 / 255.0, blue: 0xF6 / 255.0)
-                                                 : Color.white.opacity(0.2)))
-            .overlay(Capsule().fill(Color.black.opacity(configuration.isPressed ? 0.24 : (hovering ? 0.1 : 0))))
-            .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .animation(.easeOut(duration: 0.15), value: hovering)
-            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: configuration.isPressed)
-            .onHover { hovering = $0 }
-    }
+    func makeBody(configuration: Configuration) -> some View { BarButtonBody(configuration: configuration, isOn: prominent, horizontalPadding: 14) }
 }

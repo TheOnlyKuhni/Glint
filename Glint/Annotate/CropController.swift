@@ -316,6 +316,9 @@ final class CropOverlayView: NSView {
     var magnification: () -> CGFloat = { 1 }
     /// The frame moved or was resized (`dragging`: the mouse is still down).
     var onRectChange: ((_ dragging: Bool) -> Void)?
+    /// A handle is being dragged: the point it sets and the pointer, both in screenshot points; nil = it ended.
+    var onHandleDrag: ((_ anchor: CGPoint, _ pointer: CGPoint) -> Void)?
+    var onHandleDragEnd: (() -> Void)?
     private enum Drag { case none, move(start: CGPoint, original: CGRect), edge(Set<Character>) }
     private var drag: Drag = .none
 
@@ -423,7 +426,7 @@ final class CropOverlayView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         guard let e = edges(at: p) else { drag = .none; return }
         drag = e.isEmpty ? .move(start: p, original: state.rect) : .edge(e)
-        if e.isEmpty { NSCursor.closedHand.set() }
+        if e.isEmpty { NSCursor.closedHand.set() } else { reportHandle(e, pointer: p) }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -468,12 +471,108 @@ final class CropOverlayView: NSView {
         state.rect = r
         state.clamp()
         onRectChange?(true)
+        if case .edge(let e) = drag { reportHandle(e, pointer: p) }
+    }
+
+    /// A corner is the point it sets; an edge the spot on it nearest the pointer.
+    private func reportHandle(_ e: Set<Character>, pointer: CGPoint) {
+        let r = state.rect
+        let x = e.contains("l") ? r.minX : (e.contains("r") ? r.maxX : min(max(pointer.x, r.minX), r.maxX))
+        let y = e.contains("t") ? r.minY : (e.contains("b") ? r.maxY : min(max(pointer.y, r.minY), r.maxY))
+        onHandleDrag?(CGPoint(x: x, y: y), pointer)
     }
 
     override func mouseUp(with event: NSEvent) {
         let dragged: Bool = { if case .none = drag { false } else { true } }()
         drag = .none
         window?.invalidateCursorRects(for: self)
+        onHandleDragEnd?()
         if dragged { onRectChange?(false) }
+    }
+}
+
+/// The zoom lens while a crop handle is dragged: the pixels around the point the handle sets, 8× and unsmoothed, with
+/// the frame on top and the point's position in pixels.
+final class CropLensView: NSView {
+    static let side: CGFloat = 148
+    private static let zoom: CGFloat = 8
+    private static let labelFont: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium), .foregroundColor: NSColor.white]
+
+    private let state: CropState
+    /// The flattened screenshot, in pixels.
+    var image: CGImage?
+    var anchor: CGPoint = .zero { didSet { needsDisplay = true } }
+
+    init(state: CropState) {
+        self.state = state
+        super.init(frame: CGRect(x: 0, y: 0, width: Self.side, height: Self.side))
+        wantsLayer = true
+        alphaValue = 0
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.5
+        layer?.shadowRadius = 10
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 14, cornerHeight: 14, transform: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let outline = CGPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), cornerWidth: 14, cornerHeight: 14, transform: nil)
+        let zoom = Self.zoom, scale = state.pixelScale
+        // The lens's top-left corner in pixels (the anchor stays in its middle).
+        let origin = CGPoint(x: anchor.x * scale - bounds.width / 2 / zoom, y: anchor.y * scale - bounds.height / 2 / zoom)
+        func lens(_ px: CGPoint) -> CGPoint { CGPoint(x: (px.x - origin.x) * zoom, y: (px.y - origin.y) * zoom) }
+
+        ctx.saveGState()
+        ctx.addPath(outline)
+        ctx.clip()
+        // Past the screenshot: what the crop would fill it with.
+        if let image, let fill = state.fillColor(for: image) {
+            ctx.setFillColor(fill)
+            ctx.fill(bounds)
+        } else {
+            Glint.BackgroundStyle.drawChecker(in: bounds, cell: Self.zoom, ctx: ctx)
+        }
+        if let image {
+            let wanted = CGRect(x: floor(origin.x), y: floor(origin.y), width: ceil(bounds.width / zoom) + 1, height: ceil(bounds.height / zoom) + 1)
+            let shown = wanted.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            if !shown.isEmpty, let piece = image.cropping(to: shown) {
+                let at = lens(shown.origin)
+                NSImage(cgImage: piece, size: .zero).draw(in: CGRect(x: at.x, y: at.y, width: shown.width * zoom, height: shown.height * zoom),
+                                                          from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+                                                          hints: [.interpolation: NSImageInterpolation.none.rawValue])
+            }
+        }
+        // What the crop cuts off is dimmed, and the frame on top.
+        let r = state.rect
+        let a = lens(CGPoint(x: r.minX * scale, y: r.minY * scale)), b = lens(CGPoint(x: r.maxX * scale, y: r.maxY * scale))
+        let frame = CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
+        let dim = CGMutablePath()
+        dim.addRect(bounds)
+        dim.addRect(frame)
+        ctx.addPath(dim)
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.5).cgColor)
+        ctx.fillPath(using: .evenOdd)
+        ctx.setStrokeColor(NSColor.white.cgColor)
+        ctx.setLineWidth(1)
+        ctx.stroke(frame)
+        // Where the point is.
+        let text = "\(Int((anchor.x * scale).rounded())), \(Int((anchor.y * scale).rounded()))" as NSString
+        let size = text.size(withAttributes: Self.labelFont)
+        let pill = CGRect(x: bounds.midX - size.width / 2 - 6, y: bounds.maxY - size.height - 10, width: size.width + 12, height: size.height + 3)
+        ctx.addPath(CGPath(roundedRect: pill, cornerWidth: pill.height / 2, cornerHeight: pill.height / 2, transform: nil))
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.7).cgColor)
+        ctx.fillPath()
+        text.draw(at: CGPoint(x: pill.minX + 6, y: pill.minY + 1.5), withAttributes: Self.labelFont)
+        ctx.restoreGState()
+
+        ctx.addPath(outline)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.85).cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.strokePath()
     }
 }

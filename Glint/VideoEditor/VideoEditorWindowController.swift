@@ -200,7 +200,9 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
             toEnd: { [weak self] in self.map { $0.seek($0.project.duration, reveal: true) } },
             frame: { [weak self] t in self?.frame(at: t) },
             toggleFullScreen: { [weak self] in self?.window?.toggleFullScreen(nil) },
-            everyFrame: { [weak self] in self?.toggleEveryFrame() }
+            everyFrame: { [weak self] in self?.toggleEveryFrame() },
+            beginScrub: { [weak self] in self?.beginScrub($0) },
+            endScrub: { [weak self] in self?.endScrub() }
         )
     }
 
@@ -365,8 +367,14 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: Keys
 
     private func installKeys() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.window === self.window, !(self.window?.firstResponder is NSText) else { return event }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            if event.type == .keyUp {
+                guard event.keyCode == 123 || event.keyCode == 124, self.scrubTimer != nil else { return event }
+                self.endScrub()
+                return nil
+            }
+            guard !(self.window?.firstResponder is NSText) else { return event }
             // ⌘Z / ⇧⌘Z undo and redo any edit (by the character, so it works on QWERTZ too).
             if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "s" {
                 self.save()
@@ -382,14 +390,103 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
             case 8 where event.modifierFlags.intersection([.command, .option, .control]).isEmpty:  // C toggles it
                 self.state.scissors.toggle(); return nil
             case 51, 117: self.deleteSelection(); return nil  // ⌫ / ⌦
-            case 123: self.seek(self.state.time - 1 / self.project.frameRate, reveal: true); return nil
-            case 124: self.seek(self.state.time + 1 / self.project.frameRate, reveal: true); return nil
+            case 40 where event.modifierFlags.intersection([.command, .option, .control]).isEmpty:  // K pauses
+                if self.state.isPlaying { self.togglePlay() }
+                return nil
+            case 123, 124: self.arrowKey(forward: event.keyCode == 124, event: event); return nil
             case 115: self.seek(0, reveal: true); return nil  // Home
             case 119: self.seek(self.project.duration, reveal: true); return nil  // End
             default: return event
             }
         }
     }
+
+    /// ←/→ move through the video and speed up while held; ⌥←/→ step one frame; ⌘←/→ go to the start or end.
+    private func arrowKey(forward: Bool, event: NSEvent) {
+        let flags = event.modifierFlags
+        if flags.contains(.command) {
+            if !event.isARepeat { seek(forward ? project.duration : 0, reveal: true) }
+        } else if flags.contains(.option) {
+            seek(state.time + (forward ? 1 : -1) / project.frameRate, reveal: true)
+        } else if !event.isARepeat {
+            beginScrub(forward ? 1 : -1)
+        }
+    }
+
+    // MARK: Scrubbing
+
+    /// A tap moves this far (seconds): a small, precise nudge.
+    private static let scrubTap = 0.1
+    /// Held longer than this, it starts moving by itself, at this speed (video seconds per second)…
+    private static let scrubHoldDelay = 0.2
+    private static let scrubStartSpeed = 1.5
+    /// …which grows by this factor every second, up to crossing a third of the video per second.
+    private static let scrubGrowth = 2.6
+
+    private var scrubTimer: Timer?
+    private var scrubDirection = 1.0
+    private var scrubStart: TimeInterval = 0
+    private var scrubLast: TimeInterval = 0
+    private var scrubTarget: Double?
+    private var scrubSeeking = false
+
+    private func beginScrub(_ direction: Double) {
+        scrubTimer?.invalidate()
+        if state.isPlaying { togglePlay() }
+        hoverPreview.isHidden = true
+        scrubDirection = direction
+        scrubStart = ProcessInfo.processInfo.systemUptime
+        scrubLast = scrubStart
+        moveScrub(by: direction * Self.scrubTap)
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scrubTick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scrubTimer = timer
+    }
+
+    private func scrubTick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let held = now - scrubStart - Self.scrubHoldDelay
+        defer { scrubLast = now }
+        guard held > 0 else { return }
+        let limit = max(project.duration / 3, Self.scrubStartSpeed)
+        let speed = min(Self.scrubStartSpeed * pow(Self.scrubGrowth, held), limit)
+        moveScrub(by: scrubDirection * speed * (now - scrubLast))
+    }
+
+    private func moveScrub(by seconds: Double) {
+        let t = min(max(state.time + seconds, 0), project.duration)
+        state.time = t
+        timeline.follow(t)
+        seekWhileScrubbing(t)
+    }
+
+    /// One seek at a time, not exact (exact ones can't keep up); when it lands, the next goes to where the playhead is by then.
+    private func seekWhileScrubbing(_ t: Double) {
+        scrubTarget = t
+        guard !scrubSeeking else { return }
+        scrubSeeking = true
+        let tolerance = CMTime(value: 1, timescale: 10)
+        player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.scrubSeeking = false
+                if let target = self.scrubTarget, target != t { self.seekWhileScrubbing(target) }
+            }
+        }
+    }
+
+    /// Key or button released: the playhead lands exactly.
+    private func endScrub() {
+        guard scrubTimer != nil else { return }
+        scrubTimer?.invalidate()
+        scrubTimer = nil
+        scrubTarget = nil
+        seek(state.time)
+    }
+
+    func windowDidResignKey(_ notification: Notification) { endScrub() }
 
     private func deleteSelection() {
         if let at = state.selectedCut {
@@ -409,6 +506,11 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
             state.selectedClip = nil
         }
     }
+
+    #if DEBUG
+    /// What `glint://debug-state` logs for the frontmost editor.
+    var debugState: String { "video time=\(state.time) playing=\(state.isPlaying) timelineX=\(timeline.scrollView.contentView.bounds.minX) zoom=\(state.timelineZoom) fit=\(state.timelineFitZoom)" }
+    #endif
 
     // MARK: Timeline hover preview
 

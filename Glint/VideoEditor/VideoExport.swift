@@ -2,7 +2,27 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-/// Renders the edit to an H.264 mp4: composed frames through the frame renderer at the chosen size and bitrate,
+/// What the export sheet can make.
+enum VideoExportFormat: CaseIterable {
+    case mp4, mov, gif
+    var title: String {
+        switch self {
+        case .mp4: "MP4"
+        case .mov: "MOV"
+        case .gif: "GIF"
+        }
+    }
+    var fileExtension: String { title.lowercased() }
+    var help: String {
+        switch self {
+        case .mp4: "H.264 video that plays nearly everywhere"
+        case .mov: "The same video in Apple's QuickTime container"
+        case .gif: "An animated picture without sound"
+        }
+    }
+}
+
+/// Renders the edit to an H.264 movie: composed frames through the frame renderer at the chosen size and bitrate,
 /// audio (with the volume) as AAC.
 enum VideoExporter {
     static let qualityNames = ["Low", "Medium", "High", "Best"]
@@ -21,7 +41,7 @@ enum VideoExporter {
     }
 
     /// Writes the export to a temporary file and returns it.
-    static func export(project: VideoProject, scale: CGFloat, quality: Int, includeAudio: Bool,
+    static func export(project: VideoProject, scale: CGFloat, quality: Int, includeAudio: Bool, fileType: AVFileType = .mp4,
                        progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
         let (composition, mix) = try await project.makeComposition()
         let settings = project.renderSettings(outputScale: scale)
@@ -32,16 +52,16 @@ enum VideoExporter {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("glint-export-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let name = project.url.deletingPathExtension().lastPathComponent
-        let url = folder.appendingPathComponent(name).appendingPathExtension("mp4")
-        try await write(composition: composition, videoComposition: videoComposition, audioMix: includeAudio ? mix : nil, size: size,
+        let url = folder.appendingPathComponent(name).appendingPathExtension(fileType == .mov ? "mov" : "mp4")
+        try await write(composition: composition, videoComposition: videoComposition, audioMix: includeAudio ? mix : nil, size: size, fileType: fileType,
                         bitrate: bitrate(size: size, frameRate: project.frameRate, quality: quality), to: url, progress: progress)
         return url
     }
 
-    private nonisolated static func write(composition: AVComposition, videoComposition: AVVideoComposition, audioMix: AVAudioMix?, size: CGSize,
+    private nonisolated static func write(composition: AVComposition, videoComposition: AVVideoComposition, audioMix: AVAudioMix?, size: CGSize, fileType: AVFileType,
                                           bitrate: Double, to url: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         let reader = try AVAssetReader(asset: composition)
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
         let duration = try await composition.load(.duration).seconds
         let videoTracks = try await composition.loadTracks(withMediaType: .video)
         let audioTracks = audioMix == nil ? [] : try await composition.loadTracks(withMediaType: .audio)
@@ -146,6 +166,7 @@ enum VideoExportSheet {
 
 private final class ExportModel: ObservableObject {
     let project: VideoProject
+    @Published var format: VideoExportFormat
     @Published var resolution = 0
     @Published var quality: Double = 2
     @Published var includeAudio: Bool
@@ -157,6 +178,7 @@ private final class ExportModel: ObservableObject {
     init(project: VideoProject) {
         self.project = project
         includeAudio = project.hasAudio && project.includeAudio
+        format = project.url.pathExtension.lowercased() == "mov" ? .mov : .mp4
     }
 
     /// Original plus the common heights below it.
@@ -178,6 +200,8 @@ private final class ExportModel: ObservableObject {
     /// Asks Replace Video / Save as New Video / Cancel, then renders.
     func export() {
         guard let sheet else { return }
+        // Another format can't take the recording's place.
+        guard format.fileExtension == project.url.pathExtension.lowercased() else { render(replace: false); return }
         let alert = NSAlert()
         alert.messageText = "Do you want to replace the existing video?"
         alert.informativeText = "Replace Video updates this recording (you can still re-edit it). Save as New Video keeps the recording and adds a new one."
@@ -197,13 +221,18 @@ private final class ExportModel: ObservableObject {
 
     private func render(replace: Bool) {
         exporting = true
-        let scale = resolutions[resolution].scale
+        let scale = resolutions[resolution].scale, format = format
         Task {
             do {
-                let url = try await VideoExporter.export(project: project, scale: scale, quality: Int(quality.rounded()), includeAudio: includeAudio) { p in
+                // A GIF is made from a full-size movie, with the GIF settings.
+                let url = try await VideoExporter.export(project: project, scale: format == .gif ? 1 : scale, quality: format == .gif ? 3 : Int(quality.rounded()),
+                                                         includeAudio: format != .gif && includeAudio, fileType: format == .mov ? .mov : .mp4) { p in
                     Task { @MainActor in self.progress = p }
                 }
-                close?(url, replace)
+                guard format == .gif else { close?(url, replace); return }
+                let gif = url.deletingPathExtension().appendingPathExtension("gif")
+                guard await GIFEncoder.encode(movie: url, to: gif) else { throw CocoaError(.fileWriteUnknown) }
+                close?(gif, false)
             } catch {
                 glintLog("video export failed: \(error)")
                 NSSound.beep()
@@ -218,36 +247,46 @@ private struct ExportSheetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Resolution").font(.system(size: 13, weight: .semibold))
-            Picker("", selection: $model.resolution) {
-                ForEach(model.resolutions.indices, id: \.self) { Text(model.resolutions[$0].title).tag($0) }
-            }
-            .labelsHidden().padding(.top, 8)
-            .help("Pixel size of the exported video")
+            Text("Format").font(.system(size: 13, weight: .semibold))
+            ChoiceButtons(titles: VideoExportFormat.allCases.map(\.title), selected: VideoExportFormat.allCases.firstIndex(of: model.format) ?? 0,
+                          helps: VideoExportFormat.allCases.map(\.help)) { model.format = VideoExportFormat.allCases[$0] }
+                .padding(.top, 8)
             Divider().padding(.vertical, 14)
-            HStack {
-                Text("Quality").font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text(VideoExporter.qualityNames[Int(model.quality.rounded())]).font(.system(size: 13)).foregroundStyle(.secondary)
-            }
-            Slider(value: $model.quality, in: 0...3, step: 1).padding(.top, 8)
-                .help("Higher quality looks sharper and makes a bigger file")
-            Divider().padding(.vertical, 14)
-            HStack {
-                Text("Audio").font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Toggle("", isOn: $model.includeAudio).toggleStyle(.switch).controlSize(.small).labelsHidden()
-                    .disabled(!model.project.hasAudio)
-                    .help("Include the video's sound in the export")
-            }
-            if !model.project.hasAudio {
-                Text("There is no audio in your video.").font(.system(size: 11.5)).foregroundStyle(.secondary).padding(.top, 6)
-            }
-            Divider().padding(.vertical, 14)
-            HStack {
-                Text("Estimated file size").font(.system(size: 13)).foregroundStyle(.secondary)
-                Spacer()
-                Text(model.estimate).font(.system(size: 13)).foregroundStyle(.secondary)
+            if model.format == .gif {
+                Text("Uses the frame rate, width and quality from Settings → Screen Recording → GIF.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Resolution").font(.system(size: 13, weight: .semibold))
+                Picker("", selection: $model.resolution) {
+                    ForEach(model.resolutions.indices, id: \.self) { Text(model.resolutions[$0].title).tag($0) }
+                }
+                .labelsHidden().padding(.top, 8)
+                .help("Pixel size of the exported video")
+                Divider().padding(.vertical, 14)
+                HStack {
+                    Text("Quality").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Text(VideoExporter.qualityNames[Int(model.quality.rounded())]).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                Slider(value: $model.quality, in: 0...3, step: 1).padding(.top, 8)
+                    .help("Higher quality looks sharper and makes a bigger file")
+                Divider().padding(.vertical, 14)
+                HStack {
+                    Text("Audio").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Toggle("", isOn: $model.includeAudio).toggleStyle(.switch).controlSize(.small).labelsHidden()
+                        .disabled(!model.project.hasAudio)
+                        .help("Include the video's sound in the export")
+                }
+                if !model.project.hasAudio {
+                    Text("There is no audio in your video.").font(.system(size: 11.5)).foregroundStyle(.secondary).padding(.top, 6)
+                }
+                Divider().padding(.vertical, 14)
+                HStack {
+                    Text("Estimated file size").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(model.estimate).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
             }
             if model.exporting {
                 ProgressView(value: model.progress).padding(.top, 16)

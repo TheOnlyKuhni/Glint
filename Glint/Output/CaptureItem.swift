@@ -42,13 +42,34 @@ final class CaptureItem: Identifiable {
         if ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) || url.pathExtension.lowercased() == "gif" {
             return loadRecording(url, date: date)
         }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-        else { return nil }
-        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        let dpi = (props?[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 72
+        guard let file = ImageFile.load(url) else { return nil }
         let created = date ?? (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
-        return CaptureItem(image: image, scale: max(1, CGFloat(dpi / 72).rounded()), date: created, fileURL: url, kind: .screenshot)
+        return CaptureItem(image: file.image, scale: file.scale, date: created, fileURL: url, kind: .screenshot)
+    }
+}
+
+/// An image file from anywhere (not only Glint's): upright, in a form the editor can work with, and its scale.
+enum ImageFile {
+    static func load(_ url: URL) -> (image: CGImage, scale: CGFloat)? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let orientation = (props?[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        var image: CGImage?
+        if orientation != 1, let w = props?[kCGImagePropertyPixelWidth] as? Int, let h = props?[kCGImagePropertyPixelHeight] as? Int {
+            // Photos carry their rotation as a tag: the thumbnail call is the one that applies it.
+            image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: max(w, h),
+                kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: true,
+            ] as CFDictionary)
+        }
+        guard let loaded = image ?? CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+        // Grayscale, indexed, CMYK or 16-bit files become what screenshots are: 8-bit RGB.
+        let usable = loaded.colorSpace?.model == .rgb && loaded.bitsPerComponent == 8
+        let rgb = usable ? loaded : ImageProcessing.redraw(loaded, colorSpace: loaded.colorSpace?.model == .rgb ? loaded.colorSpace! : CGColorSpace(name: CGColorSpace.sRGB)!)
+        // Retina files are 144 or 216 dpi; any other number (a 300 dpi photo) isn't a screen scale.
+        let dpi = (props?[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 72
+        let scale: CGFloat = abs(dpi - 144) < 2 ? 2 : (abs(dpi - 216) < 2 ? 3 : 1)
+        return rgb.map { ($0, scale) }
     }
 }
 
@@ -58,12 +79,13 @@ enum ImageEncoder {
         case .png: .png
         case .jpeg: .jpeg
         case .heic: .heic
+        case .tiff: .tiff
         }
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { return nil }
         let dpi = 72 * scale
         var props: [CFString: Any] = [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi]
-        if format != .png { props[kCGImageDestinationLossyCompressionQuality] = 0.9 }
+        if format == .jpeg || format == .heic { props[kCGImageDestinationLossyCompressionQuality] = 0.9 }
         CGImageDestinationAddImage(dest, image, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return data as Data

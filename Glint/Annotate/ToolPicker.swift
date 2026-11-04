@@ -1,50 +1,79 @@
 import AppKit
 import SwiftUI
 
-/// Tool selector for the Annotate toolbar: a 24pt capsule of 35pt cells with 1pt separators.
-/// The selected tool is a full-cell blue capsule (gray while the window is inactive); hovering shows a faint one.
-/// Separators next to either disappear. Selection changes without animation. While cropping the tools rest: none is
-/// selected and they're dimmed and off until Crop & Resize ends.
+/// The Annotate toolbar: one near-black dock (the canvas's black, with the bottom bar's hairline) holding the tools in
+/// four groups: select, shapes, marks, drawing. A blue pill slides to the selected tool (gray while the window is
+/// inactive); hovering lights a tool up on the buttons' gray. While cropping the tools rest: none is selected and they're
+/// dimmed and off until Crop & Resize ends.
 struct ToolPicker: View {
     let doc: AnnotationDocument
     let onSelect: (AnnotateTool) -> Void
     @State private var hovered: AnnotateTool?
+    @Namespace private var pill
     @Environment(\.controlActiveState) private var windowState
 
-    static let cellWidth: CGFloat = 35
+    static let cellWidth: CGFloat = 33
+    static let inset: CGFloat = 3
+    private static let groupGap: CGFloat = 11
+    /// The tool that starts each group after the first.
+    private static let groupStarts: Set<AnnotateTool> = [.rectangle, .text, .draw]
+    private static let dock = Color(white: 0x17 / 255.0)
+    private static let hoverFill = Color(white: 0x2A / 255.0)
     private static let selectedFill = Color(.displayP3, red: 0x34 / 255.0, green: 0x78 / 255.0, blue: 0xF6 / 255.0)
-    private static let glyph = Color(.displayP3, red: 0xE5 / 255.0, green: 0xE5 / 255.0, blue: 0xE5 / 255.0)
+
+    /// A tool's left edge inside the picker (the tooltips use it too).
+    static func offset(of tool: AnnotateTool) -> CGFloat {
+        let index = AnnotateTool.allCases.firstIndex(of: tool) ?? 0
+        let gaps = AnnotateTool.allCases.prefix(index + 1).filter(groupStarts.contains).count
+        return inset + CGFloat(index) * cellWidth + CGFloat(gaps) * groupGap
+    }
 
     var body: some View {
-        let tools = AnnotateTool.allCases
         let inactive = windowState == .inactive
         let resting = doc.isCropping || doc.toolsResting
         HStack(spacing: 0) {
-            ForEach(Array(tools.enumerated()), id: \.element) { index, tool in
-                if index > 0 {
-                    let highlighted: Set<AnnotateTool> = [resting ? nil : doc.tool, hovered].compactMap { $0 }.reduce(into: []) { $0.insert($1) }
-                    let hidden = highlighted.contains(tool) || highlighted.contains(tools[index - 1])
-                    Rectangle()
-                        .fill(Color.white.opacity(hidden ? 0 : 0.1))
-                        .frame(width: 1, height: 14)
+            ForEach(AnnotateTool.allCases) { tool in
+                if Self.groupStarts.contains(tool) {
+                    Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 16).frame(width: Self.groupGap)
                 }
-                let selected = !resting && tool == doc.tool
-                Button { onSelect(tool) } label: {
-                    Image(nsImage: ToolGlyph.image(for: tool))
-                        .foregroundStyle(inactive ? Color.white.opacity(0.65) : (selected ? Color.white : Self.glyph))
-                        .frame(width: Self.cellWidth, height: 24)
-                        .background(Capsule().fill(selected ? (inactive ? Color.white.opacity(0.2) : Self.selectedFill)
-                                                            : Color.white.opacity(hovered == tool ? 0.12 : 0)))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovered = $0 && !resting ? tool : (hovered == tool ? nil : hovered) }
+                cell(tool, selected: !resting && tool == doc.tool, inactive: inactive, resting: resting)
             }
         }
-        .background(Capsule().fill(Color.white.opacity(0.1)))
+        .padding(Self.inset)
+        .background(Capsule().fill(Self.dock))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
         .opacity(resting ? 0.4 : 1)
         .allowsHitTesting(!resting)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: doc.tool)
         .animation(.easeOut(duration: 0.15), value: resting)
+    }
+
+    private func cell(_ tool: AnnotateTool, selected: Bool, inactive: Bool, resting: Bool) -> some View {
+        Button { onSelect(tool) } label: {
+            Image(nsImage: ToolGlyph.image(for: tool))
+                .foregroundStyle(selected || hovered == tool ? Color.white : Color(white: inactive ? 0.45 : 0.62))
+                .frame(width: Self.cellWidth, height: 26)
+                .background {
+                    if selected {
+                        Capsule().fill(inactive ? Color.white.opacity(0.2) : Self.selectedFill).matchedGeometryEffect(id: "selected", in: pill)
+                    } else if hovered == tool {
+                        Capsule().fill(Self.hoverFill)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(ToolCellStyle())
+        .onHover { hovered = $0 && !resting ? tool : (hovered == tool ? nil : hovered) }
+        .animation(.easeOut(duration: 0.12), value: hovered)
+    }
+}
+
+/// A press pushes the tool in.
+private struct ToolCellStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
     }
 }
 
@@ -58,9 +87,8 @@ final class ToolPickerHostingView: NSHostingView<ToolPicker> {
         guard bounds != tooltipBounds else { return }
         tooltipBounds = bounds
         removeAllToolTips()
-        for (i, tool) in AnnotateTool.allCases.enumerated() {
-            let x = CGFloat(i) * (ToolPicker.cellWidth + 1)
-            addToolTip(CGRect(x: x, y: 0, width: ToolPicker.cellWidth, height: bounds.height), owner: ToolHint(tool: tool), userData: nil)
+        for tool in AnnotateTool.allCases {
+            addToolTip(CGRect(x: ToolPicker.offset(of: tool), y: 0, width: ToolPicker.cellWidth, height: bounds.height), owner: ToolHint(tool: tool), userData: nil)
         }
     }
 

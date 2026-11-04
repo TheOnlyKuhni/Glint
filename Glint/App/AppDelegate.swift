@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MainMenu.make()
+        NSApp.servicesProvider = self
         statusItemController = StatusItemController()
         ShortcutManager.shared.onTrigger = { action in AppRouter.perform(action) }
         ShortcutManager.shared.start()
@@ -28,7 +29,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls { AppRouter.handle(url: url) }
+        for url in urls {
+            // A file: Finder's Open With, or dropped on the Dock icon.
+            if url.isFileURL { AnnotateWindowController.open(url: url) } else { AppRouter.handle(url: url) }
+        }
+    }
+
+    /// The "Open in Glint Annotate" service: Finder's right-click menu (Quick Actions / Services).
+    @objc func openInAnnotate(_ pasteboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString>) {
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        guard !urls.isEmpty else { error.pointee = "No image files were selected." as NSString; return }
+        urls.forEach(AnnotateWindowController.open(url:))
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
