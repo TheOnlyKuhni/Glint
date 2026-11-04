@@ -46,6 +46,13 @@ in these pictures is made up.)
 
 ![The video editor with zooms on the timeline and a gradient background](docs/images/video-editor.png)
 
+**Studio Mode:** the screen, pointer, keys and camera are recorded separately, so all of it stays adjustable after
+recording. Automatic zooms follow your cursor, and you can change the cursor's size, style, smoothing and click effects,
+show or hide keystrokes, and move or resize the camera. The timeline shows every click, drag, scroll, shortcut and typed
+word, so you can find a moment quickly or remove what shouldn't be seen.
+
+![Studio Mode with automatic zooms, a camera action and recorded clicks and keystrokes on the timeline](docs/images/studio-mode.png)
+
 <table>
 <tr>
 <td width="50%"><strong>Quick Access:</strong> your latest captures float in the corner, to copy, save, annotate, pin or drag anywhere.</td>
