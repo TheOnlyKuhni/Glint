@@ -11,6 +11,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=kofi&logoColor=white)](https://ko-fi.com/kuhni)
 
+<br>
+
+<a href="https://ko-fi.com/kuhni"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" height="48" alt="Buy me a coffee on Ko-fi"></a>
+
 </div>
 
 ---
@@ -189,10 +193,14 @@ Bug reports, ideas and pull requests are welcome. Please read [CONTRIBUTING.md](
 
 ## Support the project
 
-Glint is free and always will be. If it saves you time and you'd like to say thanks, you can support it on
-[Ko-fi](https://ko-fi.com/kuhni). It's completely voluntary and very much appreciated. ☕
+<div align="center">
 
-[![Support Glint on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kuhni)
+Glint is free and always will be. If it saves you time and you'd like to say thanks, you can support it on Ko-fi.
+It's completely voluntary and very much appreciated.
+
+<a href="https://ko-fi.com/kuhni"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" height="48" alt="Buy me a coffee on Ko-fi"></a>
+
+</div>
 
 ## License
 
