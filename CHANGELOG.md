@@ -2,7 +2,9 @@
 
 All notable changes to Glint are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [0.2] – Beta
+
+The first public release.
 
 ### Added
 
@@ -20,6 +22,7 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 
 ### Changed
 
+- Release builds run natively on Intel as well as Apple silicon
 - Screenshot editor: a new toolbar (a dark dock with the tools in groups and a sliding selection); the head bars'
   buttons and Drag Me now match the bottom bar's buttons
 - Stepping one frame in the video editor is now ⌥←/→

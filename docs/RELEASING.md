@@ -2,6 +2,26 @@
 
 How updates work, the one-time setup, and the steps for each release.
 
+## Going public
+
+### Publish without notarization (free)
+
+Everyone can see and download Glint; macOS blocks it on first open, and the README explains how to get past that.
+
+1. Raise the version and build, and move the `[Unreleased]` notes in `CHANGELOG.md` under the new version.
+2. Update the version badge and the beta note in `README.md`. Add a screenshot or GIF near the top.
+3. Run `Tools/release.sh`, try the resulting zip, then attach it to a GitHub Release.
+4. Commit and push `appcast.xml` and the version bump.
+5. Make the repo public: `gh repo edit TheOnlyKuhni/Glint --visibility public --accept-visibility-change-consequences`.
+   Every commit becomes visible, including the email address on them.
+6. Check while signed out of GitHub: the README and its links, the zip's download, and the feed
+   (`https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/appcast.xml`).
+
+### Remove the macOS warning (paid)
+
+Needs the Apple Developer Program. See *Developer ID and notarization* below, then remove the "Opening Glint for the
+first time" section from the README.
+
 ## How updates work
 
 - Glint uses [Sparkle 2](https://sparkle-project.org) (Swift package, added to the Xcode project).
@@ -9,7 +29,8 @@ How updates work, the one-time setup, and the steps for each release.
   `https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/appcast.xml`
 - `appcast.xml` lists releases. Each entry points to a zip attached to a GitHub Release and carries an EdDSA
   signature. Glint only installs a zip whose signature matches the public key in `SUPublicEDKey`.
-- Without a key in `SUPublicEDKey`, the updater stays off (builds from source never update themselves).
+- Without a key in `SUPublicEDKey`, the updater stays off. The key is in the repo, so builds from source do check for
+  updates unless the builder removes it.
 
 > [!WARNING]
 > **Private repository:** GitHub serves `raw.githubusercontent.com` files and release downloads of a private repo
@@ -54,7 +75,14 @@ have to click *Open Anyway* in Privacy & Security. To ship without that warning,
    (hardened runtime and entitlements are already set up).
 4. Store notarization credentials once:
    `xcrun notarytool store-credentials glint-notary --apple-id <you@example.com> --team-id <TEAM_ID>`
-5. Release with `NOTARY_PROFILE=glint-notary Tools/release.sh`.
+5. `Tools/release.sh` still needs three changes, which can only be tested with the certificate. Apple rejects a build
+   that has any of what today's Release build has:
+   - the `get-task-allow` entitlement: set `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO` for Release;
+   - signatures without a secure timestamp: add `OTHER_CODE_SIGN_FLAGS = --timestamp`;
+   - Sparkle's helpers (`Autoupdate`, `Updater.app`, `Downloader.xpc`, `Installer.xpc`) signed ad hoc: re-sign them with
+     the Developer ID from the inside out, then Sparkle.framework, then Glint.app.
+6. Release with `NOTARY_PROFILE=glint-notary Tools/release.sh`. Before publishing, check the zip's app with
+   `spctl -a -vv -t exec Glint.app`: it should say "accepted" and "Notarized Developer ID".
 
 ## Each release
 

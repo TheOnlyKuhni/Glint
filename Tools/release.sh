@@ -8,8 +8,9 @@ cd "$(dirname "$0")/.."
 REPO=TheOnlyKuhni/Glint
 DERIVED=build/DerivedData
 
+# The generic destination builds for Apple silicon and Intel; without it, only for this Mac's architecture.
 xcodebuild -project Glint.xcodeproj -scheme Glint -configuration Release -derivedDataPath $DERIVED \
-  -allowProvisioningUpdates build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u
+  -destination 'generic/platform=macOS' -allowProvisioningUpdates build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | sort -u
 APP=$DERIVED/Build/Products/Release/Glint.app
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Contents/Info.plist")

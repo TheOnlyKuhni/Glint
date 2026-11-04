@@ -68,6 +68,10 @@ final class QuickAccessManager {
 
     func isShowing(_ file: URL) -> Bool { entries.contains { $0.item.fileURL == file } }
 
+    #if DEBUG
+    func debugShowHover() { entries.forEach { $0.hover.isHovering = true } }
+    #endif
+
     /// The capture's file is going away.
     func close(file: URL) { entries.filter { $0.item.fileURL == file }.forEach { close($0) } }
 
