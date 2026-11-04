@@ -18,6 +18,8 @@ import ScreenCaptureKit
 ///     glint://debug-ocr?path=/tmp/qr.png   (Capture Text on an image file: copy + toast)
 ///     glint://debug-action?sel=undo:   (a menu action through the window's responder chain, e.g. undo:, redo:)
 ///     glint://debug-preset   (stores one Background tool preset)
+///     glint://debug-quick-access?path=&hover=1   (a file as a Quick Access card, with its buttons showing)
+///     glint://debug-settings?pane=screenshots   (a Settings pane)
 ///     glint://debug-history?trash=1   (opens the Capture History, on the Trash)
 ///     glint://debug-state   (logs the frontmost video editor's playhead and timeline scroll)
 ///     glint://debug-key?…&queue=1   (through the app's event queue, so event monitors see it)
@@ -33,6 +35,16 @@ enum DebugHooks {
         func rect() -> CGRect {
             CGRect(x: Double(query["x"] ?? "") ?? 100, y: Double(query["y"] ?? "") ?? 100,
                    width: Double(query["w"] ?? "") ?? 400, height: Double(query["h"] ?? "") ?? 300)
+        }
+        if command == "debug-quick-access", let path = query["path"] {
+            // A file as a Quick Access card; `hover=1` shows every card's buttons.
+            if let item = CaptureItem.load(URL(fileURLWithPath: path)) { QuickAccessManager.shared.show(item) }
+            if query["hover"] == "1" { QuickAccessManager.shared.debugShowHover() }
+            return true
+        }
+        if command == "debug-settings" {
+            SettingsWindowController.shared.show(pane: query["pane"].flatMap(SettingsPane.init(rawValue:)))
+            return true
         }
         if command == "debug-history" {
             CaptureHistory.shared.show(trash: query["trash"] == "1")

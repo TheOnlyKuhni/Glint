@@ -7,9 +7,8 @@
 **Screenshots, screen recordings and annotations for macOS, right from the menu bar.**
 
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-blue)
-![Version 0.1 beta](https://img.shields.io/badge/version-0.1%20beta-orange)
+![Version 0.2 beta](https://img.shields.io/badge/version-0.2%20beta-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=kofi&logoColor=white)](https://ko-fi.com/kuhni)
 
 <br>
 
@@ -28,10 +27,69 @@ macOS's built-in Screenshot app. Glint is not affiliated with, endorsed by or co
 names are trademarks of their respective owners.
 
 > [!NOTE]
-> Glint is in **beta (0.1)**. Expect rough edges, and please [report bugs](../../issues/new/choose).
+> Glint is in **beta (0.2)**. Expect rough edges, and please [report bugs](../../issues/new/choose).
+
+## A quick look
+
+Annotate a screenshot, put it on a background, edit a recording, and keep your latest captures at hand. (The dashboard
+in these pictures is made up.)
+
+**Screenshot editor:** arrows, shapes, text, counters, highlighter and blur.
+
+![The screenshot editor with annotations on a sample dashboard](docs/images/screenshot-editor.png)
+
+**Backgrounds:** gradients, wallpapers, padding, shadow and round corners, with presets.
+
+![The Background panel with a gradient behind the sample dashboard](docs/images/background.png)
+
+**Video editor:** trim, cut and zoom a recording, add a background, export as MP4, MOV or GIF.
+
+![The video editor with zooms on the timeline and a gradient background](docs/images/video-editor.png)
+
+<table>
+<tr>
+<td width="50%"><strong>Quick Access:</strong> your latest captures float in the corner, to copy, save, annotate, pin or drag anywhere.</td>
+<td width="50%"><strong>Settings:</strong> formats, shortcuts, and what happens after each capture.</td>
+</tr>
+<tr>
+<td><img src="docs/images/quick-access.png" alt="Two Quick Access cards, one showing its Copy and Save buttons"></td>
+<td><img src="docs/images/settings.png" alt="The Screenshots pane of Glint's settings"></td>
+</tr>
+</table>
+
+## Opening Glint for the first time
+
+> [!IMPORTANT]
+> **macOS will block Glint the first time you open it. This is expected for now.** Glint isn't notarized by Apple yet,
+> so macOS says "Apple could not verify 'Glint' is free of malware" and offers no way to open it from that message.
+
+To open it, once:
+
+1. Move **Glint.app** to your **Applications** folder and open it. When the message appears, click **Done**.
+2. Open **System Settings → Privacy & Security** and scroll down to **Security**.
+3. Click **Open Anyway** next to the message about Glint, and confirm with your password or Touch ID.
+
+<details>
+<summary>Or use Terminal, and why this happens</summary>
+
+Instead of the steps above, you can remove the download flag from the app, then open it as usual:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Glint.app
+```
+
+**Why:** macOS only opens downloaded apps without asking if they're signed with a paid Apple Developer ID and checked
+by Apple (notarization). Glint is a free project that doesn't have this yet. It doesn't mean Glint was found to contain
+anything harmful; it means Apple hasn't checked it. Only do this with a copy from this repository's
+[Releases](../../releases) page. All of the source code is here, and you can [build it yourself](#building-from-source)
+if you prefer.
+
+</details>
 
 ## Contents
 
+- [A quick look](#a-quick-look)
+- [Opening Glint for the first time](#opening-glint-for-the-first-time)
 - [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -54,14 +112,18 @@ names are trademarks of their respective owners.
   spotlight and added images.
 - **Backgrounds:** gradients, your wallpaper or any image, padding, inset, shadow, rounded corners, alignment,
   aspect ratios and presets.
-- **Crop & Resize:** ratios, exact sizes, rotate and flip, output size. Saved edits stay editable.
+- **Crop & Resize:** ratios, exact sizes, rotate and flip, output size, and a zoom lens for placing handles to the
+  pixel. Saved edits stay editable.
 - **Record:** screen or window as video or GIF, with microphone and system audio, camera overlay, highlighted clicks
   and keystrokes, and Do Not Disturb while recording.
-- **Video editor:** trim and cut, zooms, background, padding, corners and shadow, export to video or GIF.
+- **Video editor:** trim and cut, zooms, background presets, padding, corners and shadow, keyboard scrubbing, and export
+  to MP4, MOV or GIF.
 - **Studio Mode:** record the screen as an editable project: automatic zooms that follow the cursor, cursor size,
   style, smoothing and click effects, keystrokes and the camera, all adjustable after recording.
 - **Quick Access:** a floating stack of your latest captures to copy, save, annotate, pin or drag anywhere.
-- **Pin to the Screen** and **Capture History** to restore earlier captures.
+- **Export formats:** screenshots as PNG, JPEG, HEIC or TIFF.
+- **Pin to the Screen** and **Capture History** to restore earlier captures, with a **Trash** for ones you remove.
+- **Open images from Finder:** any PNG, JPEG, HEIC, TIFF, WebP or BMP opens in Annotate through **Open With**.
 - **URL scheme** (`glint://capture-area`, `glint://open-annotate?filepath=…`, …) for automation.
 
 ## Requirements
@@ -75,20 +137,12 @@ names are trademarks of their respective owners.
 
 1. Download the latest `Glint-<version>.zip` from [Releases](../../releases).
 2. Unzip it and move **Glint.app** to your **Applications** folder.
-3. Open Glint. It lives in the menu bar; there's no Dock icon.
-
-> [!IMPORTANT]
-> Beta builds are not notarized by Apple yet. The first time you open Glint, macOS says it can't verify the
-> developer. Click **Done**, then go to **System Settings → Privacy & Security**, scroll down and click
-> **Open Anyway** next to the Glint message. You only need to do this once.
+3. Open Glint. macOS blocks it the first time: follow [these steps](#opening-glint-for-the-first-time).
+4. Glint lives in the menu bar; there's no Dock icon.
 
 ### Homebrew
 
-A Homebrew cask is planned. Once it's available:
-
-```bash
-brew install --cask glint
-```
+A Homebrew cask is planned.
 
 ### From source
 
@@ -122,14 +176,13 @@ Glint updates itself with [Sparkle](https://sparkle-project.org). It checks once
 **Check for Updates…** in the menu bar menu or turn automatic checks off in **Settings → General → Updates**.
 Updates are signed, and Glint only installs updates signed with the project's key.
 
-Builds you make from source don't check for updates.
+Builds you make from source check the same feed and would update to the official release. To turn that off, remove
+the `SUPublicEDKey` value from `Config/Info.plist`.
 
 ## Uninstalling
 
 **From the app:** open **Settings → Advanced → Uninstall Glint…**. Glint deletes its settings, Capture History,
 saved edits and logs, turns off Launch at Login, resets its privacy permissions, moves itself to the Trash and quits.
-
-**With Homebrew** (once available): `brew uninstall --zap --cask glint`
 
 **With the script** (if Glint no longer opens):
 
@@ -141,7 +194,7 @@ curl -fsSL https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/Tools/unins
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/Glint` | Capture History and saved edits |
+| `~/Library/Application Support/Glint` | Capture History, Trash and saved edits |
 | `~/Library/Preferences/com.philippk.glint.plist` | Settings |
 | `~/Library/Logs/Glint` | Log file |
 | `~/Library/Caches/com.philippk.glint` | Update cache |
