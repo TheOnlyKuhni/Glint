@@ -1,1 +1,5 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/TheOnlyKuhni/Glint/discussions/categories/q-a
+    about: Questions and help go here. Please use issues for bugs and feature requests.

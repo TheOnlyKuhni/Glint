@@ -27,7 +27,8 @@ macOS's built-in Screenshot app. Glint is not affiliated with, endorsed by or co
 names are trademarks of their respective owners.
 
 > [!NOTE]
-> Glint is in **beta (0.2)**. Expect rough edges, and please [report bugs](../../issues/new/choose).
+> Glint is in **beta (0.2)**. Expect rough edges, and please [report bugs](../../issues/new/choose). Questions and ideas
+> are welcome in [Discussions](../../discussions).
 
 ## A quick look
 
