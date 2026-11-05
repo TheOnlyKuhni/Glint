@@ -7,6 +7,8 @@ Thanks for helping! Glint is a small project, so a few simple rules keep it mana
 Open an [issue](../../issues/new/choose) and fill in the template. For bugs, the Glint and macOS versions and
 steps to reproduce help most.
 
+For questions or ideas that are still rough, use [Discussions](../../discussions) instead.
+
 ## Pull requests
 
 1. For anything bigger than a small fix, open an issue first so we can agree on the approach.
