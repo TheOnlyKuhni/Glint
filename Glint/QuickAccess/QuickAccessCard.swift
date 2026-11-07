@@ -16,7 +16,8 @@ struct QuickAccessCard: View {
     let item: CaptureItem
     let actions: Actions
     let hover: HoverState
-    private var isHovering: Bool { hover.isHovering && !hover.isEditing }
+    private var isHovering: Bool { hover.isHovering }
+    private var isEditing: Bool { hover.isEditing }
     /// Lightens dark captures but darkens bright ones so the light buttons stay readable.
     private let hoverScrim: Color
 
@@ -41,7 +42,16 @@ struct QuickAccessCard: View {
 
             if item.isRecording, !isHovering { RecordingFooter(item: item) }
 
-            if isHovering {
+            if isHovering, isEditing {
+                // Open in an editor: no buttons, a click anywhere brings the editor forward.
+                Rectangle().fill(hoverScrim)
+                Text("Being edited…")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.black.opacity(0.85))
+                    .padding(.horizontal, 11)
+                    .frame(height: 27)
+                    .background(Capsule().fill(buttonFill))
+            } else if isHovering {
                 Rectangle().fill(hoverScrim)
 
                 VStack(spacing: 10) {
@@ -73,7 +83,7 @@ struct QuickAccessCard: View {
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(quickAccessBorder, lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: isHovering)
-        .opacity(hover.isEditing ? 0.45 : 1)
+        .opacity(isEditing && !isHovering ? 0.45 : 1)
         .animation(.easeOut(duration: 0.2), value: hover.isEditing)
     }
 }
@@ -112,47 +122,73 @@ struct RecordingFooter: View {
 /// Semi-transparent white, so it reads as #515151 on dark captures and light gray on bright ones.
 let quickAccessBorder = Color.white.opacity(0.26)
 
-/// The tab that peeks up from the bottom edge while the overlays are swiped away.
+/// Hover and press state of the restore tab and the hide bar, fed from their panel.
+@Observable
+final class BarState {
+    var hovering = false
+    var pressed = false
+}
+
+/// The dark fill of the restore tab and the hide bar: the editors' box color, a little lighter on hover.
+private func barFill(_ state: BarState) -> Color {
+    Color(white: state.pressed ? 0.27 : (state.hovering ? 0.22 : 0.165))
+}
+
+/// The tab that peeks up from the bottom edge while the overlays are swiped away. Hovering lifts the chevron.
 struct QuickAccessRestoreTab: View {
-    let item: CaptureItem
-    let cardSize: CGSize
-    let visibleHeight: CGFloat
-    private var chevronColor: Color { item.averageLuminance < 0.45 ? .white : .black }
+    let state: BarState
 
     var body: some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 16, topTrailingRadius: 16, style: .continuous)
         ZStack(alignment: .top) {
-            // The top slice of the newest card, heavily blurred.
-            Image(nsImage: item.nsImage)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: cardSize.width, height: cardSize.height)
-                .clipped()
-                .blur(radius: 18, opaque: true)
-                .overlay(Color.white.opacity(0.12))
-                .frame(width: cardSize.width, height: visibleHeight, alignment: .top)
-                .clipped()
-            Chevron()
-                .stroke(chevronColor, style: StrokeStyle(lineWidth: 3.6, lineCap: .round, lineJoin: .round))
+            shape.fill(barFill(state))
+            BarChevron(pointsUp: true)
+                .stroke(Color.white.opacity(state.hovering ? 1 : 0.85), style: StrokeStyle(lineWidth: 3.6, lineCap: .round, lineJoin: .round))
                 .frame(width: 32, height: 6)
                 .padding(.top, 11.5)
+                .offset(y: state.hovering ? -2 : 0)
         }
-        .frame(width: cardSize.width, height: visibleHeight, alignment: .top)
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 16, topTrailingRadius: 16, style: .continuous))
-        .overlay(
-            UnevenRoundedRectangle(topLeadingRadius: 16, topTrailingRadius: 16, style: .continuous)
-                .strokeBorder(quickAccessBorder, lineWidth: 1)
-        )
+        .overlay(shape.strokeBorder(quickAccessBorder, lineWidth: 1))
+        .scaleEffect(state.pressed ? 0.97 : 1, anchor: .bottom)
+        .animation(.easeOut(duration: 0.15), value: state.hovering)
+        .animation(.spring(response: 0.22, dampingFraction: 0.65), value: state.pressed)
         .contentShape(Rectangle())
     }
+}
 
-    private struct Chevron: Shape {
-        func path(in r: CGRect) -> Path {
-            var p = Path()
-            p.move(to: CGPoint(x: r.minX, y: r.maxY))
-            p.addQuadCurve(to: CGPoint(x: r.midX, y: r.minY), control: CGPoint(x: r.midX - r.width * 0.22, y: r.minY))
-            p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY), control: CGPoint(x: r.midX + r.width * 0.22, y: r.minY))
-            return p
+/// The bar above the top card that tucks the stack away: the restore tab's look, as a floating rounded bar with the
+/// chevron pointing down. Hovering nudges the chevron down.
+struct QuickAccessHideBar: View {
+    let state: BarState
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        ZStack {
+            shape.fill(barFill(state))
+            BarChevron(pointsUp: false)
+                .stroke(Color.white.opacity(state.hovering ? 1 : 0.85), style: StrokeStyle(lineWidth: 3.6, lineCap: .round, lineJoin: .round))
+                .frame(width: 32, height: 6)
+                .offset(y: state.hovering ? 2 : 0)
         }
+        .overlay(shape.strokeBorder(quickAccessBorder, lineWidth: 1))
+        .scaleEffect(state.pressed ? 0.97 : 1)
+        .animation(.easeOut(duration: 0.15), value: state.hovering)
+        .animation(.spring(response: 0.22, dampingFraction: 0.65), value: state.pressed)
+        .contentShape(shape)
+    }
+}
+
+/// The soft chevron of both bars.
+private struct BarChevron: Shape {
+    let pointsUp: Bool
+
+    func path(in r: CGRect) -> Path {
+        let tip = pointsUp ? r.minY : r.maxY, ends = pointsUp ? r.maxY : r.minY
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: ends))
+        p.addQuadCurve(to: CGPoint(x: r.midX, y: tip), control: CGPoint(x: r.midX - r.width * 0.22, y: tip))
+        p.addQuadCurve(to: CGPoint(x: r.maxX, y: ends), control: CGPoint(x: r.midX + r.width * 0.22, y: tip))
+        return p
     }
 }
 

@@ -7,6 +7,7 @@ import AVKit
 /// place (Quick Access and the history show the trimmed version); Cancel closes.
 final class GIFTrimmer: NSWindowController, NSWindowDelegate {
     private static var open: [GIFTrimmer] = []
+    static var hasOpenEditors: Bool { !open.isEmpty }
 
     let sourceFile: URL
     private let playerView = AVPlayerView()

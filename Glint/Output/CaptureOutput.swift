@@ -70,10 +70,16 @@ enum CaptureOutput {
         glintLog("delivered \(url.lastPathComponent) quickAccess=\(opts.showQuickAccess)")
         if opts.copyToClipboard { Clipboard.copy(item) }
         if opts.save { _ = FileSaver.saveToExportLocation(item) }
-        if opts.openAnnotate { AnnotateWindowController.open(item: item) }
         if opts.pin { PinManager.shared.pin(item) }
-        // The editor hands the capture to Quick Access when it closes.
-        if opts.showQuickAccess, !opts.openAnnotate { QuickAccessManager.shared.show(item) }
+        if opts.openAnnotate, opts.showQuickAccess {
+            // The card shows as "being edited", behind the editor.
+            QuickAccessManager.shared.showEditing(item)
+        } else if opts.openAnnotate {
+            // The editor hands the capture to Quick Access when it closes.
+            AnnotateWindowController.open(item: item)
+        } else if opts.showQuickAccess {
+            QuickAccessManager.shared.show(item)
+        }
     }
 }
 

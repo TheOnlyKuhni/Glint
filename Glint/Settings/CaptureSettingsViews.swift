@@ -26,7 +26,10 @@ struct QuickAccessSettingsView: View {
             }
 
             Section("Behavior") {
-                Toggle("Auto-close", isOn: $autoClose)
+                Toggle(isOn: $autoClose) {
+                    Text("Auto-close")
+                    Text("Waits while an editor is open, and starts over when something new arrives.")
+                }
                 Picker("Action", selection: $autoCloseAction) {
                     ForEach(AutoCloseAction.allCases) { Text($0.title).tag($0) }
                 }

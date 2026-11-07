@@ -10,6 +10,8 @@ final class QuickAccessManager {
         let panel: QuickAccessPanel
         var timer: Timer?
         var hover = HoverState()
+        /// The screenshot editor this card is open in (recordings are found by their file).
+        weak var editor: AnnotateWindowController?
         init(item: CaptureItem, panel: QuickAccessPanel) { self.item = item; self.panel = panel }
     }
 
@@ -18,7 +20,21 @@ final class QuickAccessManager {
     /// Swiped down out of view, with only the restore tab peeking up from the bottom edge.
     private var isCollapsed = false
     private var restoreTab: QuickAccessTabPanel?
+    /// The restore tab fades out a second after it appears and comes back while the pointer is over its place.
+    private var restoreTabVisible = true
+    private var restoreTabHideAt: Date?
+    /// The bar above the top card that tucks the stack away; it shows while the pointer is over the stack.
+    private var hideBar: QuickAccessTabPanel?
+    private var hideBarVisible = false
+    private var hideBarHideAt: Date?
+    private var pointerTimer: Timer?
     private let tabHeight: CGFloat = 30
+    private let hideBarHeight: CGFloat = 30
+    private let hideBarGap: CGFloat = 8
+    /// Where the top card ends up after the last layout (not where it is mid-animation): the hide bar sits above it.
+    private var stackTop: CGRect?
+    private var stackBottom: CGFloat?
+    private var observers: [Any] = []
 
     // 210×150pt cards, 40pt from the side, 100pt from the bottom, 12pt apart.
     private static let baseSize = CGSize(width: 210, height: 150)
@@ -27,7 +43,32 @@ final class QuickAccessManager {
     private let bottomMargin: CGFloat = 100
     private let spacing: CGFloat = 12
 
-    func show(_ item: CaptureItem) {
+    private init() {
+        let center = NotificationCenter.default
+        // An editor coming forward or closing: Quick Access moves behind it, and the auto-close timers wait while
+        // any editor is open.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification,
+                     NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                if let window = note.object as? NSWindow, !Self.isEditor(window) { return }
+                let closing = note.name == NSWindow.willCloseNotification
+                // After the editor's own close handling, so `isEditorOpen` is up to date.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.updateLevels()
+                        if closing { self?.restartTimers() }
+                    }
+                }
+            })
+        }
+    }
+
+    func show(_ item: CaptureItem) { _ = add(item) }
+
+    /// Shows the capture and opens it in its editor right away (the "Open Annotate tool" after-capture action).
+    func showEditing(_ item: CaptureItem) { annotate(add(item)) }
+
+    private func add(_ item: CaptureItem) -> Entry {
         let panel = QuickAccessPanel(size: cardSize)
         let entry = Entry(item: item, panel: panel)
         let hover = entry.hover
@@ -55,13 +96,21 @@ final class QuickAccessManager {
         panel.dragImage = item.nsImage
         panel.onDragEnded = { [weak self] dropped in self?.dragEnded(entry, dropped: dropped) }
         panel.onDoubleClick = { [weak self] in self?.annotate(entry) }
-        panel.onSwipeDown = { [weak self] in self?.collapse() }
+        panel.onClick = { [weak self] in self?.clicked(entry) }
+        panel.dismissTowardRight = Defaults[Prefs.quickAccessPosition] == .right
+        panel.onTuck = { [weak self] in self?.collapse() }
+        panel.onDismiss = { [weak self] in self?.dismiss(entry) }
+        panel.onSnapBack = { [weak self] in self?.layout(appearing: nil) }
 
         if isCollapsed { expand() }
         entries.append(entry)
         isHidden = false
         layout(appearing: entry)
-        scheduleAutoClose(entry)
+        updateLevels()
+        // Something new arrived: every card's auto-close starts over.
+        restartTimers()
+        startPointerTracking()
+        return entry
     }
 
     func closeAll() { entries.forEach { close($0) } }
@@ -82,10 +131,11 @@ final class QuickAccessManager {
 
     // MARK: Swipe away / restore
 
-    /// Slides every card below the screen edge and shows the restore tab (swipe down).
+    /// Slides every card below the screen edge and shows the restore tab (swipe down, drag down or the hide bar).
     func collapse() {
         guard !isCollapsed, !entries.isEmpty, let screen = targetScreen else { return }
         isCollapsed = true
+        hideHideBar(animated: false)
         for entry in entries {
             entry.timer?.invalidate()
             let panel = entry.panel
@@ -112,23 +162,23 @@ final class QuickAccessManager {
             start.origin.y = screen.frame.minY - start.height - 20
             entry.panel.setFrame(start, display: false)
             if !isHidden { entry.panel.orderFrontRegardless() }
-            scheduleAutoClose(entry)
         }
         layout(appearing: nil, springy: true)
+        updateLevels()
+        restartTimers()
     }
 
     private func showRestoreTab(on screen: NSScreen) {
-        guard let newest = entries.last else { return }
+        guard !entries.isEmpty else { return }
         let size = CGSize(width: cardSize.width, height: tabHeight)
         let x = Defaults[Prefs.quickAccessPosition] == .left ? screen.visibleFrame.minX + sideMargin
                                                              : screen.visibleFrame.maxX - sideMargin - size.width
         let tab = QuickAccessTabPanel(size: size)
-        let host = NSHostingView(rootView: QuickAccessRestoreTab(item: newest.item, cardSize: cardSize, visibleHeight: tabHeight))
-        host.sizingOptions = []
-        host.frame = CGRect(origin: .zero, size: size)
-        tab.contentView = host
+        tab.setContent(QuickAccessRestoreTab(state: tab.state))
         tab.onActivate = { [weak self] in self?.expand() }
+        tab.activateDirection = .up
         tab.setFrame(CGRect(x: x, y: screen.frame.minY - size.height, width: size.width, height: size.height), display: false)
+        tab.alphaValue = 1
         tab.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.3
@@ -136,11 +186,16 @@ final class QuickAccessManager {
             tab.animator().setFrame(CGRect(x: x, y: screen.frame.minY, width: size.width, height: size.height), display: true)
         }
         restoreTab = tab
+        restoreTabVisible = true
+        restoreTabHideAt = Date().addingTimeInterval(1.3)  // the slide-in, then one second
+        updateLevels()
+        startPointerTracking()
     }
 
     private func hideRestoreTab() {
         guard let tab = restoreTab else { return }
         restoreTab = nil
+        restoreTabHideAt = nil
         var target = tab.frame
         target.origin.y -= target.height
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -152,6 +207,149 @@ final class QuickAccessManager {
     func toggleVisibility() {
         isHidden.toggle()
         entries.forEach { isHidden ? $0.panel.orderOut(nil) : $0.panel.orderFrontRegardless() }
+        if isHidden { hideHideBar(animated: false) } else { updateLevels() }
+    }
+
+    // MARK: Hide bar and pointer tracking
+
+    private func makeHideBar() -> QuickAccessTabPanel {
+        let size = CGSize(width: cardSize.width, height: hideBarHeight)
+        let bar = QuickAccessTabPanel(size: size)
+        bar.setContent(QuickAccessHideBar(state: bar.state))
+        bar.onActivate = { [weak self] in self?.collapse() }
+        bar.activateDirection = .down
+        bar.alphaValue = 0
+        return bar
+    }
+
+    /// Where the hide bar sits: centered above the top card.
+    private func hideBarFrame() -> CGRect? {
+        guard !entries.isEmpty, let top = stackTop else { return nil }
+        return CGRect(x: top.minX, y: top.maxY + hideBarGap, width: top.width, height: hideBarHeight)
+    }
+
+    private func showHideBar() {
+        guard !isCollapsed, !isHidden, let frame = hideBarFrame() else { return }
+        let bar = hideBar ?? makeHideBar()
+        hideBar = bar
+        hideBarHideAt = nil
+        guard !hideBarVisible else { return }
+        hideBarVisible = true
+        bar.setFrame(frame, display: false)
+        bar.ignoresMouseEvents = false
+        bar.orderFrontRegardless()
+        updateLevels()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            bar.animator().alphaValue = 1
+        }
+    }
+
+    private func hideHideBar(animated: Bool = true) {
+        hideBarHideAt = nil
+        guard hideBarVisible, let bar = hideBar else { return }
+        hideBarVisible = false
+        bar.ignoresMouseEvents = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = animated ? 0.25 : 0
+            bar.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            if self?.hideBarVisible == false { bar.orderOut(nil) }
+        })
+    }
+
+    private func setRestoreTab(visible: Bool) {
+        guard let tab = restoreTab, restoreTabVisible != visible else { return }
+        restoreTabVisible = visible
+        tab.ignoresMouseEvents = !visible
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = visible ? 0.15 : 0.35
+            tab.animator().alphaValue = visible ? 1 : 0
+        }
+    }
+
+    /// Watches the pointer (tracking areas don't fire for faded-out or not-yet-shown panels): it reveals the hide bar
+    /// over the stack, and the faded restore tab over its place at the bottom edge.
+    private func startPointerTracking() {
+        guard pointerTimer == nil else { return }
+        pointerTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.trackPointer() }
+        }
+    }
+
+    private func trackPointer() {
+        guard !entries.isEmpty else {
+            pointerTimer?.invalidate()
+            pointerTimer = nil
+            hideHideBar(animated: false)
+            return
+        }
+        let mouse = NSEvent.mouseLocation
+        let now = Date()
+        // Backs up the bars' tracking areas, which miss a pointer that's already inside when a bar appears.
+        for bar in [hideBar, restoreTab].compactMap({ $0 }) where bar.isVisible {
+            let inside = bar.frame.contains(mouse)
+            if bar.state.hovering != inside { bar.state.hovering = inside }
+        }
+        if isCollapsed, let tab = restoreTab {
+            // The tab's place, a little taller, down to the screen edge.
+            let zone = tab.frame.insetBy(dx: -8, dy: -12)
+            if zone.contains(mouse) {
+                restoreTabHideAt = nil
+                setRestoreTab(visible: true)
+            } else if restoreTabVisible {
+                if restoreTabHideAt == nil { restoreTabHideAt = now.addingTimeInterval(1) }
+                if let at = restoreTabHideAt, now >= at { restoreTabHideAt = nil; setRestoreTab(visible: false) }
+            }
+            return
+        }
+        guard !isHidden, let barFrame = hideBarFrame() else { return }
+        // The stack where it's headed (the cards may still be sliding), plus the bar above it.
+        let bottom = stackBottom ?? barFrame.minY
+        let stack = barFrame.union(CGRect(x: barFrame.minX, y: bottom, width: barFrame.width, height: 1)).insetBy(dx: -6, dy: -6)
+        if stack.contains(mouse) {
+            showHideBar()
+        } else if hideBarVisible {
+            if hideBarHideAt == nil { hideBarHideAt = now.addingTimeInterval(0.6) }
+            if let at = hideBarHideAt, now >= at { hideHideBar() }
+        }
+    }
+
+    // MARK: Editors
+
+    private static func isEditor(_ window: NSWindow) -> Bool {
+        window.windowController is AnnotateWindowController || window.windowController is VideoEditorWindowController
+            || window.windowController is GIFTrimmer
+    }
+
+    private var isEditorOpen: Bool {
+        AnnotateWindowController.hasOpenEditors || VideoEditorWindowController.hasOpenEditors || GIFTrimmer.hasOpenEditors
+    }
+
+    /// While Glint is in front with an editor open, the overlays sit behind the editor windows instead of covering
+    /// them; otherwise they float above everything.
+    private func updateLevels() {
+        let editors = NSApp.windows.filter { $0.isVisible && Self.isEditor($0) }
+        let behind = NSApp.isActive && !editors.isEmpty
+        let lowest = NSApp.orderedWindows.last { editors.contains($0) }
+        let panels: [NSPanel] = entries.map(\.panel) + [hideBar, restoreTab].compactMap { $0 }
+        for panel in panels {
+            panel.level = behind ? .normal : .floating
+            if behind, panel.isVisible, let lowest { panel.order(.below, relativeTo: lowest.windowNumber) }
+        }
+    }
+
+    /// Clicking a card that's open in an editor brings that editor forward.
+    private func clicked(_ entry: Entry) {
+        guard entry.hover.isEditing else { return }
+        DispatchQueue.main.async {
+            if entry.item.isRecording {
+                VideoEditorWindowController.open(url: entry.item.fileURL)  // fronts the open editor
+            } else if let window = entry.editor?.window {
+                NSApp.activate()
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 
     // MARK: Actions
@@ -159,7 +357,7 @@ final class QuickAccessManager {
     /// Opens the capture in its editor (Annotate or the video editor). The card stays in the stack, see-through and
     /// without buttons, until the editor closes; then it's replaced by the edited result (or simply comes back).
     private func annotate(_ entry: Entry) {
-        guard !entry.hover.isEditing else { return }
+        guard !entry.hover.isEditing else { clicked(entry); return }
         entry.hover.isEditing = true
         entry.timer?.invalidate()
         entry.timer = nil
@@ -178,10 +376,12 @@ final class QuickAccessManager {
                 }
             } else {
                 let editor = AnnotateWindowController.open(item: item)
+                entry.editor = editor
                 editor.onFinish = { [weak self] result in
                     if result === item { self?.editingEnded(entry) } else { self?.replace(entry, with: result) }
                 }
             }
+            self?.updateLevels()
         }
     }
 
@@ -191,7 +391,8 @@ final class QuickAccessManager {
 
     private func editingEnded(_ entry: Entry) {
         entry.hover.isEditing = false
-        if !isCollapsed { scheduleAutoClose(entry) }
+        entry.editor = nil
+        restartTimers()
     }
 
     /// The editor produced a new version: it takes the card's place in the stack.
@@ -230,7 +431,17 @@ final class QuickAccessManager {
 
     private func hoverChanged(_ entry: Entry, hovering: Bool) {
         // Pause auto-close while the pointer is over the card.
-        if hovering { entry.timer?.invalidate(); entry.timer = nil } else if !isCollapsed { scheduleAutoClose(entry) }
+        if hovering { entry.timer?.invalidate(); entry.timer = nil } else { scheduleAutoClose(entry) }
+    }
+
+    /// Dragged or swiped toward the screen edge: like the close button. If a recording's close is cancelled, the card
+    /// slides back.
+    private func dismiss(_ entry: Entry) {
+        closeRequested(entry)
+        if entries.contains(where: { $0 === entry }) {
+            entry.panel.alphaValue = 1
+            layout(appearing: nil)
+        }
     }
 
     /// The close button: recordings ask first ("You may lose the file if it hasn't been saved.").
@@ -253,6 +464,7 @@ final class QuickAccessManager {
         guard let index = entries.firstIndex(where: { $0 === entry }) else { return }
         entry.timer?.invalidate()
         entries.remove(at: index)
+        if entries.isEmpty { hideHideBar(); stackTop = nil; stackBottom = nil }
         if isCollapsed {
             entry.panel.orderOut(nil)
             if entries.isEmpty { isCollapsed = false; hideRestoreTab() }
@@ -270,14 +482,20 @@ final class QuickAccessManager {
         layout(appearing: nil)
     }
 
+    /// Starts every card's auto-close over (something was added, an editor closed, the stack came back).
+    private func restartTimers() { entries.forEach(scheduleAutoClose) }
+
+    /// Auto-close only runs while Glint is idle: never while an editor is open, the stack is tucked away or the
+    /// pointer is over the card.
     private func scheduleAutoClose(_ entry: Entry) {
         entry.timer?.invalidate()
-        guard !entry.hover.isEditing else { return }
+        entry.timer = nil
+        guard !entry.hover.isEditing, !entry.hover.isHovering, !isCollapsed, !isEditorOpen else { return }
         guard Defaults[Prefs.quickAccessAutoClose] else { return }
         let interval = TimeInterval(Defaults[Prefs.quickAccessAutoCloseInterval])
         entry.timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self, weak entry] _ in
             MainActor.assumeIsolated {
-                guard let self, let entry else { return }
+                guard let self, let entry, !self.isEditorOpen else { return }
                 if Defaults[Prefs.quickAccessAutoCloseAction] == .saveAndClose { FileSaver.saveToExportLocation(entry.item) }
                 self.close(entry)
             }
@@ -303,10 +521,13 @@ final class QuickAccessManager {
         // With the Dock hidden keep 100pt clear at the bottom; with it visible, sit just above it.
         let dockAtBottom = visible.minY - screen.frame.minY > 1
         var y = dockAtBottom ? visible.minY + sideMargin : screen.frame.minY + bottomMargin
+        stackBottom = y
+        var topFrame: CGRect?
         for entry in entries.reversed() {
             let size = entry.panel.frame.size
             let x = side == .left ? visible.minX + sideMargin : visible.maxX - sideMargin - size.width
             let frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+            topFrame = frame
             y += size.height + spacing
             if entry === appearing {
                 var start = frame
@@ -328,18 +549,47 @@ final class QuickAccessManager {
                 }
             }
         }
+        stackTop = topFrame
+        // The hide bar follows the top card (or waits, hidden, where it will show next).
+        if let bar = hideBar, let target = hideBarFrame() {
+            if hideBarVisible {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = springy ? 0.42 : 0.25
+                    ctx.timingFunction = springy ? CAMediaTimingFunction(controlPoints: 0.3, 1.35, 0.55, 1) : nil
+                    bar.animator().setFrame(target, display: true)
+                }
+            } else {
+                bar.setFrame(target, display: false)
+            }
+        }
     }
 }
 
 /// Floating panel for one card. Handles drag & drop at the window level so a drag can start anywhere on the card.
+/// A drag that starts downward tucks the stack away, one toward the screen edge closes the card (the card follows the
+/// pointer); any other direction drags the file. Two-finger swipes do the same: down tucks away, toward the edge closes.
 final class QuickAccessPanel: NSPanel, NSDraggingSource {
     var dragFileURL: URL?
     var dragImage: NSImage?
     var onDragEnded: ((Bool) -> Void)?
     var onDoubleClick: (() -> Void)?
-    var onSwipeDown: (() -> Void)?
+    /// A single click that didn't turn into a drag.
+    var onClick: (() -> Void)?
+    /// Pulled or swiped down: tuck the stack away.
+    var onTuck: (() -> Void)?
+    /// Pulled or swiped toward the screen edge: close the card.
+    var onDismiss: (() -> Void)?
+    /// A pull that wasn't far enough: back into place.
+    var onSnapBack: (() -> Void)?
+    /// Quick Access on the right: closing goes right instead of left.
+    var dismissTowardRight = false
     private var mouseDownEvent: NSEvent?
+    private var mouseDownScreen: NSPoint = .zero
+    private enum Pull { case tuck, dismiss }
+    private var pull: Pull?
+    private var pullStart: CGRect = .zero
     private let swipe = SwipeDetector()
+    private var edgeDirection: SwipeDetector.Direction { dismissTowardRight ? .right : .left }
 
     init(size: CGSize) {
         super.init(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
@@ -357,27 +607,92 @@ final class QuickAccessPanel: NSPanel, NSDraggingSource {
 
     override var canBecomeKey: Bool { true }
 
+    private func screenPoint(_ event: NSEvent) -> NSPoint { convertPoint(toScreen: event.locationInWindow) }
+
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:
             mouseDownEvent = event
+            mouseDownScreen = screenPoint(event)
+            pull = nil
             if event.clickCount == 2 { onDoubleClick?() }
         case .leftMouseDragged:
-            if let down = mouseDownEvent,
-               hypot(event.locationInWindow.x - down.locationInWindow.x, event.locationInWindow.y - down.locationInWindow.y) > 4 {
-                mouseDownEvent = nil
-                beginFileDrag(with: event)
-                return
+            if pull != nil { followPull(event); return }
+            if mouseDownEvent != nil {
+                let p = screenPoint(event)
+                let dx = p.x - mouseDownScreen.x, dy = p.y - mouseDownScreen.y
+                if hypot(dx, dy) > 4 {
+                    mouseDownEvent = nil
+                    let towardEdge = dismissTowardRight ? dx : -dx
+                    if -dy > abs(dx) {
+                        pull = .tuck
+                    } else if towardEdge > abs(dy) {
+                        pull = .dismiss
+                    } else {
+                        beginFileDrag(with: event)
+                        return
+                    }
+                    pullStart = frame
+                    followPull(event)
+                    return
+                }
             }
         case .leftMouseUp:
+            if let pull {
+                endPull(pull, event)
+                self.pull = nil
+                mouseDownEvent = nil
+                return
+            }
+            if mouseDownEvent != nil, event.clickCount == 1 { onClick?() }
             mouseDownEvent = nil
         case .scrollWheel:
-            if swipe.feed(event) == .down { onSwipeDown?() }
+            switch swipe.feed(event) {
+            case .down?: onTuck?()
+            case let direction? where direction == edgeDirection: onDismiss?()
+            default: break
+            }
             return
         default:
             break
         }
         super.sendEvent(event)
+    }
+
+    /// The card follows the pointer on the pull's axis; pulling the other way only gives a little.
+    private func followPull(_ event: NSEvent) {
+        let p = screenPoint(event)
+        var origin = pullStart.origin
+        switch pull {
+        case .tuck?:
+            let dy = p.y - mouseDownScreen.y
+            origin.y += dy < 0 ? dy : dy * 0.15
+        case .dismiss?:
+            let dx = p.x - mouseDownScreen.x
+            let towardEdge = dismissTowardRight ? dx : -dx
+            let moved = towardEdge > 0 ? towardEdge : towardEdge * 0.15
+            origin.x += dismissTowardRight ? moved : -moved
+            alphaValue = 1 - min(max(moved, 0) / pullStart.width, 1) * 0.6
+        case nil:
+            break
+        }
+        setFrameOrigin(origin)
+    }
+
+    private func endPull(_ pull: Pull, _ event: NSEvent) {
+        let p = screenPoint(event)
+        switch pull {
+        case .tuck:
+            if mouseDownScreen.y - p.y > 30 { onTuck?() } else { onSnapBack?() }
+        case .dismiss:
+            let towardEdge = dismissTowardRight ? p.x - mouseDownScreen.x : mouseDownScreen.x - p.x
+            if towardEdge > 50 {
+                onDismiss?()
+            } else {
+                alphaValue = 1
+                onSnapBack?()
+            }
+        }
     }
 
     private func beginFileDrag(with event: NSEvent) {
@@ -401,10 +716,17 @@ final class QuickAccessPanel: NSPanel, NSDraggingSource {
     }
 }
 
-/// The tab at the bottom edge while cards are swiped away. Click it (or swipe up on it) to bring them back.
+/// A small bar panel: the restore tab at the bottom edge while cards are swiped away (click, swipe up or drag up to
+/// bring them back), and the hide bar above the stack (click, swipe down or drag down to tuck them away).
 final class QuickAccessTabPanel: NSPanel {
     var onActivate: (() -> Void)?
+    /// Hover and press feedback for the bar's look.
+    let state = BarState()
+    /// The swipe or drag direction that activates it.
+    var activateDirection: SwipeDetector.Direction = .up
     private let swipe = SwipeDetector()
+    private var mouseDown: NSPoint?
+    private var dragged = false
 
     init(size: CGSize) {
         super.init(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
@@ -419,20 +741,48 @@ final class QuickAccessTabPanel: NSPanel {
         animationBehavior = .none
     }
 
+    /// Puts the bar's SwiftUI view in a hover-tracking container (SwiftUI's onHover needs Glint to be active).
+    func setContent<V: View>(_ view: V) {
+        let host = NSHostingView(rootView: view)
+        host.sizingOptions = []
+        host.frame = CGRect(origin: .zero, size: frame.size)
+        host.autoresizingMask = [.width, .height]
+        let container = HoverTrackingView(frame: host.frame)
+        container.addSubview(host)
+        container.onHoverChanged = { [state] in state.hovering = $0; if !$0 { state.pressed = false } }
+        contentView = container
+    }
+
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
-        case .leftMouseUp: onActivate?()
-        case .scrollWheel: if swipe.feed(event) == .up { onActivate?() }
+        case .leftMouseDown:
+            mouseDown = event.locationInWindow
+            dragged = false
+            state.pressed = true
+        case .leftMouseDragged:
+            if let start = mouseDown, !dragged {
+                let dy = event.locationInWindow.y - start.y  // up is positive
+                if (activateDirection == .up && dy > 8) || (activateDirection == .down && dy < -8) {
+                    dragged = true
+                    onActivate?()
+                }
+            }
+        case .leftMouseUp:
+            state.pressed = false
+            if !dragged { onActivate?() }
+            mouseDown = nil
+        case .scrollWheel: if swipe.feed(event) == activateDirection { onActivate?() }
         default: break
         }
         super.sendEvent(event)
     }
 }
 
-/// Turns trackpad swipes (and mouse-wheel spins) into a single up/down decision, in finger direction.
+/// Turns trackpad swipes (and mouse-wheel spins) into a single direction, in finger direction.
 final class SwipeDetector {
-    enum Direction { case up, down }
-    private var travel: CGFloat = 0
+    enum Direction { case up, down, left, right }
+    private var travelX: CGFloat = 0
+    private var travelY: CGFloat = 0
     private var fired = false
     private var lastEvent: TimeInterval = 0
     private let threshold: CGFloat = 36
@@ -440,15 +790,19 @@ final class SwipeDetector {
     func feed(_ event: NSEvent) -> Direction? {
         guard event.momentumPhase.isEmpty else { return nil }  // ignore inertia after the fingers lift
         if event.phase.contains(.began) || (event.phase.isEmpty && event.timestamp - lastEvent > 0.4) {
-            travel = 0
+            travelX = 0
+            travelY = 0
             fired = false
         }
         lastEvent = event.timestamp
-        // Positive = fingers (or wheel) moving down, independent of the "natural scrolling" setting.
-        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 10
-        travel += event.isDirectionInvertedFromDevice ? delta : -delta
-        guard !fired, abs(travel) > threshold else { return nil }
+        // Positive = fingers (or wheel) moving down / right, independent of the "natural scrolling" setting.
+        let k: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+        let sign: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
+        travelY += event.scrollingDeltaY * k * sign
+        travelX += event.scrollingDeltaX * k * sign
+        guard !fired, max(abs(travelX), abs(travelY)) > threshold else { return nil }
         fired = true
-        return travel > 0 ? .down : .up
+        if abs(travelY) >= abs(travelX) { return travelY > 0 ? .down : .up }
+        return travelX > 0 ? .right : .left
     }
 }
