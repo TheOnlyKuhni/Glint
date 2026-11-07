@@ -2,6 +2,48 @@
 
 All notable changes to Glint are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- Quick Access: a bar above the top card tucks the stack away. It shows while the pointer is over the stack
+- Quick Access: pull a card down (or swipe down with two fingers) to tuck the stack away, and pull the tab at the
+  bottom up (or click it, or swipe up) to bring it back
+- Quick Access: pull a card toward the screen edge, or swipe that way with two fingers, to close it like its ✕ button
+- Quick Access: a card that's open in an editor shows "Being edited…" on hover, and a click on it brings its editor
+  to the front
+- Settings → Shortcuts warns while macOS's own screenshot shortcuts are still on and take Glint's keys, with a button
+  to open the Keyboard settings
+- [Setup instructions for AI agents](docs/agent-setup.md): point an agent at them to install and set up Glint
+- The `glint` command line tool: `glint fullscreen`, `glint area`, `glint record`, `glint text` and every URL scheme
+  command, waiting until Glint is done and printing the new file's path (or the text). Install it from Settings →
+  Advanced → API, or with `glint install`
+- [Automation docs](docs/command-line.md): every command for `glint` and `glint://` links, where captures end up, and
+  settings keys for `defaults`
+
+### Changed
+
+- Quick Access sits behind the editor windows while Glint is in front, instead of covering them
+- With "Open Annotate tool" and "Show Quick Access Overlay" both on after capture, the new screenshot shows in Quick
+  Access right away (as being edited) instead of only after the editor closes
+- Quick Access auto-close waits while any editor is open, and starts over for every card when something new arrives
+- The tab shown while Quick Access is tucked away fades out after a second and comes back when the pointer is over
+  its place
+- The tab shown while Quick Access is tucked away is now dark like the editors, and both it and the hide bar react
+  to hover and clicks
+- Capture History: Return keeps the history open after restoring, so you can bring back several in a row. A click
+  still restores and closes
+- New defaults: screenshots are also copied to the clipboard, the Capture History keeps captures for a week instead
+  of 3 days, the recorder remembers the last area, and auto-close (when turned on) closes cards instead of saving
+  them. Settings you changed yourself stay as they are
+- README: step-by-step instructions for turning off Apple's screenshot shortcuts
+
+### Fixed
+
+- Spotlight no longer darkens the background around the screenshot (in the rounded corners, and around window
+  captures with transparent edges)
+- Capture History: Return on a capture did nothing (it was handled as the Trash's Put Back); it now restores it
+
 ## [0.2] – Beta
 
 The first public release.
