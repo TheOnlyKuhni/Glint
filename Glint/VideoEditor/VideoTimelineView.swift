@@ -35,6 +35,26 @@ final class VideoTimelineView: NSView {
         static let eventsBottom: CGFloat = 252
     }
 
+    /// A Studio Mode track's icon and name, centered on its row (for the icons left of the timeline).
+    struct TrackRow: Identifiable {
+        let symbol: String
+        let title: String
+        let centerY: CGFloat
+        var id: String { title }
+    }
+
+    static func trackRows(hasCamera: Bool) -> [TrackRow] {
+        var rows: [TrackRow] = []
+        if hasCamera { rows.append(TrackRow(symbol: "web.camera", title: "Camera", centerY: Metrics.cameraTop + Metrics.cameraHeight / 2)) }
+        rows += [
+            TrackRow(symbol: "plus.magnifyingglass", title: "Zooms", centerY: Metrics.zoomTop + Metrics.zoomHeight / 2),
+            TrackRow(symbol: "film", title: "Video", centerY: Metrics.clipTop + Metrics.clipHeight / 2),
+            TrackRow(symbol: "cursorarrow.click", title: "Clicks, drags and scrolling", centerY: Metrics.pointerRow),
+            TrackRow(symbol: "keyboard", title: "Typing and shortcuts", centerY: Metrics.keyRow),
+        ]
+        return rows
+    }
+
     private static let red = NSColor(red: 0xE9 / 255.0, green: 0x5F / 255.0, blue: 0x52 / 255.0, alpha: 1)
     private static let blue = NSColor(displayP3Red: 0x34 / 255.0, green: 0x78 / 255.0, blue: 0xF6 / 255.0, alpha: 1)
     private static let track = NSColor(white: 0x21 / 255.0, alpha: 1)
@@ -245,10 +265,15 @@ final class VideoTimelineView: NSView {
             let g = glowAmount(AnyHashable(clip.id))
             guard g > 0 else { continue }
             let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), xRadius: 8, yRadius: 8)
-            NSColor(white: 1, alpha: 0.07 * g).setFill()
+            NSColor(white: 1, alpha: 0.1 * g).setFill()
             path.fill()
-            NSColor(white: 1, alpha: 0.55 * g).setStroke()
-            path.lineWidth = 1.5
+            // A halo grows out of the edge, with a bright rim on it.
+            let halo = NSBezierPath(roundedRect: rect.insetBy(dx: -2.5 * g, dy: -2.5 * g), xRadius: 10, yRadius: 10)
+            NSColor(white: 1, alpha: 0.16 * g).setStroke()
+            halo.lineWidth = 3
+            halo.stroke()
+            NSColor(white: 1, alpha: 0.8 * g).setStroke()
+            path.lineWidth = 2
             path.stroke()
         }
     }
@@ -257,11 +282,14 @@ final class VideoTimelineView: NSView {
         guard !glow.isEmpty else { return }
         for e in events {
             let g = glowAmount(AnyHashable(e.id))
-            guard g > 0, let r = eventRect(e)?.insetBy(dx: -2 * g, dy: -2 * g) else { continue }
+            guard g > 0, let r = eventRect(e)?.insetBy(dx: -3 * g, dy: -3 * g) else { continue }
+            let halo = r.insetBy(dx: -3 * g, dy: -3 * g)
+            NSColor(white: 1, alpha: 0.1 * g).setFill()
+            NSBezierPath(roundedRect: halo, xRadius: min(halo.height / 2, 9), yRadius: min(halo.height / 2, 9)).fill()
             let path = NSBezierPath(roundedRect: r, xRadius: min(r.height / 2, 6), yRadius: min(r.height / 2, 6))
-            NSColor(white: 1, alpha: 0.18 * g).setFill()
+            NSColor(white: 1, alpha: 0.22 * g).setFill()
             path.fill()
-            NSColor(white: 1, alpha: 0.6 * g).setStroke()
+            NSColor(white: 1, alpha: 0.75 * g).setStroke()
             path.stroke()
         }
     }
@@ -721,11 +749,28 @@ final class VideoTimelineView: NSView {
         }
         for span in spans(lane) {
             let g = glowAmount(AnyHashable(span.id))
-            // Lifts a little out of its track while hovered.
-            let r = spanRect(lane, span).insetBy(dx: 0, dy: -1.5 * g)
+            // Lifts out of its track while hovered: a little bigger and brighter, on a soft shadow, with a light rim.
+            let r = spanRect(lane, span).insetBy(dx: -1 * g, dy: -3 * g)
             let isSelected = selected(lane) == span.id
-            (isSelected ? Self.blue : NSColor(white: (0x3A + 0x16 * g) / 255.0, alpha: 1)).setFill()
-            NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1).fill()
+            let body = NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1)
+            if g > 0 {
+                NSGraphicsContext.saveGraphicsState()
+                let shadow = NSShadow()
+                shadow.shadowColor = NSColor.black.withAlphaComponent(0.55 * g)
+                shadow.shadowBlurRadius = 9 * g
+                shadow.set()
+                NSColor.black.setFill()
+                body.fill()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            (isSelected ? Self.blue : NSColor(white: (0x3A + 0x22 * g) / 255.0, alpha: 1)).setFill()
+            body.fill()
+            if g > 0 {
+                NSColor(white: 1, alpha: 0.35 * g).setStroke()
+                let rim = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: radius - 1.5, yRadius: radius - 1.5)
+                rim.lineWidth = 1
+                rim.stroke()
+            }
             if isSelected, g > 0 {
                 NSColor(white: 1, alpha: 0.12 * g).setFill()
                 NSBezierPath(roundedRect: r, xRadius: radius - 1, yRadius: radius - 1).fill()

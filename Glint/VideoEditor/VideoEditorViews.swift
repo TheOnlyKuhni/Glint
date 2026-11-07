@@ -55,8 +55,11 @@ struct VideoEditorContent: View {
                         .frame(height: 50)
                 }
             }
-            TimelineHost(timeline: timeline)
-                .frame(height: Self.timelineHeight)
+            HStack(spacing: 0) {
+                if project.isStudio { TimelineTrackIcons(hasCamera: project.hasCamera) }
+                TimelineHost(timeline: timeline)
+            }
+            .frame(height: Self.timelineHeight)
         }
         .background(W.base)
         .environment(\.colorScheme, .dark)
@@ -158,6 +161,40 @@ final class PreviewCanvasView: NSView {
             shadow.shadowOpacity = Float(layers[i].opacity)
         }
         CATransaction.commit()
+    }
+}
+
+/// Studio Mode: an icon left of each timeline track (camera, zooms, video, pointer, keyboard), naming it on hover.
+private struct TimelineTrackIcons: View {
+    let hasCamera: Bool
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color(white: 0x17 / 255.0)
+            ForEach(VideoTimelineView.trackRows(hasCamera: hasCamera)) { row in
+                TrackIcon(row: row).position(x: 22, y: row.centerY)
+            }
+        }
+        .frame(width: 38)
+        .overlay(alignment: .trailing) { Rectangle().fill(W.line).frame(width: 1) }
+    }
+
+    private struct TrackIcon: View {
+        let row: VideoTimelineView.TrackRow
+        @State private var hovering = false
+
+        var body: some View {
+            Image(systemName: row.symbol)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Color.white.opacity(hovering ? 0.95 : 0.5))
+                .frame(width: 26, height: 18)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(hovering ? 0.1 : 0)))
+                .scaleEffect(hovering ? 1.08 : 1)
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .animation(.easeOut(duration: 0.15), value: hovering)
+                .help(row.title)
+        }
     }
 }
 
