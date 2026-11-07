@@ -7,7 +7,7 @@ enum RecordRatio {
     static let landscape: [(title: String, key: String, value: CGFloat)] = [
         ("1 : 1 (Square)", "1:1", 1), ("5 : 4 (10 : 8)", "5:4", 5 / 4), ("4 : 3", "4:3", 4 / 3), ("7 : 5", "7:5", 7 / 5),
         ("3 : 2 (6 : 4)", "3:2", 3 / 2), ("16 : 10", "16:10", 16 / 10), ("16 : 9", "16:9", 16 / 9),
-        ("1.85 : 1", "1.85:1", 1.85), ("2.35 : 1", "2.35:1", 2.35),
+        ("1.85 : 1", "1.85:1", 1.85), ("1.91 : 1", "1.91:1", 1.91), ("2.35 : 1", "2.35:1", 2.35),
     ]
     static let portrait: [(title: String, key: String, value: CGFloat)] = [
         ("4 : 5", "4:5", 4 / 5), ("3 : 4", "3:4", 3 / 4), ("2 : 3", "2:3", 2 / 3), ("9 : 16", "9:16", 9 / 16),
@@ -404,6 +404,7 @@ enum RecordMenus {
         for group in [RecordRatio.landscape, RecordRatio.portrait] {
             for r in group {
                 let item = ClosureMenuItem(title: r.title) { set(r.key) }
+                item.toolTip = SocialRatio.hint(r.key)
                 item.state = r.key == current ? .on : .off
                 menu.addItem(item)
             }

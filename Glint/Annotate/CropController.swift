@@ -6,7 +6,7 @@ import SwiftUI
 @Observable
 final class CropState {
     enum Ratio: String, CaseIterable, Identifiable {
-        case freeform, customRatio, original, square, r4x3, r3x2, r16x9, r16x10, r3x4, r2x3, r9x16
+        case freeform, customRatio, original, square, r4x3, r3x2, r16x9, r16x10, r191x1, r4x5, r3x4, r2x3, r9x16
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -18,6 +18,8 @@ final class CropState {
             case .r3x2: "3:2"
             case .r16x9: "16:9"
             case .r16x10: "16:10"
+            case .r191x1: "1.91:1"
+            case .r4x5: "4:5"
             case .r3x4: "3:4"
             case .r2x3: "2:3"
             case .r9x16: "9:16"
@@ -32,6 +34,8 @@ final class CropState {
             case .r3x2: 3.0 / 2
             case .r16x9: 16.0 / 9
             case .r16x10: 16.0 / 10
+            case .r191x1: 1.91
+            case .r4x5: 4.0 / 5
             case .r3x4: 3.0 / 4
             case .r2x3: 2.0 / 3
             case .r9x16: 9.0 / 16
@@ -182,7 +186,7 @@ final class CropState {
     /// Complete terms → the preset they match, else Custom Ratio.
     private func resolve(_ t: CGSize) {
         let value = t.width / t.height
-        let fixed: [Ratio] = [.square, .r4x3, .r3x2, .r16x9, .r16x10, .r3x4, .r2x3, .r9x16]
+        let fixed: [Ratio] = [.square, .r4x3, .r3x2, .r16x9, .r16x10, .r191x1, .r4x5, .r3x4, .r2x3, .r9x16]
         if let preset = fixed.first(where: { abs(($0.value(original: imageSize) ?? 0) - value) < 0.0005 }) {
             ratio = preset
             typedRatio = nil

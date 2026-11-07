@@ -297,7 +297,7 @@ struct BackgroundPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     sectionTitle("Ratio")
                     Picker("", selection: binding(\.ratio)) {
-                        ForEach(BackgroundStyle.Ratio.allCases) { Text($0.title).tag($0) }
+                        ForEach(BackgroundStyle.Ratio.allCases) { Text($0.menuTitle).tag($0) }
                     }
                     .labelsHidden()
                     .frame(maxWidth: .infinity)

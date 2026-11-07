@@ -610,7 +610,7 @@ private struct CropPanel: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                         // Custom last; picking it opens its line below.
                         ForEach(CropState.Ratio.allCases.filter { $0 != .customRatio } + [.customRatio]) { ratio in
-                            TileButton(selected: state.ratio == ratio, height: 28, help: ratio == .customRatio ? "Type your own ratio" : ratio.title) {
+                            TileButton(selected: state.ratio == ratio, height: 28, help: ratio == .customRatio ? "Type your own ratio" : SocialRatio.hint(ratio.title).map { "\(ratio.title): \($0)" } ?? ratio.title) {
                                 actions.setCropRatio(ratio)
                             } label: {
                                 Text(ratio == .customRatio ? "Custom" : ratio.title).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)

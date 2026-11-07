@@ -13,7 +13,8 @@ struct BackgroundStyle: Codable, Equatable {
     }
 
     enum Ratio: String, Codable, CaseIterable, Identifiable {
-        case auto, square, r4x3, r3x2, r16x9, r16x10, r9x16
+        // Landscape, then portrait. The raw values are saved, so existing ones never change.
+        case auto, square, r4x3, r3x2, r16x9, r16x10, r191x1, r4x5, r3x4, r2x3, r9x16
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -23,9 +24,15 @@ struct BackgroundStyle: Codable, Equatable {
             case .r3x2: "3:2"
             case .r16x9: "16:9"
             case .r16x10: "16:10"
+            case .r191x1: "1.91:1"
+            case .r4x5: "4:5"
+            case .r3x4: "3:4"
+            case .r2x3: "2:3"
             case .r9x16: "9:16"
             }
         }
+        /// The title with where the ratio is used, for menus.
+        var menuTitle: String { SocialRatio.hint(title).map { "\(title)  ·  \($0)" } ?? title }
         var value: CGFloat? {
             switch self {
             case .auto: nil
@@ -34,6 +41,10 @@ struct BackgroundStyle: Codable, Equatable {
             case .r3x2: 3.0 / 2
             case .r16x9: 16.0 / 9
             case .r16x10: 16.0 / 10
+            case .r191x1: 1.91
+            case .r4x5: 4.0 / 5
+            case .r3x4: 3.0 / 4
+            case .r2x3: 2.0 / 3
             case .r9x16: 9.0 / 16
             }
         }
@@ -509,5 +520,21 @@ enum SoftShape {
         if cache.count > 12 { cache.removeAll() }
         cache[key] = (image, rect)
         return (image, rect)
+    }
+}
+
+/// Where the common aspect ratios are used on social media, shown next to them in the ratio menus and tooltips.
+enum SocialRatio {
+    static func hint(_ ratio: String) -> String? {
+        switch ratio.replacingOccurrences(of: " ", with: "") {
+        case "1:1": "Instagram, Facebook, LinkedIn posts"
+        case "16:9": "YouTube, X, LinkedIn video"
+        case "1.91:1": "Link previews, Facebook, LinkedIn images"
+        case "4:5": "Instagram, Facebook, Threads posts"
+        case "3:4": "Instagram profile grid"
+        case "2:3": "Pinterest"
+        case "9:16": "Stories, Reels, TikTok, Shorts"
+        default: nil
+        }
     }
 }

@@ -693,7 +693,7 @@ private struct VideoBackgroundInspector: View {
             Divider().overlay(W.line).padding(.vertical, 10)
             InspectorHeader("Aspect Ratio")
             Picker("", selection: $project.edit.background.ratio) {
-                ForEach([BackgroundStyle.Ratio.auto, .square, .r4x3, .r3x2, .r16x9, .r16x10, .r9x16], id: \.self) { Text($0.title).tag($0) }
+                ForEach(BackgroundStyle.Ratio.allCases) { Text($0.menuTitle).tag($0) }
             }
             .labelsHidden()
             .help("Shape of the exported video (Auto keeps the video's own)")
