@@ -128,11 +128,14 @@ if you prefer.
   to MP4, MOV or GIF.
 - **Studio Mode:** record the screen as an editable project: automatic zooms that follow the cursor, cursor size,
   style, smoothing and click effects, keystrokes and the camera, all adjustable after recording.
-- **Quick Access:** a floating stack of your latest captures to copy, save, annotate, pin or drag anywhere.
+- **Quick Access:** a floating stack of your latest captures to copy, save, annotate, pin or drag anywhere. Pull a
+  card down, swipe down with two fingers or click the bar above the stack to tuck it away; pull or swipe a card toward
+  the screen edge to close it.
 - **Export formats:** screenshots as PNG, JPEG, HEIC or TIFF.
 - **Pin to the Screen** and **Capture History** to restore earlier captures, with a **Trash** for ones you remove.
 - **Open images from Finder:** any PNG, JPEG, HEIC, TIFF, WebP or BMP opens in Annotate through **Open With**.
-- **URL scheme** (`glint://capture-area`, `glint://open-annotate?filepath=…`, …) for automation.
+- **Automation:** the `glint` command (`glint fullscreen` takes a screenshot and prints its path) for scripts and AI
+  agents, and `glint://` links for Shortcuts, Raycast and others. See [docs/command-line.md](docs/command-line.md).
 
 ## Requirements
 
@@ -147,6 +150,15 @@ if you prefer.
 2. Unzip it and move **Glint.app** to your **Applications** folder.
 3. Open Glint. macOS blocks it the first time: follow [these steps](#opening-glint-for-the-first-time).
 4. Glint lives in the menu bar; there's no Dock icon.
+
+### With an AI agent
+
+If you use an AI coding agent (Claude Code, Codex, Cursor, …), you can let it do the setup. Ask it:
+
+> Help me set up Glint: https://github.com/TheOnlyKuhni/Glint/blob/main/docs/agent-setup.md
+
+[docs/agent-setup.md](docs/agent-setup.md) walks the agent through downloading, the Gatekeeper step, permissions,
+turning off Apple's shortcuts and a test capture. It asks you before changing anything.
 
 ### Homebrew
 
@@ -175,8 +187,25 @@ Default shortcuts match macOS's own screenshot shortcuts:
 | ⇧⌘5 | All-In-One |
 | ⌃⇧⌘4 | Capture area and copy to the clipboard |
 
-To use them, turn off the system shortcuts first in **System Settings → Keyboard → Keyboard Shortcuts →
-Screenshots**. Every shortcut can be changed in Glint's **Settings → Shortcuts**.
+### Turn off Apple's screenshot shortcuts
+
+While macOS's own screenshot shortcuts are on, macOS takes these keys and Glint's shortcuts don't work. To turn
+them off:
+
+1. Open **System Settings → Keyboard**.
+2. Click **Keyboard Shortcuts…** and choose **Screenshots** on the left.
+3. Uncheck these:
+   - **Save picture of screen as a file** (⇧⌘3)
+   - **Save picture of selected area as a file** (⇧⌘4)
+   - **Copy picture of selected area to the clipboard** (⌃⇧⌘4)
+   - **Screenshot and recording options** (⇧⌘5)
+4. Click **Done**. The change works right away.
+
+**Copy picture of screen to the clipboard** (⌃⇧⌘3) has no Glint default, so you can leave it on. Glint's
+**Settings → Shortcuts** shows a warning while any of the others is still on.
+
+If you'd rather keep Apple's shortcuts, give Glint different ones in **Settings → Shortcuts**. Every shortcut can be
+changed there.
 
 ## Updates
 
@@ -207,6 +236,7 @@ curl -fsSL https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/Tools/unins
 | `~/Library/Logs/Glint` | Log file |
 | `~/Library/Caches/com.philippk.glint` | Update cache |
 | `~/Library/HTTPStorages/com.philippk.glint` | Update-check data |
+| `/usr/local/bin/glint` | The command line tool's link, if you installed it |
 
 Then remove Glint from **System Settings → Privacy & Security** (Screen Recording, Microphone, Camera,
 Accessibility, Input Monitoring) and **General → Login Items**. If you set up *Do Not Disturb while recording*,
