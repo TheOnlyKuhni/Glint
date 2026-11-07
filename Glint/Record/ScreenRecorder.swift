@@ -275,8 +275,8 @@ enum RecordingOverlayTitle {
 }
 
 /// Converts a recorded movie to a GIF with the GIF settings (frame rate, width, quality).
-/// Movie → GIF: GIF frame rate and width from the settings. "Optimize GIFs" merges repeated frames into longer ones and stores only the pixels that changed
-/// since the previous frame (the rest transparent), which makes screen recordings several times smaller.
+/// "Optimize GIFs" merges repeated frames into one longer frame. ImageIO already stores only the changed part of each
+/// frame; making unchanged pixels transparent on top of that made GIFs 1.6–2.7× bigger (measured), so Glint doesn't.
 /// "Quality" below High reduces the colors (posterize) for smaller files.
 enum GIFEncoder {
     /// `width`: the GIF's width (default: the GIF Resolution setting), never wider than the movie.
@@ -308,54 +308,11 @@ enum GIFEncoder {
             writer.add(image, duration: frameTime)
         }
         writer.flush()
-        guard CGImageDestinationFinalize(dest) else { return false }
-        if optimize { GIFDisposal.keepPreviousFrames(in: output) }
-        return true
+        return CGImageDestinationFinalize(dest)
     }
 }
 
-/// ImageIO writes every frame with "restore to background", so frames that store only the changed pixels would show
-/// holes. This walks the GIF's blocks and sets each frame's disposal to "do not dispose" (draw over the previous).
-nonisolated enum GIFDisposal {
-    static func keepPreviousFrames(in url: URL) {
-        guard var bytes = try? [UInt8](Data(contentsOf: url)), bytes.count > 13 else { return }
-        var i = 13
-        let flags = bytes[10]
-        if flags & 0x80 != 0 { i += 3 * (1 << (Int(flags & 0x07) + 1)) }  // global color table
-        func skipSubBlocks(_ j: inout Int) {
-            while j < bytes.count {
-                let n = Int(bytes[j]); j += 1
-                if n == 0 { return }
-                j += n
-            }
-        }
-        while i < bytes.count {
-            switch bytes[i] {
-            case 0x21:  // extension
-                guard i + 2 < bytes.count else { return }
-                if bytes[i + 1] == 0xF9, bytes[i + 2] == 0x04, i + 3 < bytes.count {
-                    bytes[i + 3] = (bytes[i + 3] & ~0x1C) | (1 << 2)
-                }
-                var j = i + 2
-                skipSubBlocks(&j)
-                i = j
-            case 0x2C:  // image descriptor
-                guard i + 9 < bytes.count else { return }
-                let packed = bytes[i + 9]
-                var j = i + 10
-                if packed & 0x80 != 0 { j += 3 * (1 << (Int(packed & 0x07) + 1)) }  // local color table
-                j += 1  // LZW minimum code size
-                skipSubBlocks(&j)
-                i = j
-            default:
-                i = bytes.count  // trailer (0x3B) or unknown
-            }
-        }
-        try? Data(bytes).write(to: url)
-    }
-}
-
-/// Buffers one frame so repeats can extend its delay; writes changed-pixels-only frames when optimizing.
+/// Buffers one frame so repeats can extend its delay (when optimizing).
 nonisolated private final class GIFFrameWriter {
     private let destination: CGImageDestination
     private let size: CGSize
@@ -363,7 +320,6 @@ nonisolated private final class GIFFrameWriter {
     private let posterizeLevels: Int?
     private let ciContext = CIContext()
     private var pending: (pixels: [UInt32], delay: Double)?
-    private var previousWritten: [UInt32]?
     /// The frames' exact length so far and what their rounded delays add up to, in hundredths of a second.
     private var exactTime = 0.0
     private var writtenTime = 0.0
@@ -388,13 +344,7 @@ nonisolated private final class GIFFrameWriter {
     func flush() {
         guard let p = pending else { return }
         pending = nil
-        var out = p.pixels
-        if optimize, let previous = previousWritten {
-            // Unchanged pixels become transparent: the previous frame shows through.
-            for i in out.indices where out[i] == previous[i] { out[i] = 0 }
-        }
-        previousWritten = p.pixels
-        guard let image = makeImage(out) else { return }
+        guard let image = makeImage(p.pixels) else { return }
         // GIF delays are whole hundredths of a second. The rounding error carries over to the next frame, or a 30 fps
         // GIF (3 instead of 3.33) would run 10% fast. Under 2, players slow a frame down instead.
         exactTime += p.delay * 100
@@ -432,7 +382,7 @@ nonisolated private final class GIFFrameWriter {
         let data = pixels.withUnsafeBytes { Data($0) } as CFData
         guard let provider = CGDataProvider(data: data) else { return nil }
         return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
-                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider, decode: nil,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue), provider: provider, decode: nil,
                        shouldInterpolate: false, intent: .defaultIntent)
     }
 }
