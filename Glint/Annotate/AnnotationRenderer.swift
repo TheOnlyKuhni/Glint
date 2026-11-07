@@ -62,12 +62,22 @@ struct AnnotationRenderer {
         ctx.restoreGState()
         guard parts.contains(.overlay) else { return }
 
+        // Dimming darkens the screenshot only, never the background around it: it keeps to the card's rounded
+        // shape and, for captures with transparency (windows), to the screenshot's own pixels.
         func dim() {
             guard !spotlights.isEmpty, outside < 0.99 else { return }
             ctx.saveGState()
+            background?.clipScreenshot(imageSize: imageSize, ctx: ctx)
             Self.clip(ctx, to: spots, inside: false, bounds: bounds, soft: soft)
+            let hasAlpha = ![.none, .noneSkipFirst, .noneSkipLast].contains(baseImage.alphaInfo)
+            if hasAlpha { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
             ctx.setFillColor(NSColor.black.withAlphaComponent(1 - max(outside, 0)).cgColor)
             ctx.fill(bounds)
+            if hasAlpha {
+                ctx.setBlendMode(.destinationIn)
+                Self.drawImage(baseImage, in: bounds, ctx: ctx)
+                ctx.endTransparencyLayer()
+            }
             ctx.restoreGState()
         }
         if !dimsAnnotations { dim() }
