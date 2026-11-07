@@ -18,6 +18,7 @@ cask "glint" do
   depends_on macos: ">= :sequoia"
 
   app "Glint.app"
+  binary "#{appdir}/Glint.app/Contents/Resources/glint"
 
   uninstall quit: "com.philippk.glint"
 

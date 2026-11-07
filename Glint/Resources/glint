@@ -1,0 +1,228 @@
+#!/bin/zsh
+# glint: control Glint from the terminal.
+# Lives in Glint.app/Contents/Resources. `glint install` links it to /usr/local/bin/glint.
+# Docs: https://github.com/TheOnlyKuhni/Glint/blob/main/docs/command-line.md
+
+emulate -L zsh
+setopt no_unset pipe_fail extended_glob
+
+# This script's real path (following the /usr/local/bin link). Inside functions $0 is the function's name.
+readonly SELF=${0:A}
+readonly BUNDLE_ID=com.philippk.glint
+readonly LINK=/usr/local/bin/glint
+
+usage() {
+  cat <<'EOF'
+Usage: glint <command> [file] [options]
+
+Takes screenshots and recordings with Glint and prints where the file is.
+
+Screenshots (print the file's path):
+  fullscreen          The screen the pointer is on, right away
+  previous            The last captured area again, right away
+  area                Select an area (Space: pick a window)
+  window              Pick a window
+  timer               Select an area, captured after the timer
+  scrolling           Scrolling capture
+  all-in-one          The All-In-One tool
+  text                Select an area and print its text (also copied)
+
+Recordings:
+  record              Start a recording (select the area, click Record).
+                      Run it again to stop; that prints the file's path.
+  studio              The same as a Studio Mode recording
+  pause, restart      Pause/resume or restart the running recording
+
+Files:
+  annotate <file>     Open an image in the screenshot editor
+  edit-video <file>   Open a video in the video editor
+  pin <file>          Pin an image to the screen
+
+History:
+  last                Print the newest capture's path
+  history [n]         Print the newest n captures' paths (default 10)
+
+Other:
+  settings            Open Glint's settings
+  install             Link this tool to /usr/local/bin/glint (asks for your password)
+  commands            List every URL scheme command (all of them work here too)
+  help                Show this help
+
+Options:
+  --timeout <s>       Seconds to wait for Glint's answer
+                      (default 20; 600 for commands that wait for a selection)
+  --no-wait           Send the command and return at once, without an answer
+
+Exit status: 0 done, 1 cancelled or failed, 2 no answer from Glint.
+Docs: https://github.com/TheOnlyKuhni/Glint/blob/main/docs/command-line.md
+EOF
+}
+
+# Every glint:// command (AppAction's cases plus the file commands).
+readonly -a ALL_COMMANDS=(
+  all-in-one toggle-desktop-icons open-history restore-last-capture
+  capture-area capture-previous-area capture-fullscreen capture-window self-timer
+  capture-area-copy capture-area-save capture-area-annotate capture-area-pin
+  record-screen record-studio pause-recording restart-recording toggle-camera-fullscreen
+  scrolling-capture capture-text capture-text-with-line-breaks capture-text-without-line-breaks
+  toggle-overlays save-all-overlays close-all-overlays
+  pin-image toggle-pins close-all-pins pin-last-screenshot
+  annotate-file annotate-clipboard annotate-last-screenshot
+  open-settings open-annotate open-video-editor pin
+)
+
+# Commands that wait for someone to select something on screen.
+readonly -a INTERACTIVE=(
+  all-in-one capture-area capture-window self-timer capture-area-copy capture-area-save capture-area-annotate
+  capture-area-pin record-screen record-studio scrolling-capture capture-text capture-text-with-line-breaks
+  capture-text-without-line-breaks
+)
+
+die() { print -ru2 -- "glint: $*"; exit 1 }
+
+# Glint.app, from where this script lives (following the /usr/local/bin link), else wherever macOS knows it.
+find_app() {
+  local app=${SELF:h:h:h}
+  if [[ $app == *.app && -d $app ]]; then print -r -- $app; return; fi
+  app=$(mdfind "kMDItemCFBundleIdentifier == '$BUNDLE_ID'" 2>/dev/null | head -1)
+  [[ -n $app ]] && { print -r -- $app; return; }
+  [[ -d /Applications/Glint.app ]] && { print -r -- /Applications/Glint.app; return; }
+  die "can't find Glint.app"
+}
+
+# Starts Glint if needed. A link sent while it's still launching can get lost, so it waits a moment.
+ensure_running() {
+  pgrep -x Glint >/dev/null && return
+  open -g -a $APP || die "couldn't open $APP"
+  local i
+  for i in {1..40}; do pgrep -x Glint >/dev/null && break; sleep 0.25; done
+  pgrep -x Glint >/dev/null || die "Glint didn't start"
+  sleep 2.5
+}
+
+urlencode() {
+  local LC_ALL=C s=$1 out= c i
+  for (( i = 1; i <= ${#s}; i++ )); do
+    c=$s[i]
+    case $c in
+      [a-zA-Z0-9.~_/-]) out+=$c ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  print -r -- $out
+}
+
+history_files() {
+  local dir=~/Library/Application\ Support/Glint/History
+  print -rl -- $dir/*/*.(png|jpg|heic|tiff|mp4|mov|gif)(N.om)
+}
+
+install_link() {
+  local target=$SELF
+  if [[ -L $LINK && ${LINK:A} == $target ]]; then print "Already installed: $LINK"; return; fi
+  print "Linking $LINK → $target"
+  if [[ -w ${LINK:h} ]]; then
+    ln -sf $target $LINK
+  else
+    sudo mkdir -p ${LINK:h} && sudo ln -sf $target $LINK
+  fi || die "couldn't create $LINK"
+  print "Done. Try: glint help"
+}
+
+# MARK: Arguments
+
+(( $# )) || { usage; exit 0 }
+cmd=$1; shift
+file=
+timeout=
+wait=1
+while (( $# )); do
+  case $1 in
+    --timeout) (( $# >= 2 )) || die "--timeout needs a number"; timeout=$2; shift 2 ;;
+    --timeout=*) timeout=${1#*=}; shift ;;
+    --no-wait) wait=0; shift ;;
+    -*) die "unknown option $1" ;;
+    *) [[ -z $file ]] || die "too many arguments"; file=$1; shift ;;
+  esac
+done
+
+case $cmd in
+  help|-h|--help) usage; exit 0 ;;
+  commands) print -rl -- $ALL_COMMANDS; exit 0 ;;
+  install) install_link; exit 0 ;;
+  last)
+    newest=$(history_files | head -1)
+    [[ -n $newest ]] || die "no captures in the history"
+    print -r -- $newest; exit 0 ;;
+  history) history_files | head -${file:-10}; exit 0 ;;
+  fullscreen|screenshot) cmd=capture-fullscreen ;;
+  previous) cmd=capture-previous-area ;;
+  area) cmd=capture-area ;;
+  window) cmd=capture-window ;;
+  timer) cmd=self-timer ;;
+  scrolling) cmd=scrolling-capture ;;
+  text) cmd=capture-text ;;
+  record) cmd=record-screen ;;
+  studio) cmd=record-studio ;;
+  pause) cmd=pause-recording ;;
+  restart) cmd=restart-recording ;;
+  annotate) cmd=open-annotate ;;
+  edit-video) cmd=open-video-editor ;;
+  settings) cmd=open-settings ;;
+esac
+
+(( ${ALL_COMMANDS[(Ie)$cmd]} )) || die "unknown command '$cmd' (see glint help)"
+if [[ -n $file && $cmd != (open-annotate|open-video-editor|pin) ]]; then die "$cmd doesn't take a file"; fi
+if [[ -n $file ]]; then
+  file=${file:A}
+  [[ -e $file ]] || die "no file at $file"
+fi
+
+APP=$(find_app)
+ensure_running
+
+# MARK: Send and wait
+
+url="glint://$cmd"
+query=()
+[[ -n $file ]] && query+=("filepath=$(urlencode $file)")
+
+if (( ! wait )); then
+  (( $#query )) && url+="?${(j:&:)query}"
+  open -g -a $APP $url
+  exit 0
+fi
+
+id=$(uuidgen)
+answers="$(getconf DARWIN_USER_TEMP_DIR)glint-cli"
+answer="$answers/$id"
+query+=("reply=$id")
+url+="?${(j:&:)query}"
+[[ -n $timeout ]] || { (( ${INTERACTIVE[(Ie)$cmd]} )) && timeout=600 || timeout=20 }
+[[ $timeout == <-> ]] || die "--timeout needs whole seconds"
+
+open -g -a $APP $url || die "couldn't send the command to Glint"
+
+deadline=$(( SECONDS + timeout ))
+while [[ ! -f $answer ]]; do
+  if (( SECONDS >= deadline )); then
+    print -ru2 -- "glint: no answer from Glint after ${timeout}s."
+    print -ru2 -- "Check that Glint runs and that Settings → Advanced → \"Allow URL scheme API\" is on."
+    exit 2
+  fi
+  sleep 0.2
+done
+
+reply=$(<$answer)
+rm -f $answer
+case $reply in
+  file\ *) print -r -- ${reply#file } ;;
+  text\ *) print -r -- ${reply#text } ;;
+  recording) print -ru2 -- "Recording. Run 'glint ${${cmd/record-screen/record}/record-studio/studio}' again to stop; it prints the file." ;;
+  ok) ;;
+  cancelled) print -ru2 -- "Cancelled."; exit 1 ;;
+  busy) print -ru2 -- "glint: Glint is busy with another capture."; exit 1 ;;
+  error\ *) die ${reply#error } ;;
+  *) die "unexpected answer: $reply" ;;
+esac
+exit 0

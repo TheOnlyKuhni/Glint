@@ -62,6 +62,7 @@ final class AllInOne {
     private var areaBeforeFullScreen: CGRect?
 
     func start() {
+        if selector != nil || RecordingController.shared.isRecording { CLIReply.send("busy") }
         guard selector == nil, !RecordingController.shared.isRecording, Permissions.ensureScreenRecording() else { return }
         let selector = RegionSelector(hint: "Drag to select capture area.", dim: 0.5, level: NSWindow.Level(rawValue: 103))
         let model = AllInOneModel()
@@ -72,6 +73,7 @@ final class AllInOne {
         selector.onCancel = { [weak self, unowned selector] in
             self?.remember(selector.rect)
             self?.selector = nil
+            CLIReply.cancelled()
         }
         selector.onConfirm = { [weak self] _ in self?.perform(.area) }
         selector.onKey = { [weak self] event in

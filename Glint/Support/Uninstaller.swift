@@ -54,6 +54,11 @@ enum Uninstaller {
         UserDefaults.standard.synchronize()
         let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         for item in libraryItems { try? FileManager.default.removeItem(at: library.appendingPathComponent(item)) }
+        // The command line tool's link, when /usr/local/bin lets us (it usually needs an administrator).
+        let link = CommandLineTool.link.path
+        if let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: link), dest.contains("Glint.app/") {
+            try? FileManager.default.removeItem(atPath: link)
+        }
         NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }

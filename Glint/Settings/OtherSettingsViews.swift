@@ -267,6 +267,7 @@ struct AdvancedSettingsView: View {
                     Text("Allow URL scheme API")
                     Text("Disable this option to prevent external apps from controlling Glint via URL scheme API.")
                 }
+                CommandLineToolRow()
             }
             Section("Uninstall") {
                 LabeledContent {
@@ -509,5 +510,50 @@ struct KeystrokeOptionsView: View {
         .formStyle(.grouped)
         // Settings saved before the presets had "Only shortcuts".
         .onAppear { filter = KeystrokeFilter.setting.rawValue }
+    }
+}
+
+/// Settings → Advanced → API: links the `glint` tool from the app bundle to /usr/local/bin.
+private struct CommandLineToolRow: View {
+    @State private var installed = CommandLineTool.isInstalled
+
+    var body: some View {
+        LabeledContent {
+            Button(installed ? "Installed" : "Install…") {
+                CommandLineTool.install()
+                installed = CommandLineTool.isInstalled
+            }
+            .disabled(installed)
+        } label: {
+            Text("Command line tool")
+            Text("Adds the glint command, for example \"glint fullscreen\" or \"glint area\", which prints the path of the new capture. It goes to \(CommandLineTool.link.path) and asks for your password.")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            installed = CommandLineTool.isInstalled
+        }
+    }
+}
+
+enum CommandLineTool {
+    static let link = URL(fileURLWithPath: "/usr/local/bin/glint")
+    static var tool: URL? { Bundle.main.url(forResource: "glint", withExtension: nil) }
+
+    static var isInstalled: Bool {
+        guard let tool, let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
+        return URL(fileURLWithPath: dest).standardizedFileURL == tool.standardizedFileURL
+    }
+
+    /// Creates the link with an administrator prompt (/usr/local/bin is usually owned by root).
+    static func install() {
+        guard let tool else { NSSound.beep(); return }
+        func quoted(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let command = "mkdir -p /usr/local/bin && ln -sf \(quoted(tool.path)) \(quoted(link.path))"
+        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        var error: NSDictionary?
+        NSAppleScript(source: "do shell script \"\(escaped)\" with administrator privileges")?.executeAndReturnError(&error)
+        if let error, (error[NSAppleScript.errorNumber] as? Int) != -128 {  // -128: the user cancelled
+            glintLog("cli install failed: \(error)")
+            NSSound.beep()
+        }
     }
 }

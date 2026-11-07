@@ -64,22 +64,37 @@ enum AppRouter {
             .reduce(into: [String: String]()) { $0[$1.name] = $1.value }
         if DebugHooks.handle(command, query) { return }
         #endif
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let path = items.first { $0.name == "filepath" }?.value
+        // The `glint` command-line tool asks for an answer (see CLIReply).
+        CLIReply.begin(items.first { $0.name == "reply" }?.value)
+        if let path, ["open-annotate", "open-video-editor", "pin"].contains(command),
+           !FileManager.default.fileExists(atPath: path) {
+            CLIReply.error("no file at \(path)")
+            NSSound.beep()
+            return
+        }
         if command == "open-settings" {
             SettingsWindowController.shared.show()
         } else if command == "open-annotate" {
-            let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "filepath" }?.value
             if let path { AnnotateWindowController.open(url: URL(fileURLWithPath: path)) } else { AnnotateWindowController.openFromPanel() }
         } else if command == "open-video-editor" {
-            let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "filepath" }?.value
             if let path { VideoEditorWindowController.open(url: URL(fileURLWithPath: path)) } else { VideoEditorWindowController.openFromPanel() }
         } else if command == "pin" {
-            let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "filepath" }?.value
             if let path, let item = CaptureItem.load(URL(fileURLWithPath: path)) { PinManager.shared.pin(item) } else { PinManager.shared.pinFromPanel() }
         } else if let action = AppAction.allCases.first(where: { $0.urlCommand == command }) {
+            if CLIReply.answersLater(action), !Permissions.hasScreenRecording {
+                CLIReply.error("Glint needs the Screen Recording permission (System Settings → Privacy & Security)")
+            }
             perform(action)
+            if !CLIReply.answersLater(action) { CLIReply.send("ok") }
+            return
         } else {
+            CLIReply.error("unknown command \(command)")
             NSSound.beep()
+            return
         }
+        CLIReply.send("ok")
     }
 }
 

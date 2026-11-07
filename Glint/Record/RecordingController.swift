@@ -24,6 +24,7 @@ final class RecordingController {
     /// `studio` ("Start Studio Mode Recording"): Return starts a Studio Mode recording.
     func toggle(initial: CGRect? = nil, studio: Bool = false) {
         if let session { session.stop(); return }
+        if selector != nil { CLIReply.send("busy") }
         guard selector == nil, Permissions.ensureScreenRecording() else { return }
         let selector = RegionSelector(hint: "Drag to record a part of the screen. Press Space to select a window.")
         let model = RecordPanelModel()
@@ -38,6 +39,7 @@ final class RecordingController {
             if !selector.rect.isEmpty { Defaults[Prefs.recLastArea] = selector.rect.storageString }
             self?.selector = nil
             WebcamOverlay.shared.hide()
+            CLIReply.cancelled()
         }
         selector.onConfirm = { [weak self] option in self?.start(option ? .gif : studio ? .studio : .video) }
         // Without "Remember last selection" every recording starts freeform with no area (the other options —
@@ -107,6 +109,7 @@ final class RecordingController {
         }
         self.session = session
         isRecording = true
+        CLIReply.send("recording")
         Task { await session.begin() }
     }
 }
@@ -286,7 +289,7 @@ final class RecordingSession {
         cleanUp()
         let isGIF = isGIF, rect = rect
         Task {
-            guard let movie = await recorder.stop() else { NSSound.beep(); return }
+            guard let movie = await recorder.stop() else { NSSound.beep(); CLIReply.error("the recording failed"); return }
             var file = movie
             if !isGIF, Defaults[Prefs.recAudioTracks] == .single, let mixed = await AudioMixdown.singleTrack(movie) {
                 file = mixed

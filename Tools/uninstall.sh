@@ -15,6 +15,13 @@ for app in /Applications/Glint.app ~/Applications/Glint.app; do
   [[ -d $app ]] && rm -rf "$app" && echo "  $app"
 done
 
+# The command line tool's link (Settings → Advanced → API, or `glint install`).
+if [[ -L /usr/local/bin/glint && $(readlink /usr/local/bin/glint) == *Glint.app/* ]]; then
+  echo "Removing the glint command…"
+  rm -f /usr/local/bin/glint 2>/dev/null || sudo rm -f /usr/local/bin/glint
+  echo "  /usr/local/bin/glint"
+fi
+
 echo "Removing data and settings…"
 for item in \
   ~/Library/Application\ Support/Glint \

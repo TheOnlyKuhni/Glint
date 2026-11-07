@@ -13,6 +13,7 @@ final class ScrollingCapture {
 
     /// `initial` (from All-In-One) starts with that area already selected.
     func start(initial: CGRect? = nil) {
+        if selector != nil || run != nil { CLIReply.send("busy") }
         guard selector == nil, run == nil, Permissions.ensureScreenRecording() else { return }
         guard Defaults[Prefs.scrollingTutorialSeen] else {
             ScrollingTutorial.show { [weak self] in
@@ -22,7 +23,7 @@ final class ScrollingCapture {
             return
         }
         let selector = RegionSelector(hint: "Drag to capture the scrolling part of the screen.")
-        selector.onCancel = { [weak self] in self?.selector = nil }
+        selector.onCancel = { [weak self] in self?.selector = nil; CLIReply.cancelled() }
         selector.onConfirm = { [weak self] _ in self?.begin() }
         let host = NSHostingView(rootView: StartCaptureRow(start: { [weak self] in self?.begin() },
                                                            help: { [weak selector] in
@@ -216,6 +217,7 @@ final class ScrollingRun {
         scrollTimer?.cancel()
         ShortcutManager.shared.setEscapeHandler(nil)
         for window in [frameWindow, controls, previewPanel, autoScrollPanel, sideToggle, pauseHint] { window?.orderOut(nil) }
+        if !save { CLIReply.cancelled() }
         if save {
             if let image = stitcher.result() {
                 CaptureOutput.deliver(image, scale: screen.backingScaleFactor)

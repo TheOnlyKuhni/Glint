@@ -51,6 +51,7 @@ final class CaptureCoordinator {
     // MARK: Area & window
 
     func captureArea(startIn mode: SelectionOverlay.Mode = .area, options: AfterCaptureOptions? = nil, selfTimer: Bool = false) {
+        if isBusy { CLIReply.send("busy") }
         guard !isBusy, Permissions.ensureScreenRecording() else { return }
         isBusy = true
         // Glint's own selection for Capture Area, the Timer and Capture Text alike (one cursor and coordinate pill
@@ -71,7 +72,7 @@ final class CaptureCoordinator {
                 if hideIcons { DesktopIconsHider.shared.show(animated: false) }
                 isBusy = false
             }
-            guard let result else { return }
+            guard let result else { CLIReply.cancelled(); return }
             // Give the window server a moment to remove the overlay before capturing.
             try? await Task.sleep(for: .milliseconds(selfTimer ? 120 : 40))
 
@@ -124,6 +125,7 @@ final class CaptureCoordinator {
             captureArea()
             return
         }
+        if isBusy { CLIReply.send("busy") }
         guard !isBusy, Permissions.ensureScreenRecording() else { return }
         isBusy = true
         Task {
@@ -133,6 +135,7 @@ final class CaptureCoordinator {
     }
 
     func captureFullscreen() {
+        if isBusy { CLIReply.send("busy") }
         guard !isBusy, Permissions.ensureScreenRecording(), let screen = NSScreen.withMouse else { return }
         isBusy = true
         Task {
@@ -153,6 +156,7 @@ final class CaptureCoordinator {
             CaptureOutput.deliver(image, scale: screen.backingScaleFactor, options: options, screenRect: rect)
         } catch {
             NSLog("Glint: capture failed: \(error)")
+            CLIReply.error("capture failed")
             NSSound.beep()
         }
     }

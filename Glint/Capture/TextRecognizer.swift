@@ -95,7 +95,7 @@ enum TextCapture {
             // Glint's own selection, the same as Capture Area's.
             let overlay = SelectionOverlay(mode: .area)
             guard let result = await withCheckedContinuation({ cont in overlay.begin { cont.resume(returning: $0) } }) else {
-                glintLog("ocr: no selection"); return
+                glintLog("ocr: no selection"); CLIReply.cancelled(); return
             }
             let rect: CGRect
             switch result.target {
@@ -128,6 +128,7 @@ enum TextCapture {
         // Its own sounds instead of the capture sound — a soft "blob" when text was copied, a
         // failure sound when there was none.
         guard !text.isEmpty || !code.isEmpty else {
+            CLIReply.error("no text found")
             if Defaults[Prefs.playSounds] { NSSound(named: "Basso")?.play() }
             Toast.show(title: "No text found", detail: "Try selecting a larger area.")
             return
@@ -143,6 +144,7 @@ enum TextCapture {
         }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(copied, forType: .string)
+        CLIReply.send("text \(copied)")
         if Defaults[Prefs.playSounds] { NSSound(named: "Pop")?.play() }
         // "Detect links": a link in the recognized text gets the same Open button as a QR code's.
         let textLink = code.isEmpty && Defaults[Prefs.ocrDetectLinks] ? Self.firstLink(in: text) : nil

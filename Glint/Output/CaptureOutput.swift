@@ -45,6 +45,7 @@ enum CaptureOutput {
         let format = Defaults[Prefs.fileFormat]
         let date = Date()
         guard let data = ImageEncoder.data(for: processed, format: format, scale: scale) else {
+            CLIReply.error("couldn't encode the capture")
             glintLog("encoding failed (\(processed.width)x\(processed.height), bpc \(processed.bitsPerComponent), \(String(describing: processed.colorSpace?.name)))")
             NSSound.beep()
             return
@@ -55,6 +56,7 @@ enum CaptureOutput {
         let url = HistoryStore.shared.newFileURL(name: name, ext: format.fileExtension, sourceApp: sourceApp)
         do { try data.write(to: url) } catch {
             glintLog("failed writing capture: \(error)")
+            CLIReply.error("couldn't write the capture")
             NSSound.beep()
             return
         }
@@ -65,6 +67,7 @@ enum CaptureOutput {
         item.screenRect = screenRect.map(Geometry.appKitRect(fromCG:))
         HistoryStore.shared.lastCapture = item
         SoundPlayer.playShutter()
+        CLIReply.delivered(url)
 
         let opts = options ?? .fromSettings()
         glintLog("delivered \(url.lastPathComponent) quickAccess=\(opts.showQuickAccess)")
@@ -93,12 +96,14 @@ extension CaptureOutput {
         let url = HistoryStore.shared.newFileURL(name: name, ext: file.pathExtension, sourceApp: sourceApp)
         do { try FileManager.default.moveItem(at: file, to: url) } catch {
             glintLog("failed storing recording: \(error)")
+            CLIReply.error("couldn't store the recording")
             NSSound.beep()
             return
         }
         guard let item = CaptureItem.loadRecording(url, date: date) else { NSSound.beep(); return }
         if duration > 0 { item.duration = duration }
         HistoryStore.shared.lastCapture = item
+        CLIReply.delivered(url)
         let opts = AfterCaptureOptions.fromSettings(.recording)
         glintLog("delivered recording \(url.lastPathComponent)")
         if opts.copyToClipboard { Clipboard.copy(item) }
@@ -118,6 +123,7 @@ extension CaptureOutput {
             try FileManager.default.moveItem(at: folder, to: StudioRecording.folder(for: url))
         } catch {
             glintLog("failed storing studio recording: \(error)")
+            CLIReply.error("couldn't store the recording")
             NSSound.beep()
             return
         }
@@ -126,6 +132,7 @@ extension CaptureOutput {
             HistoryStore.shared.lastCapture = item
         }
         glintLog("delivered studio recording \(url.lastPathComponent)")
+        CLIReply.delivered(url)
         VideoEditorWindowController.open(url: url)
     }
 }
