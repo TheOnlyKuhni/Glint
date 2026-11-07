@@ -20,6 +20,12 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
   Advanced → API, or with `glint install`
 - [Automation docs](docs/command-line.md): every command for `glint` and `glint://` links, where captures end up, and
   settings keys for `defaults`
+- Tabs for the screenshot and video editors: New Tab (⌘T, or + in the tab bar) opens a tab that lists your latest
+  captures to pick from, or Choose File…. The shortcut can be changed in Settings → Shortcuts → Editors
+- Settings → Annotate → "Open editors in tabs": Always, Never, or like System Settings
+- Video editor, Studio Mode: icons left of the timeline name each track (camera, zooms, video, pointer, keyboard)
+- Aspect ratios for social media: 4:5, 3:4, 2:3 and 1.91:1 in the Background tool, the video editor and Crop (and
+  1.91:1 for recordings). The menus and tooltips say where each ratio is used
 
 ### Changed
 
@@ -29,6 +35,7 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 - Quick Access auto-close waits while any editor is open, and starts over for every card when something new arrives
 - The tab shown while Quick Access is tucked away fades out after a second and comes back when the pointer is over
   its place
+- Video editor: zooms, camera actions, clips and events lift out more clearly when the pointer is over them
 - The tab shown while Quick Access is tucked away is now dark like the editors, and both it and the hide bar react
   to hover and clicks
 - Capture History: Return keeps the history open after restoring, so you can bring back several in a row. A click
@@ -43,6 +50,12 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 - Spotlight no longer darkens the background around the screenshot (in the rounded corners, and around window
   captures with transparent edges)
 - Capture History: Return on a capture did nothing (it was handled as the Trash's Put Back); it now restores it
+- The File menu showed AutoFill, Start Dictation and Emoji & Symbols; they're back in the Edit menu
+- Recordings at 24 fps came out at about 21 fps on 60 Hz displays. Frames are now placed on an exact grid of the
+  chosen frame rate, so 24, 30 and 60 fps recordings have exactly that rate, and the video editor exports them at it
+  (it sometimes took a 30 fps recording for 60 fps)
+- "Optimize GIFs" made GIFs up to 2.7× bigger. It now only merges repeated frames, so it never makes a GIF bigger and
+  saves frames where the screen doesn't change
 
 ## [0.2] – Beta
 
