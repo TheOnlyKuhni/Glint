@@ -527,6 +527,10 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         Clipboard.copy(CaptureItem(image: image, scale: doc.scale, date: Date(), fileURL: file, kind: .screenshot))
     }
 
+    /// File → Copy Screenshot (⇧⌘C). Its own action: with the standard `copy:` in the File menu, macOS took that
+    /// menu for the Edit menu and put AutoFill, Dictation and Emoji & Symbols into it.
+    @objc func copyScreenshot(_ sender: Any?) { copy(sender) }
+
     private var bottomActions: AnnotateBottomBar.Actions {
         AnnotateBottomBar.Actions(
             zoomIn: { [weak self] in self?.zoom(by: 1.25) },

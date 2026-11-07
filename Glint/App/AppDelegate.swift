@@ -122,7 +122,7 @@ enum MainMenu {
         file.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.addItem(withTitle: "Save", action: #selector(AnnotateWindowController.saveDocument(_:)), keyEquivalent: "s")
         file.addItem(withTitle: "Save As…", action: #selector(AnnotateWindowController.saveDocumentAs(_:)), keyEquivalent: "S")
-        file.addItem(withTitle: "Copy Screenshot", action: #selector(AnnotateWindowController.copy(_:)), keyEquivalent: "C")
+        file.addItem(withTitle: "Copy Screenshot", action: #selector(AnnotateWindowController.copyScreenshot(_:)), keyEquivalent: "C")
         file.addItem(withTitle: "Add Screenshot", action: #selector(AnnotateWindowController.addScreenshot(_:)), keyEquivalent: "I")
         file.addItem(withTitle: "Add Image From File…", action: #selector(AnnotateWindowController.addImageFromFile(_:)), keyEquivalent: "i")
         fileItem.submenu = file
