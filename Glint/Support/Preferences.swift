@@ -39,8 +39,10 @@ enum Prefs {
     /// Empty means the Desktop.
     static let exportLocation = Pref(key: "exportLocation", defaultValue: "")
 
+    /// Out of the box: Quick Access for everything, and screenshots also go to the clipboard, ready to paste.
     static func afterCapture(_ action: AfterCaptureAction, _ kind: CaptureKind) -> Pref<Bool> {
-        Pref(key: "afterCapture.\(action.rawValue).\(kind.rawValue)", defaultValue: action == .showQuickAccess)
+        let on = action == .showQuickAccess || (action == .copyToClipboard && kind == .screenshot)
+        return Pref(key: "afterCapture.\(action.rawValue).\(kind.rawValue)", defaultValue: on)
     }
 
     // MARK: Quick Access
@@ -49,7 +51,8 @@ enum Prefs {
     /// 0...4, five steps like the slider in settings.
     static let quickAccessSize = Pref(key: "quickAccess.size", defaultValue: 2.0)
     static let quickAccessAutoClose = Pref(key: "quickAccess.autoClose", defaultValue: false)
-    static let quickAccessAutoCloseAction = Pref(key: "quickAccess.autoCloseAction", defaultValue: AutoCloseAction.saveAndClose)
+    /// Close (the capture stays in the Capture History) rather than filling the export folder with every capture.
+    static let quickAccessAutoCloseAction = Pref(key: "quickAccess.autoCloseAction", defaultValue: AutoCloseAction.close)
     static let quickAccessAutoCloseInterval = Pref(key: "quickAccess.autoCloseInterval", defaultValue: 30)
     static let quickAccessCloseAfterDragging = Pref(key: "quickAccess.closeAfterDragging", defaultValue: true)
     static let quickAccessSaveBehavior = Pref(key: "quickAccess.saveBehavior", defaultValue: SaveButtonBehavior.exportLocation)
@@ -79,7 +82,7 @@ enum Prefs {
 
     // MARK: Screen Recording
     static let recShowControls = Pref(key: "rec.showControls", defaultValue: true)
-    static let recRememberSelection = Pref(key: "rec.rememberSelection", defaultValue: false)
+    static let recRememberSelection = Pref(key: "rec.rememberSelection", defaultValue: true)
     static let recTimeInMenuBar = Pref(key: "rec.timeInMenuBar", defaultValue: true)
     static let recDimScreen = Pref(key: "rec.dimScreen", defaultValue: true)
     static let recCountdown = Pref(key: "rec.countdown", defaultValue: true)
@@ -149,7 +152,7 @@ enum Prefs {
     static let fileNameFormat = Pref(key: "advanced.fileNameFormat", defaultValue: "Glint {yyyy}-{MM}-{dd} at {HH}.{mm}.{ss}")
     static let add2xSuffix = Pref(key: "advanced.add2xSuffix", defaultValue: false)
     static let clipboardMode = Pref(key: "advanced.clipboardMode", defaultValue: ClipboardMode.fileAndImage)
-    static let historyDays = Pref(key: "advanced.historyDays", defaultValue: 3)
+    static let historyDays = Pref(key: "advanced.historyDays", defaultValue: 7)
     /// Days until a capture in the Trash is deleted for good; 0 = only when the Trash is emptied by hand.
     static let trashDays = Pref(key: "advanced.trashDays", defaultValue: 30)
     /// Capture Text language: "auto" (the system languages) or one recognizer language code.
