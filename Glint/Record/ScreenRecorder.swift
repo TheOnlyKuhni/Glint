@@ -40,6 +40,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastVideoTime = CMTime.zero
     /// The newest frame: frames only come when the screen changes, so it's repeated at the end.
     private var lastVideoFrame: CMSampleBuffer?
+    /// Frames are placed on an exact grid of the chosen frame rate (time of the first frame + n / rate), at most one
+    /// per step. The display delivers frames on its own refresh (60 Hz: 24 fps came out as ~21 fps, and 30 fps had
+    /// some 1/60 s steps that made the video editor treat it as 60 fps).
+    private var gridStart: CMTime?
+    private var lastSlot = -1
+    private var fps: Int32 { Int32(max(options.frameRate, 1)) }
+    private var frameDuration: CMTime { CMTime(value: 1, timescale: fps) }
 
     init(options: Options, clock: RecordingClock = RecordingClock()) {
         self.options = options
@@ -76,7 +83,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         config.sourceRect = options.rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         config.width = Int(size.width)
         config.height = Int(size.height)
-        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(options.frameRate, 1)))
+        // Twice the frame rate, so every step of the grid gets a frame close to its time.
+        config.minimumFrameInterval = CMTime(value: 1, timescale: fps * 2)
         config.showsCursor = options.showsCursor
         config.queueDepth = 6
         config.pixelFormat = kCVPixelFormatType_32BGRA
@@ -185,10 +193,22 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         let now = CMClockGetTime(CMClockGetHostTimeClock())
         lastVideoFrame = nil
         guard now > lastVideoTime else { return }
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: now, decodeTimeStamp: .invalid)
+        appendFrame(frame, at: now)
+    }
+
+    /// Writes a frame at its step on the frame-rate grid; a second frame for the same step is dropped.
+    private func appendFrame(_ buffer: CMSampleBuffer, at time: CMTime) {
+        let shifted = time - pausedTotal
+        let start = gridStart ?? shifted
+        gridStart = start
+        let slot = Int(((shifted - start).seconds * Double(fps)).rounded())
+        guard slot > lastSlot, let input = videoInput, input.isReadyForMoreMediaData else { return }
+        lastSlot = slot
+        let pts = start + CMTime(value: CMTimeValue(slot), timescale: fps)
+        var timing = CMSampleTimingInfo(duration: frameDuration, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         var copy: CMSampleBuffer?
-        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: frame, sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy)
-        if let copy { append(copy, to: videoInput) }
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy)
+        if let copy { input.append(copy) }
     }
 
     func discard() {
@@ -218,13 +238,15 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             if paused { return }
             if let began = pauseBegan {
-                pausedTotal = pausedTotal + (time - began)
+                // The first frame after the pause comes one step after the last one before it.
+                let gap = CMTimeMaximum(time - began - frameDuration, .zero)
+                pausedTotal = pausedTotal + gap
                 pauseBegan = nil
-                clock.resumed(at: time.seconds)
+                clock.resumed(at: (began + gap).seconds)
             }
             lastVideoTime = time
             lastVideoFrame = buffer
-            append(buffer, to: videoInput)
+            appendFrame(buffer, at: time)
         } else {
             guard started, !paused else { return }
             append(buffer, to: type == .audio ? audioInput : micInput)
