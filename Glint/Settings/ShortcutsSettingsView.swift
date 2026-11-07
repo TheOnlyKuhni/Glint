@@ -28,6 +28,19 @@ struct ShortcutsSettingsView: View {
                 }
             }
 
+            if search.isEmpty || "New Tab".localizedCaseInsensitiveContains(search) {
+                Section {
+                    LabeledContent {
+                        NewTabShortcutRecorder()
+                    } label: {
+                        Text("New Tab")
+                        Text("Opens a capture in a new tab of the screenshot or video editor. Works while an editor is in front.")
+                    }
+                } header: {
+                    Label("Editors", systemImage: "macwindow.on.rectangle")
+                }
+            }
+
             if search.isEmpty {
                 Section("Options") {
                     HStack {

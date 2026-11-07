@@ -146,6 +146,10 @@ enum Prefs {
     static let annotateSelectPlaced = Pref(key: "annotate.selectPlaced", defaultValue: false)
     static let annotateAlwaysOnTop = Pref(key: "annotate.alwaysOnTop", defaultValue: false)
     static let annotateShowDockIcon = Pref(key: "annotate.showDockIcon", defaultValue: true)
+    /// Whether the screenshot and video editors open as tabs of one window, and the New Tab shortcut ("code:modifiers"
+    /// of `KeyCombo`, ⌘T by default; empty = none).
+    static let editorTabs = Pref(key: "editor.tabs", defaultValue: EditorTabs.system)
+    static let editorNewTabShortcut = Pref(key: "editor.newTabShortcut", defaultValue: "17:1048576")
 
     // MARK: Advanced
     static let askForName = Pref(key: "advanced.askForName", defaultValue: false)
@@ -273,6 +277,18 @@ enum ImageFormat: String, CaseIterable, Identifiable {
 }
 
 enum WindowBackground: String { case wallpaper, transparent }
+
+enum EditorTabs: String, CaseIterable, Identifiable {
+    case system, always, never
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .system: "Like System Settings"
+        case .always: "Always"
+        case .never: "Never"
+        }
+    }
+}
 
 enum CrosshairMode: String, CaseIterable, Identifiable {
     case disabled, always, holdingShift

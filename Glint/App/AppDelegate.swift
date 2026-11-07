@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openInAnnotate(_ pasteboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString>) {
         let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { error.pointee = "No image files were selected." as NSString; return }
-        urls.forEach(AnnotateWindowController.open(url:))
+        urls.forEach { AnnotateWindowController.open(url: $0) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -114,6 +114,10 @@ enum MainMenu {
         let fileItem = NSMenuItem()
         let file = NSMenu(title: "File")
         file.addItem(withTitle: "Open…", action: #selector(AppMenuTarget.openAnnotate), keyEquivalent: "o").target = AppMenuTarget.shared
+        // Handled by the editor windows (and New Tab's chooser); shown greyed out elsewhere.
+        let newTab = file.addItem(withTitle: "New Tab", action: #selector(NSResponder.newWindowForTab(_:)), keyEquivalent: "")
+        newTabItem = newTab
+        updateNewTabShortcut()
         file.addItem(.separator())
         file.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         file.addItem(withTitle: "Save", action: #selector(AnnotateWindowController.saveDocument(_:)), keyEquivalent: "s")
@@ -141,7 +145,19 @@ enum MainMenu {
         window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowItem.submenu = window
         main.addItem(windowItem)
+        // AppKit adds the tab commands (Show Tab Bar, Show All Tabs, Merge All Windows…) to the Window menu.
+        NSApp.windowsMenu = window
         return main
+    }
+
+    private static weak var newTabItem: NSMenuItem?
+
+    /// The New Tab shortcut from Settings → Shortcuts (⌘T by default).
+    static func updateNewTabShortcut() {
+        guard let item = newTabItem else { return }
+        let combo = KeyCombo(storageString: Defaults[Prefs.editorNewTabShortcut])
+        item.keyEquivalent = combo?.menuKeyEquivalent ?? ""
+        item.keyEquivalentModifierMask = combo?.modifiers ?? []
     }
 }
 

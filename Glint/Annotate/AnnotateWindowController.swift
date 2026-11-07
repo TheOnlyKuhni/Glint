@@ -78,16 +78,17 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         return controller
     }
 
-    static func open(url: URL) {
-        guard let file = ImageFile.load(url) else { glintLog("annotate: could not load \(url.path)"); NSSound.beep(); return }
+    @discardableResult
+    static func open(url: URL) -> AnnotateWindowController? {
+        guard let file = ImageFile.load(url) else { glintLog("annotate: could not load \(url.path)"); NSSound.beep(); return nil }
         let name = url.deletingPathExtension().lastPathComponent
         if let saved = ImageEdit.load(for: url) {
-            let doc = open(image: saved.original, scale: saved.edit.scale, name: name).doc
-            doc.images = ImageEdit.images(for: url, edit: saved.edit)
-            doc.restore(saved.edit)
-            return
+            let controller = open(image: saved.original, scale: saved.edit.scale, name: name)
+            controller.doc.images = ImageEdit.images(for: url, edit: saved.edit)
+            controller.doc.restore(saved.edit)
+            return controller
         }
-        open(image: file.image, scale: file.scale, name: name)
+        return open(image: file.image, scale: file.scale, name: name)
     }
 
     static func openFromPanel() {
@@ -123,6 +124,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.minSize = NSSize(width: 1000, height: 560)  // the head bar's tools and buttons and the sidebar fit
         window.title = document.fileName
         if Defaults[Prefs.annotateAlwaysOnTop] { window.level = .floating }
+        EditorTabbing.configure(window)
         super.init(window: window)
         window.delegate = self
 
@@ -637,6 +639,9 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         default: return false
         }
     }
+
+    /// New Tab (⌘T, or + in the tab bar).
+    override func newWindowForTab(_ sender: Any?) { EditorTabbing.newTab(from: window) }
 
     func windowWillClose(_ notification: Notification) {
         if let spaceMonitor { NSEvent.removeMonitor(spaceMonitor) }

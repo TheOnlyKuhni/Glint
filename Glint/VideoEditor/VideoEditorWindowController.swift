@@ -58,12 +58,14 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     var onClose: (() -> Void)?
 
     /// Opens a recording (or any movie) in the editor.
-    static func open(url: URL, onClose: (() -> Void)? = nil) {
+    /// `opened`: called with the editor's window once it's on screen (New Tab puts it in the chooser's place).
+    static func open(url: URL, onClose: (() -> Void)? = nil, opened: ((NSWindow) -> Void)? = nil) {
         // GIFs get the GIF editor: trimming only.
         if url.pathExtension.lowercased() == "gif" { GIFTrimmer.open(url: url, onClose: onClose); return }
         if let existing = open.first(where: { $0.sourceFile == url }) {
             existing.window?.makeKeyAndOrderFront(nil)
             NSApp.activate()
+            if let window = existing.window { opened?(window) }
             return
         }
         Task {
@@ -94,6 +96,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
             NSApp.activate()
             controller.window?.center()
             controller.showWindow(nil)
+            if let window = controller.window { opened?(window) }
             // Opened by itself (a Studio recording stopped, seconds after the click), Glint may not be let in front
             // right away: the window goes on top regardless, and asks again once the Dock icon is there.
             controller.window?.orderFrontRegardless()
@@ -131,6 +134,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 960, height: VideoEditorContent.minWindowHeight)
         window.title = sourceFile.lastPathComponent
         window.collectionBehavior.insert(.moveToActiveSpace)
+        EditorTabbing.configure(window)
         super.init(window: window)
         window.delegate = self
         // Clicking the timeline jumps there and pauses.
@@ -650,6 +654,9 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
         }
         return false
     }
+
+    /// New Tab (⌘T, or + in the tab bar).
+    override func newWindowForTab(_ sender: Any?) { EditorTabbing.newTab(from: window) }
 
     func windowWillClose(_ notification: Notification) {
         player.pause()

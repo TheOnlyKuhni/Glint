@@ -128,6 +128,7 @@ struct AnnotateSettingsView: View {
     @AppStorage(Prefs.annotateExpandCanvas) private var expandCanvas
     @AppStorage(Prefs.annotateAlwaysOnTop) private var alwaysOnTop
     @AppStorage(Prefs.annotateShowDockIcon) private var showDockIcon
+    @AppStorage(Prefs.editorTabs) private var editorTabs
 
     var body: some View {
         Form {
@@ -151,6 +152,13 @@ struct AnnotateSettingsView: View {
             Section("Window") {
                 Toggle("Always on top", isOn: $alwaysOnTop)
                 Toggle("Show Dock icon", isOn: $showDockIcon)
+                Picker(selection: $editorTabs) {
+                    ForEach(EditorTabs.allCases) { Text($0.title).tag($0) }
+                } label: {
+                    Text("Open editors in tabs")
+                    Text("For the screenshot and video editors, instead of System Settings → Desktop & Dock → \"Prefer tabs when opening documents\".")
+                }
+                .onChange(of: editorTabs) { EditorTabbing.apply() }
             }
         }
         .formStyle(.grouped)

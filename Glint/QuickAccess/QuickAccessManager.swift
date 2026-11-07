@@ -366,14 +366,14 @@ final class QuickAccessManager {
         DispatchQueue.main.async { [weak self] in
             if item.isRecording {
                 let modified = Self.modificationDate(item.fileURL)
-                VideoEditorWindowController.open(url: item.fileURL) { [weak self] in
+                VideoEditorWindowController.open(url: item.fileURL, onClose: { [weak self] in
                     guard let self else { return }
                     if Self.modificationDate(item.fileURL) != modified, let fresh = CaptureItem.loadRecording(item.fileURL, date: item.date) {
                         self.replace(entry, with: fresh)
                     } else {
                         self.editingEnded(entry)
                     }
-                }
+                })
             } else {
                 let editor = AnnotateWindowController.open(item: item)
                 entry.editor = editor
