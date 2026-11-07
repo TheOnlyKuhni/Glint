@@ -3,6 +3,7 @@ import SwiftUI
 struct ShortcutsSettingsView: View {
     @Environment(SettingsModel.self) private var model
     private var search: String { model.shortcutSearch }
+    @State private var systemShortcuts = SystemScreenshotShortcuts.conflicting
 
     private var sections: [ShortcutSection] {
         guard !search.isEmpty else { return ShortcutSection.all }
@@ -14,6 +15,7 @@ struct ShortcutsSettingsView: View {
 
     var body: some View {
         Form {
+            if search.isEmpty, !systemShortcuts.isEmpty { systemShortcutsSection }
             ForEach(sections) { section in
                 ForEach(Array(section.groups.enumerated()), id: \.offset) { index, group in
                     Section {
@@ -36,5 +38,34 @@ struct ShortcutsSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            systemShortcuts = SystemScreenshotShortcuts.conflicting
+        }
+    }
+
+    /// macOS's own screenshot shortcuts are still on: they win over Glint's ⇧⌘3, ⇧⌘4, ⇧⌘5 and ⌃⇧⌘4.
+    private var systemShortcutsSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("macOS's screenshot shortcuts are still on", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .symbolRenderingMode(.multicolor)
+                Text("While they're on, macOS takes these keys and Glint's shortcuts don't work. Open System Settings → Keyboard, click Keyboard Shortcuts…, choose Screenshots on the left and uncheck:")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(systemShortcuts) { shortcut in
+                        Text("• \(shortcut.title) (\(shortcut.keys))")
+                    }
+                }
+                .padding(.leading, 4)
+                HStack {
+                    Spacer()
+                    Button("Open Keyboard Settings…") { SystemScreenshotShortcuts.openSettings() }
+                    Button("Check Again") { systemShortcuts = SystemScreenshotShortcuts.conflicting }
+                }
+            }
+            .padding(.vertical, 4)
+        }
     }
 }
