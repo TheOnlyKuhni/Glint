@@ -5,7 +5,8 @@ import SwiftUI
 
 /// "Capture History": a blurred panel across the top of the screen with filter tabs, a "…" menu
 /// (Keep History, Clear History…) and a row of past captures, newest first. Hovering (or the arrow keys) selects one;
-/// clicking it or Return restores it to Quick Access. Right-click for more. Esc or a click outside closes it.
+/// clicking it restores it to Quick Access and closes the history; Return restores it and keeps the history open, so
+/// several can be brought back in a row. Right-click for more. Esc or a click outside closes it.
 final class CaptureHistory {
     static let shared = CaptureHistory()
 
@@ -261,8 +262,10 @@ final class HistoryWindow: NSPanel, QLPreviewPanelDataSource {
         case 53: CaptureHistory.shared.close()
         case 123: model.moveSelection(-1)
         case 124: model.moveSelection(1)
-        case 36, 76 where model.inTrash: if let entry { model.actions?.putBack(entry, in: model) }
-        case 36, 76: if let entry { model.actions?.restore(entry, keepOpen: event.modifierFlags.contains(.option)) }
+        // (`where` binds to each pattern on its own: with "36, 76 where …" Return always took this branch.)
+        case 36 where model.inTrash, 76 where model.inTrash: if let entry { model.actions?.putBack(entry, in: model) }
+        // Return restores the selection and keeps the history open (pick the next one with the arrow keys).
+        case 36, 76: if let entry { model.actions?.restore(entry, keepOpen: true) }
         case 49: if entry != nil { model.actions?.quickLook() }
         case 51, 117: if let entry { model.actions?.delete(entry, in: model) }
         case 8 where cmd && !model.inTrash: if let entry { model.actions?.copy(entry) }
