@@ -297,6 +297,10 @@ struct AnnotationRenderer {
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
 
+        if let level = a.sketch.flatMap(HandDrawn.Roughness.init(rawValue:)) {
+            Self.drawSketch(a, roughness: level.factor, color: color, width: w, ctx: ctx)
+            return
+        }
         switch a.kind {
         case .image(let key):
             if let image = images[key] { Self.drawImage(image, in: a.rect, ctx: ctx) }
@@ -497,6 +501,53 @@ struct AnnotationRenderer {
             if style == .double { ctx.addPath(headPath(tip: a.start, from: control, width: w)) }
             ctx.drawPath(using: .fillStroke)
         }
+    }
+
+    /// The hand-drawn look: a thinner, doubled pen line; filled rectangles are hatched inside a sketched outline.
+    static func drawSketch(_ a: Annotation, roughness k: CGFloat, color: CGColor, width w: CGFloat, ctx: CGContext) {
+        let seed = a.sketchSeed ?? 1
+        let pen = max(1.5, w * 0.6)
+        var random = HandDrawn.Random(seed)
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(pen)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        switch a.kind {
+        case .rectangle:
+            ctx.addPath(HandDrawn.rectangle(a.rect, roughness: k, seed: seed))
+        case .filledRectangle:
+            ctx.saveGState()
+            ctx.clip(to: a.rect.insetBy(dx: -1, dy: -1))
+            ctx.setLineWidth(max(1.2, pen * 0.8))
+            ctx.addPath(HandDrawn.hatch(a.rect, gap: max(6, pen * 3.2), roughness: k, seed: seed))
+            ctx.strokePath()
+            ctx.restoreGState()
+            ctx.addPath(HandDrawn.rectangle(a.rect, roughness: k, seed: seed))
+        case .ellipse:
+            ctx.addPath(HandDrawn.ellipse(a.rect, roughness: k, seed: seed))
+        case .line:
+            let path = CGMutablePath()
+            HandDrawn.line(a.start, a.end, roughness: k, random: &random, into: path)
+            ctx.addPath(path)
+        case .arrow:
+            let path = CGMutablePath()
+            let style = ArrowStyle(rawValue: a.variant) ?? .standard
+            let bent = (style == .curved || style == .double) && a.control != nil
+            if bent {
+                HandDrawn.curve(from: a.start, control: a.curveControl, to: a.end, roughness: k, random: &random, into: path)
+            } else {
+                HandDrawn.line(a.start, a.end, roughness: k, random: &random, into: path)
+            }
+            let from = bent ? a.curveControl : a.start
+            HandDrawn.head(tip: a.end, from: from, width: w, roughness: k, random: &random, into: path)
+            if style == .double {
+                HandDrawn.head(tip: a.start, from: bent ? a.curveControl : a.end, width: w, roughness: k, random: &random, into: path)
+            }
+            ctx.addPath(path)
+        default:
+            return
+        }
+        ctx.strokePath()
     }
 
     /// Triangular head at `tip`, pointing away from `from`.

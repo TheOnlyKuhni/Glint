@@ -120,6 +120,7 @@ struct AnnotateSidebarActions {
     var setSpotlightKeepsAnnotations: (Bool) -> Void
     var setSpotlightSoftness: (CGFloat) -> Void
     var setSpotlightBorder: (Bool) -> Void
+    var setHandDrawn: ((AnnotationDocument) -> Void) -> Void
     var setMagnifier: ((AnnotationDocument) -> Void) -> Void
     var setEmoji: (String) -> Void
     var setEmojiSize: (CGFloat) -> Void
@@ -231,6 +232,7 @@ struct AnnotateOptionsPanel: View {
             if tool == .redact { amountSection }
             if tool == .spotlight { spotlightSection }
             if tool == .magnifier { magnifierSection }
+            if HandDrawn.tools.contains(tool) { handDrawnSection }
             if tool == .counter { counterSection }
             if tool == .emoji { emojiSection }
         }
@@ -421,6 +423,43 @@ struct AnnotateOptionsPanel: View {
             .help("A line around the spotlight, in the color below")
             // The border's color, right under its switch (a spotlight has no color otherwise).
             if doc.spotlightBorder { colorSection }
+        }
+    }
+
+    /// The hand-drawn look for this tool (remembered per tool), its roughness, and a new sketch for the selection.
+    private var handDrawnSection: some View {
+        let on = doc.handDrawnTools.contains(tool)
+        return VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(get: { on }, set: { value in
+                let t = tool
+                actions.setHandDrawn { doc in if value { doc.handDrawnTools.insert(t) } else { doc.handDrawnTools.remove(t) } }
+            })) {
+                Text("Hand-drawn").font(.system(size: 13.5)).foregroundStyle(.white)
+            }
+            .toggleStyle(BlueSwitch())
+            .padding(.top, 6)
+            .help("A sketched look, as if drawn with a pen")
+            if on {
+                InspectorHeader("Roughness", value: doc.roughness.title)
+                HStack(spacing: 6) {
+                    ForEach(HandDrawn.Roughness.allCases, id: \.self) { level in
+                        TileButton(selected: doc.roughness == level, height: 30, help: "\(level.title) wobble") {
+                            actions.setHandDrawn { $0.roughness = level }
+                        } label: {
+                            Text(level.title).font(.system(size: 12, weight: .medium))
+                        }
+                    }
+                }
+                if doc.selected?.sketch != nil {
+                    Button { doc.newSketch() } label: {
+                        Label("New Sketch", systemImage: "shuffle").font(.system(size: 12.5, weight: .medium))
+                            .frame(maxWidth: .infinity).frame(height: 28)
+                            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Draw this shape again with a different wobble (⌘R)")
+                }
+            }
         }
     }
 

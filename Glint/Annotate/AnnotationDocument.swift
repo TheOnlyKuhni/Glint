@@ -121,6 +121,14 @@ final class AnnotationDocument {
     var magnifierLink: MagnifierLink = .line
     var magnifierSmooth = false
     var magnifierIncludesAnnotations = true
+    /// Hand-drawn look: the tools it's on for (remembered between editors) and how rough it is.
+    var handDrawnTools: Set<AnnotateTool> = Set(UserDefaults.standard.string(forKey: "annotate.handDrawnTools")?
+        .split(separator: ",").compactMap { AnnotateTool(rawValue: String($0)) } ?? []) {
+        didSet { UserDefaults.standard.set(handDrawnTools.map(\.rawValue).sorted().joined(separator: ","), forKey: "annotate.handDrawnTools") }
+    }
+    var roughness: HandDrawn.Roughness = HandDrawn.Roughness(rawValue: UserDefaults.standard.integer(forKey: "annotate.roughness")) ?? .medium {
+        didSet { UserDefaults.standard.set(roughness.rawValue, forKey: "annotate.roughness") }
+    }
     var arrowStyle: ArrowStyle = .standard
     var textStyle: TextStyle = .standard
     /// Shared by every counter; changing the size resizes all of them.
@@ -258,6 +266,33 @@ final class AnnotationDocument {
         case .text: textStyle = TextStyle(variant: a.variant); fontSize = a.fontSize
         default: break
         }
+        if HandDrawn.tools.contains(tool) {
+            if let level = a.sketch.flatMap(HandDrawn.Roughness.init(rawValue:)) {
+                handDrawnTools.insert(tool)
+                roughness = level
+            } else {
+                handDrawnTools.remove(tool)
+            }
+        }
+    }
+
+    /// New objects of `tool` get the hand-drawn look when it's on for that tool.
+    func applySketch(to a: inout Annotation, tool: AnnotateTool) {
+        guard HandDrawn.tools.contains(tool) else { return }
+        if handDrawnTools.contains(tool) {
+            a.sketch = roughness.rawValue
+            if a.sketchSeed == nil { a.sketchSeed = HandDrawn.newSeed() }
+        } else {
+            a.sketch = nil
+        }
+    }
+
+    /// ⌘R: a new random sketch for the selected hand-drawn shape.
+    func newSketch() {
+        guard var a = selected, a.sketch != nil else { return }
+        checkpoint("New Sketch")
+        a.sketchSeed = HandDrawn.newSeed()
+        selected = a
     }
 
     /// Applies the toolbar's color/thickness/size to the selected object.
@@ -285,6 +320,7 @@ final class AnnotationDocument {
         case .text: a.variant = textStyle.rawValue
         default: break
         }
+        applySketch(to: &a, tool: AnnotateTool(drawing: a.kind))
         selected = a
     }
 

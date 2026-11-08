@@ -139,6 +139,10 @@ struct Annotation: Identifiable, Equatable, Codable {
     var magLink: Int?
     var magSmooth: Bool?
     var magIncludes: Bool?
+    /// Hand-drawn look (rectangles, ellipses, lines, arrows): its roughness (`HandDrawn.Roughness`, nil = off) and the
+    /// seed its wobble comes from (kept, so the sketch doesn't change when the shape moves or resizes).
+    var sketch: Int?
+    var sketchSeed: UInt64?
 
     init(kind: Kind, start: CGPoint, end: CGPoint, points: [CGPoint] = [], color: AnnotationColor, thickness: Int, fontSize: CGFloat = 30) {
         id = UUID()
@@ -222,6 +226,8 @@ struct Annotation: Identifiable, Equatable, Codable {
         copy.magLink = magLink
         copy.magSmooth = magSmooth
         copy.magIncludes = magIncludes
+        copy.sketch = sketch
+        copy.sketchSeed = sketchSeed
         return copy
     }
 

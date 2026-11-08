@@ -513,6 +513,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             case .magnifier: doc.applyMagnifierOptions(to: &a)
             default: break
             }
+            doc.applySketch(to: &a, tool: tool)
             doc.annotations.append(a)
             dragState = .creating(a.id)
         }
@@ -823,6 +824,12 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             case kVK_Escape: onCommand?("cancelCrop"); return
             default: break
             }
+        }
+        // ⌘R: a new sketch for the selected hand-drawn shape.
+        if event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "r", doc.selected?.sketch != nil {
+            doc.newSketch()
+            return
         }
         // Hold Space to pan the zoomed view with the mouse.
         if Int(event.keyCode) == kVK_Space {
