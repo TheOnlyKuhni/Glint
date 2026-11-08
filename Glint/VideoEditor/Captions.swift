@@ -355,7 +355,8 @@ nonisolated final class CaptionRenderer: @unchecked Sendable {
                     case .fade: alpha = p
                     case .pop:
                         // A quick grow with a slight overshoot.
-                        scale = p < 1 ? 0.6 + 0.48 * sin(p * .pi * 0.62) / sin(.pi * 0.62) : 1
+                        // Peaks only ~1.5% over its size, so it never runs into the word before it.
+                        scale = p < 1 ? 0.7 + 0.3 * sin(p * .pi * 0.6) / sin(.pi * 0.6) : 1
                         alpha = min(p * 2, 1)
                     }
                 }

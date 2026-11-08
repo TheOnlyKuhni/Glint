@@ -154,17 +154,17 @@ struct AnnotateSettingsView: View {
                 Toggle("Smooth drawing", isOn: $smoothDrawing)
                 Toggle("Remember if background tool was opened", isOn: $rememberBackground)
                 Toggle("Draw shadow on objects", isOn: $shadow)
+                Toggle(isOn: Binding(get: { handDrawnTools.split(separator: ",").count >= HandDrawn.tools.count },
+                                     set: { handDrawnTools = $0 ? HandDrawn.tools.map(\.rawValue).sorted().joined(separator: ",") : "" })) {
+                    Text("Hand-drawn shapes")
+                    Text("New rectangles, ellipses, lines and arrows are drawn in the sketched style. Each tool can still be switched in the editor.")
+                }
                 Toggle(isOn: $expandCanvas) {
                     Text("Grow canvas to fit annotations")
                     Text("Annotations past the edge widen the canvas on every side, so the screenshot stays centered. Off: they're cut off at the screenshot's edge. Also in the editor's bottom bar.")
                 }
             }
             Section("Window") {
-                Toggle(isOn: Binding(get: { handDrawnTools.split(separator: ",").count >= HandDrawn.tools.count },
-                                     set: { handDrawnTools = $0 ? HandDrawn.tools.map(\.rawValue).sorted().joined(separator: ",") : "" })) {
-                    Text("Hand-drawn shapes")
-                    Text("New rectangles, ellipses, lines and arrows are drawn in the sketched style. Each tool can still be switched in the editor.")
-                }
                 Toggle("Always on top", isOn: $alwaysOnTop)
                 Toggle("Show Dock icon", isOn: $showDockIcon)
                 Picker(selection: $editorTabs) {

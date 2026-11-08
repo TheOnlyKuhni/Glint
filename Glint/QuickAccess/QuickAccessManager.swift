@@ -333,6 +333,8 @@ final class QuickAccessManager {
         let raise = NSApp.isActive && !editors.isEmpty
         let above = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         for window in editors {
+            // Above the normal level, macOS leaves windows out of Mission Control unless they say they take part.
+            window.collectionBehavior.insert(.managed)
             let base: NSWindow.Level = window.windowController is AnnotateWindowController && Defaults[Prefs.annotateAlwaysOnTop] ? .floating : .normal
             window.level = raise ? above : base
         }
@@ -603,7 +605,7 @@ final class QuickAccessPanel: NSPanel, NSDraggingSource {
         isMovable = false
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .transient]
         animationBehavior = .none
     }
 
@@ -739,7 +741,7 @@ final class QuickAccessTabPanel: NSPanel {
         hasShadow = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .transient]
         animationBehavior = .none
     }
 
