@@ -326,17 +326,19 @@ final class QuickAccessManager {
         AnnotateWindowController.hasOpenEditors || VideoEditorWindowController.hasOpenEditors || GIFTrimmer.hasOpenEditors
     }
 
-    /// While Glint is in front with an editor open, the overlays sit behind the editor windows instead of covering
-    /// them; otherwise they float above everything.
+    /// Layering while Glint is in front with an editor open: the editors on top, then Quick Access, then other apps'
+    /// windows. The cards stay floating panels throughout (as normal windows they'd show up in Mission Control).
     private func updateLevels() {
         let editors = NSApp.windows.filter { $0.isVisible && Self.isEditor($0) }
-        let behind = NSApp.isActive && !editors.isEmpty
-        let lowest = NSApp.orderedWindows.last { editors.contains($0) }
-        let panels: [NSPanel] = entries.map(\.panel) + [hideBar, restoreTab].compactMap { $0 }
-        for panel in panels {
-            panel.level = behind ? .normal : .floating
-            if behind, panel.isVisible, let lowest { panel.order(.below, relativeTo: lowest.windowNumber) }
+        let raise = NSApp.isActive && !editors.isEmpty
+        let above = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        for window in editors {
+            let base: NSWindow.Level = window.windowController is AnnotateWindowController && Defaults[Prefs.annotateAlwaysOnTop] ? .floating : .normal
+            window.level = raise ? above : base
         }
+        // The color panel (custom colors) must stay above the raised editors.
+        if raise, NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.level = NSWindow.Level(rawValue: above.rawValue + 1) }
+        for panel in entries.map(\.panel) + [hideBar, restoreTab].compactMap({ $0 }) { panel.level = .floating }
     }
 
     /// Clicking a card that's open in an editor brings that editor forward.

@@ -152,7 +152,7 @@ struct CaptionsInspector: View {
     private var lookSection: some View {
         let s = project.edit.captionStyle
         return VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Style", value: s.preset.title).padding(.top, 8)
+            InspectorHeader("Style").padding(.top, 8)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(CaptionPreset.allCases, id: \.self) { preset in
                     Button {
@@ -176,7 +176,7 @@ struct CaptionsInspector: View {
                 InspectorHeader("Words at once", value: "\(s.wordsPerChunk)").padding(.top, 4)
                 StepSlider(value: Binding(get: { Double(s.wordsPerChunk) }, set: { style.wrappedValue.wordsPerChunk = Int($0.rounded()) }),
                            range: 1...5, step: 1, ticks: 5)
-                InspectorHeader("Animation", value: s.animation.title).padding(.top, 4)
+                InspectorHeader("Animation").padding(.top, 4)
                 ChoiceButtons(titles: CaptionAnimation.allCases.map(\.title), selected: CaptionAnimation.allCases.firstIndex(of: s.animation) ?? 0,
                               helps: ["Words just appear", "Words pop in with a little bounce", "Words fade in"]) {
                     style.wrappedValue.animation = CaptionAnimation.allCases[$0]
@@ -219,7 +219,7 @@ struct CaptionsInspector: View {
                 StepSlider(value: style.boxOpacity, range: 0...1, ticks: 5)
             }
 
-            InspectorHeader("Position", value: s.position.title).padding(.top, 8)
+            InspectorHeader("Position").padding(.top, 8)
             ChoiceButtons(titles: CaptionPosition.allCases.map(\.title), selected: CaptionPosition.allCases.firstIndex(of: s.position) ?? 2) {
                 style.wrappedValue.position = CaptionPosition.allCases[$0]
                 style.wrappedValue.offset = 0
@@ -237,11 +237,32 @@ struct CaptionsInspector: View {
             InspectorHeader("Transcript").padding(.top, 12)
             Text("Click a time to jump there. Edit the text; Split breaks a caption where the text cursor is.")
                 .font(.system(size: 11.5)).foregroundStyle(Color(white: 0.5)).fixedSize(horizontal: false, vertical: true)
-            ForEach(project.edit.captions) { caption in
+            ForEach(Array(project.edit.captions.enumerated()), id: \.element.id) { i, caption in
+                if i > 0 { mergeLink(i - 1) }
                 CaptionRow(caption: caption, project: project, state: state, actions: actions)
             }
             addButton(title: "Add Caption at the Playhead")
         }
+    }
+
+    /// Between two captions: joins them into one.
+    private func mergeLink(_ i: Int) -> some View {
+        Button {
+            guard i + 1 < project.edit.captions.count else { return }
+            var next = project.edit
+            next.captions[i].words += next.captions[i + 1].words
+            next.captions[i].matched = nil
+            next.captions.remove(at: i + 1)
+            project.edit = next
+        } label: {
+            Image(systemName: "link").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color(white: 0.6))
+                .frame(width: 26, height: 16)
+                .background(Capsule().fill(W.box))
+        }
+        .buttonStyle(HoverButtonStyle())
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, -4)
+        .help("Merge these two captions")
     }
 
     private var regenerateSection: some View {
@@ -271,6 +292,8 @@ private struct CaptionRow: View {
     let actions: VideoEditorActions
     @State private var text = ""
     @State private var selection: TextSelection?
+    /// Where the text cursor last was (clicking Split takes the focus, and the selection, away).
+    @State private var cursor: Int?
     @FocusState private var focused: Bool
 
     private var index: Int? { project.edit.captions.firstIndex { $0.id == caption.id } }
@@ -295,7 +318,6 @@ private struct CaptionRow: View {
                 .help("Jump to this caption")
                 Spacer()
                 icon("scissors", "Split this caption where the text cursor is") { split() }
-                icon("arrow.down.to.line.compact", "Merge with the next caption") { merge() }
                 icon("trash", "Delete this caption") { delete() }
             }
             TextField("", text: $text, selection: $selection, axis: .vertical)
@@ -305,11 +327,18 @@ private struct CaptionRow: View {
                 .focused($focused)
                 .onSubmit(commit)
                 .onChange(of: focused) { if !focused { commit() } }
+                .onChange(of: selection) {
+                    if case .selection(let range)? = selection?.indices { cursor = text.distance(from: text.startIndex, to: range.lowerBound) }
+                }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(W.box))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
             .strokeBorder(state.selectedCaption == caption.id ? W.blue : (isCurrent ? Color.white.opacity(0.35) : .clear), lineWidth: 1.5))
+        .contextMenu {
+            Button("Back to Where It Was Said") { resetTiming() }.disabled(caption.matched == nil)
+            Button("Delete Caption") { delete() }
+        }
         .onAppear { text = caption.text }
         .onChange(of: caption.text) { if !focused { text = caption.text } }
     }
@@ -334,24 +363,23 @@ private struct CaptionRow: View {
     private func split() {
         commit()
         guard let i = index else { return }
-        var cursor = text.endIndex
-        if case .selection(let range) = selection?.indices { cursor = range.lowerBound }
-        let before = text[..<cursor].split(whereSeparator: \.isWhitespace).count
+        let at = text.index(text.startIndex, offsetBy: min(cursor ?? text.count, text.count))
+        let before = text[..<at].split(whereSeparator: \.isWhitespace).count
         let words = project.edit.captions[i].words
         guard before > 0, before < words.count else { NSSound.beep(); return }
         var next = project.edit
         next.captions[i].words = Array(words[..<before])
+        next.captions[i].matched = nil
         next.captions.insert(Caption(words: Array(words[before...])), at: i + 1)
         project.edit = next
+        // The field still shows the whole text: it would put the moved words back when it loses the focus.
+        text = next.captions[i].text
+        cursor = nil
     }
 
-    private func merge() {
-        commit()
-        guard let i = index, i + 1 < project.edit.captions.count else { NSSound.beep(); return }
-        var next = project.edit
-        next.captions[i].words += next.captions[i + 1].words
-        next.captions.remove(at: i + 1)
-        project.edit = next
+    private func resetTiming() {
+        guard let i = index, let m = caption.matched, m.count == 2 else { return }
+        project.edit.captions[i].retime(start: m[0], end: m[1])
     }
 
     private func delete() {

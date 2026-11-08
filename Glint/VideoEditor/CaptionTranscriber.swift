@@ -210,12 +210,12 @@ nonisolated enum CaptionTranscriber {
         for var w in words {
             let endsStretch = w.text.hasSuffix("\u{2063}")
             if endsStretch { w.text.removeLast() }
-            if let last = current.last, w.start - last.end > 0.7 { captions.append(Caption(words: current)); current = [] }
+            if let last = current.last, w.start - last.end > 0.7 { captions.append(Caption(words: current, matched: true)); current = [] }
             current.append(w)
             let endsSentence = w.text.last.map { ".!?…".contains($0) } ?? false
-            if endsSentence || endsStretch || current.count >= 14 { captions.append(Caption(words: current)); current = [] }
+            if endsSentence || endsStretch || current.count >= 14 { captions.append(Caption(words: current, matched: true)); current = [] }
         }
-        if !current.isEmpty { captions.append(Caption(words: current)) }
+        if !current.isEmpty { captions.append(Caption(words: current, matched: true)) }
         return captions
     }
 }

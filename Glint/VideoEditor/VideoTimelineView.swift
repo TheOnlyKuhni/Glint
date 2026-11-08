@@ -1547,6 +1547,21 @@ final class VideoTimelineView: NSView {
         let t = min(max(time(p.x), 0), project.duration)
         updateHoverInfo(nil)
         let menu = NSMenu()
+        if let hit = captionHit(p) {
+            let id = hit.caption.id
+            state.selectedCaption = id
+            let back = ClosureMenuItem(title: "Back to Where It Was Said") { [weak self] in
+                guard let self, let i = self.project.edit.captions.firstIndex(where: { $0.id == id }),
+                      let m = self.project.edit.captions[i].matched, m.count == 2 else { return }
+                self.project.edit.captions[i].retime(start: m[0], end: m[1])
+            }
+            back.isEnabled = hit.caption.matched != nil
+            menu.autoenablesItems = false
+            menu.addItem(back)
+            let delete = ClosureMenuItem(title: "Delete Caption") { [weak self] in self?.project.edit.captions.removeAll { $0.id == id } }
+            menu.addItem(delete)
+            return menu
+        }
         if let cut = cutMarker(at: p) {
             select(nil, nil)
             state.selectedCut = cut.at

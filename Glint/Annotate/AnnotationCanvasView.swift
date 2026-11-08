@@ -589,9 +589,16 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                         a.start = CGPoint(x: c.x - hw, y: c.y - hh)
                         a.end = CGPoint(x: c.x + hw, y: c.y + hh)
                     } else {
-                        a.start = start
-                        a.end = end
-                        self.doc.placeBubble(&a)
+                        // A callout grows from where the drag started (the area's center), its bubble lying toward the
+                        // pointer: the pointer is at the bubble's far edge.
+                        let z = a.magnification, gap: CGFloat = 12
+                        let dx = p.x - anchor.x, dy = p.y - anchor.y, d = hypot(dx, dy)
+                        let r = max((d - gap) / (1 + 2 * z), 4)
+                        let ux = d > 0.5 ? dx / d : 1, uy = d > 0.5 ? dy / d : 0
+                        a.start = CGPoint(x: anchor.x - r, y: anchor.y - r)
+                        a.end = CGPoint(x: anchor.x + r, y: anchor.y + r)
+                        let reach = r + gap + r * z
+                        a.magCenter = CGPoint(x: anchor.x + ux * reach, y: anchor.y + uy * reach)
                     }
                 default:
                     a.end = shift ? Self.square(from: anchor, to: p) : p

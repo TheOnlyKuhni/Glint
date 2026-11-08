@@ -138,6 +138,7 @@ struct AnnotateSettingsView: View {
     @AppStorage(Prefs.annotateAlwaysOnTop) private var alwaysOnTop
     @AppStorage(Prefs.annotateShowDockIcon) private var showDockIcon
     @AppStorage(Prefs.editorTabs) private var editorTabs
+    @AppStorage("annotate.handDrawnTools") private var handDrawnTools = ""
 
     var body: some View {
         Form {
@@ -159,6 +160,11 @@ struct AnnotateSettingsView: View {
                 }
             }
             Section("Window") {
+                Toggle(isOn: Binding(get: { handDrawnTools.split(separator: ",").count >= HandDrawn.tools.count },
+                                     set: { handDrawnTools = $0 ? HandDrawn.tools.map(\.rawValue).sorted().joined(separator: ",") : "" })) {
+                    Text("Hand-drawn shapes")
+                    Text("New rectangles, ellipses, lines and arrows are drawn in the sketched style. Each tool can still be switched in the editor.")
+                }
                 Toggle("Always on top", isOn: $alwaysOnTop)
                 Toggle("Show Dock icon", isOn: $showDockIcon)
                 Picker(selection: $editorTabs) {

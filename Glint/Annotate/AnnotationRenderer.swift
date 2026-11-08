@@ -14,6 +14,8 @@ struct AnnotationRenderer {
     var counter = CounterSettings()
     /// Added images (`Annotation.Kind.image`), by key.
     var images: [String: CGImage] = [:]
+    /// How the screenshot is scaled (the magnifier draws it pixel-sharp unless Smooth is on).
+    var imageInterpolation: CGInterpolationQuality = .high
     /// Editor only: checker cell size (document points) behind a transparent background; nil = none.
     var transparencyGridCell: CGFloat?
 
@@ -42,7 +44,7 @@ struct AnnotationRenderer {
         let dimsAnnotations = !(last?.spotKeeps ?? false)
         ctx.saveGState()
         background?.clipScreenshot(imageSize: imageSize, ctx: ctx)
-        if parts.contains(.image) { Self.drawImage(baseImage, in: bounds, ctx: ctx) }
+        if parts.contains(.image) { Self.drawImage(baseImage, in: bounds, ctx: ctx, quality: imageInterpolation) }
         if parts.contains(.overlay) {
             // Brightening draws the screenshot again, brighter, before the redactions go on top.
             if !spotlights.isEmpty, abs(inside - 1) > 0.01, let bright = effects?.brightened(inside) {
@@ -183,12 +185,12 @@ struct AnnotationRenderer {
         ctx.clip()
         ctx.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)  // beyond the canvas
         ctx.fill(bubble)
-        ctx.interpolationQuality = a.magSmooth == true ? .high : .none
         ctx.translateBy(x: bubble.minX, y: bubble.minY)
         ctx.scaleBy(x: a.magnification, y: a.magnification)
         ctx.translateBy(x: -source.minX, y: -source.minY)
         var inner = self
         inner.deviceScale = deviceScale * a.magnification
+        inner.imageInterpolation = a.magSmooth == true ? .high : .none
         inner.transparencyGridCell = transparencyGridCell.map { $0 / a.magnification }
         let shown = a.magIncludes == false ? [] : below.filter { $0.kind != .magnifier }
         inner.draw(Array(shown), in: ctx, parts: .all)
@@ -671,11 +673,11 @@ struct AnnotationRenderer {
     }
 
     /// Draws a CGImage upright in a y-down context.
-    static func drawImage(_ image: CGImage, in rect: CGRect, ctx: CGContext) {
+    static func drawImage(_ image: CGImage, in rect: CGRect, ctx: CGContext, quality: CGInterpolationQuality = .high) {
         ctx.saveGState()
         ctx.translateBy(x: rect.minX, y: rect.maxY)
         ctx.scaleBy(x: 1, y: -1)
-        ctx.interpolationQuality = .high
+        ctx.interpolationQuality = quality
         ctx.draw(image, in: CGRect(origin: .zero, size: rect.size))
         ctx.restoreGState()
     }

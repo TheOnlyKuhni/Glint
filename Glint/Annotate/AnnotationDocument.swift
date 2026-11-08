@@ -314,8 +314,8 @@ final class AnnotationDocument {
         case .magnifier:
             let wasInPlace = a.magnifierStyle == .inPlace
             applyMagnifierOptions(to: &a)
-            // Back from In Place: the callout gets its own place next to the area.
-            if wasInPlace, magnifierStyle == .callout { placeBubble(&a) }
+            // Back from In Place: the callout's own bubble comes back where it was (a new place if it never had one).
+            if wasInPlace, magnifierStyle == .callout, a.magCenter == nil { placeBubble(&a) }
         case .arrow: a.variant = arrowStyle.rawValue
         case .text: a.variant = textStyle.rawValue
         default: break

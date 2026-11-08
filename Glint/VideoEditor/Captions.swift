@@ -16,6 +16,13 @@ struct CaptionWord: Hashable, Codable, Sendable {
 struct Caption: Hashable, Identifiable, Codable, Sendable {
     var id = UUID()
     var words: [CaptionWord]
+    /// Where the speech put it (source seconds), so a moved caption can go back; nil for ones added by hand.
+    var matched: [Double]?
+
+    init(words: [CaptionWord], matched: Bool = false) {
+        self.words = words
+        if matched, let first = words.first, let last = words.last { self.matched = [first.start, last.end] }
+    }
 
     var start: Double { words.first?.start ?? 0 }
     var end: Double { words.last?.end ?? 0 }
@@ -85,7 +92,7 @@ enum CaptionPosition: String, Codable, CaseIterable, Sendable {
 
 enum CaptionPreset: String, Codable, CaseIterable, Sendable {
     case classic, outline, social, minimal
-    var title: String { rawValue.capitalized }
+    var title: String { self == .social ? "Social Media" : rawValue.capitalized }
     var help: String {
         switch self {
         case .classic: "White text on a dark box at the bottom, whole phrases"
@@ -206,8 +213,9 @@ nonisolated struct CaptionTimeline: Sendable {
         for i in page {
             let word = words[i]
             if length > 0, length + word.text.count + 1 > style.lineLength, lines.count < 2 { lines.append([]); length = 0 }
+            // Highlight: every word spoken so far.
             lines[lines.count - 1].append(.init(text: word.text, appear: words[page.first ?? i].start - Self.lead,
-                                                highlighted: style.highlightWord && i == spoken))
+                                                highlighted: style.highlightWord && spoken.map { i <= $0 } ?? false))
             length += word.text.count + (length > 0 ? 1 : 0)
         }
         return CaptionFrame(lines: lines, appear: words[page.first ?? 0].start - Self.lead)
@@ -239,7 +247,8 @@ nonisolated struct CaptionTimeline: Sendable {
         var lines: [[CaptionFrame.Word]] = [[]]
         var length = 0
         let maxLine = max(style.lineLength / 2, 12)
-        for i in chunk {
+        // Only the words already said: the box grows with them.
+        for i in chunk where words[i].start - Self.lead <= t {
             let w = words[i]
             if length > 0, length + w.text.count + 1 > maxLine, lines.count < 2 { lines.append([]); length = 0 }
             lines[lines.count - 1].append(.init(text: w.text, appear: w.start - Self.lead, highlighted: style.highlightWord && i == newest))
@@ -358,11 +367,12 @@ nonisolated final class CaptionRenderer: @unchecked Sendable {
                 ctx.scaleBy(x: scale, y: scale)
                 ctx.translateBy(x: -center.x, y: -center.y)
                 if style.outline {
-                    let stroke = NSAttributedString(string: text, attributes: [
-                        .font: font, .strokeColor: NSColor.black.withAlphaComponent(alpha), .strokeWidth: outlineWidth / fontSize * 100 * 2,
-                        .foregroundColor: NSColor.black.withAlphaComponent(alpha),
-                    ])
-                    stroke.draw(at: CGPoint(x: x, y: baseline + font.descender))
+                    // The letters drawn in black around a circle (a stroked outline spikes at sharp corners, like a Y's).
+                    let shadow = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.black.withAlphaComponent(alpha)])
+                    for k in 0..<12 {
+                        let a = Double(k) / 12 * .pi * 2
+                        shadow.draw(at: CGPoint(x: x + cos(a) * outlineWidth, y: baseline + font.descender + sin(a) * outlineWidth))
+                    }
                 }
                 NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: fill]).draw(at: CGPoint(x: x, y: baseline + font.descender))
                 ctx.restoreGState()

@@ -247,7 +247,7 @@ struct AnnotateOptionsPanel: View {
     /// The emoji a click places: a grid of common ones, or any other typed or picked in the field; and its size.
     private var emojiSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Emoji", value: doc.emoji).padding(.top, 6)
+            InspectorHeader("Emoji").padding(.top, 6)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 6), spacing: 4) {
                 ForEach(Self.emojis, id: \.self) { emoji in
                     TileButton(selected: doc.emoji == emoji, height: 34, help: emoji) { actions.setEmoji(emoji) } label: {
@@ -365,7 +365,7 @@ struct AnnotateOptionsPanel: View {
             }
         case .spotlight:
             VStack(alignment: .leading, spacing: 10) {
-                InspectorHeader("Shape", value: doc.spotlightShape.title).padding(.top, 6)
+                InspectorHeader("Shape").padding(.top, 6)
                 HStack(spacing: 6) {
                     ForEach(SpotlightShape.allCases, id: \.self) { shape in
                         TileButton(selected: doc.spotlightShape == shape, height: 36, help: shape.title) { actions.setSpotlightShape(shape) } label: {
@@ -440,7 +440,7 @@ struct AnnotateOptionsPanel: View {
             .padding(.top, 6)
             .help("A sketched look, as if drawn with a pen")
             if on {
-                InspectorHeader("Roughness", value: doc.roughness.title)
+                InspectorHeader("Roughness")
                 HStack(spacing: 6) {
                     ForEach(HandDrawn.Roughness.allCases, id: \.self) { level in
                         TileButton(selected: doc.roughness == level, height: 30, help: "\(level.title) wobble") {
@@ -467,7 +467,7 @@ struct AnnotateOptionsPanel: View {
     private var magnifierSection: some View {
         let zoom = Binding(get: { Double(doc.magnifierZoom) }, set: { z in actions.setMagnifier { $0.magnifierZoom = CGFloat(z) } })
         return VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Style", value: doc.magnifierStyle.title).padding(.top, 6)
+            InspectorHeader("Style").padding(.top, 6)
             HStack(spacing: 6) {
                 ForEach(MagnifierStyle.allCases, id: \.self) { style in
                     TileButton(selected: doc.magnifierStyle == style, height: 30, help: style.help) {
@@ -477,7 +477,7 @@ struct AnnotateOptionsPanel: View {
                     }
                 }
             }
-            InspectorHeader("Shape", value: doc.magnifierShape.title).padding(.top, 6)
+            InspectorHeader("Shape").padding(.top, 6)
             HStack(spacing: 6) {
                 ForEach(MagnifierShape.allCases, id: \.self) { shape in
                     TileButton(selected: doc.magnifierShape == shape, height: 36, help: shape.title) {
@@ -491,7 +491,7 @@ struct AnnotateOptionsPanel: View {
             StepSlider(value: zoom, range: Double(MagnifierZoom.range.lowerBound)...Double(MagnifierZoom.range.upperBound), step: 0.25, ticks: 10)
                 .help("How much the area is enlarged. You can also scroll over a selected magnifier.")
             if doc.magnifierStyle == .callout {
-                InspectorHeader("Link", value: doc.magnifierLink.title).padding(.top, 6)
+                InspectorHeader("Link").padding(.top, 6)
                 HStack(spacing: 6) {
                     ForEach(MagnifierLink.allCases, id: \.self) { link in
                         TileButton(selected: doc.magnifierLink == link, height: 30, help: "What joins the area and its enlarged copy") {
@@ -544,7 +544,8 @@ private struct ColorDot: View {
             Circle().fill(color).frame(width: 26, height: 26)
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5))
                 .padding(2)
-                .overlay(Circle().strokeBorder(selected ? Color.white : (hovering ? Color.white.opacity(0.35) : .clear), lineWidth: 2))
+                // Selected: a blue ring, which shows on the white swatch too.
+                .overlay(Circle().strokeBorder(selected ? W.blue : (hovering ? Color.white.opacity(0.35) : .clear), lineWidth: 2.5))
                 .scaleEffect(hovering && !selected ? 1.08 : 1)
                 .contentShape(Circle())
         }
