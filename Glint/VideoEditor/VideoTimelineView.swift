@@ -33,6 +33,9 @@ final class VideoTimelineView: NSView {
         static let keyRow: CGFloat = 242
         static let eventsTop: CGFloat = 214
         static let eventsBottom: CGFloat = 252
+        /// Captions, below everything (the timeline grows by their track when there are any).
+        static let captionTop: CGFloat = 262
+        static let captionHeight: CGFloat = 24
     }
 
     /// A Studio Mode track's icon and name, centered on its row (for the icons left of the timeline).
@@ -43,7 +46,7 @@ final class VideoTimelineView: NSView {
         var id: String { title }
     }
 
-    static func trackRows(hasCamera: Bool) -> [TrackRow] {
+    static func trackRows(hasCamera: Bool, hasCaptions: Bool = false) -> [TrackRow] {
         var rows: [TrackRow] = []
         if hasCamera { rows.append(TrackRow(symbol: "web.camera", title: "Camera", centerY: Metrics.cameraTop + Metrics.cameraHeight / 2)) }
         rows += [
@@ -52,6 +55,7 @@ final class VideoTimelineView: NSView {
             TrackRow(symbol: "cursorarrow.click", title: "Clicks, drags and scrolling", centerY: Metrics.pointerRow),
             TrackRow(symbol: "keyboard", title: "Typing and shortcuts", centerY: Metrics.keyRow),
         ]
+        if hasCaptions { rows.append(TrackRow(symbol: "captions.bubble", title: "Captions", centerY: Metrics.captionTop + Metrics.captionHeight / 2)) }
         return rows
     }
 
@@ -227,6 +231,7 @@ final class VideoTimelineView: NSView {
         guard !state.scissors else { return nil }
         if let hit = spanHit(p) { return AnyHashable(hit.span.id) }
         if let e = studioEvent(at: p) { return AnyHashable(e.id) }
+        if let c = captionHit(p) { return AnyHashable(c.caption.id) }
         guard p.y >= Metrics.clipTop, p.y <= Metrics.clipTop + Metrics.clipHeight else { return nil }
         return clipRects().first { $0.1.contains(p) }.map { AnyHashable($0.0.id) }
     }
@@ -455,6 +460,7 @@ final class VideoTimelineView: NSView {
         drawCuts()
         drawEvents()
         drawEventGlow()
+        drawCaptions()
         drawPlayhead()
         drawScissors()
         drawHoverInfo()
@@ -539,6 +545,57 @@ final class VideoTimelineView: NSView {
                 ((e.text ?? "") as NSString).draw(at: CGPoint(x: r.minX + 5, y: r.midY - 6.5), withAttributes: attrs)
             default: break
             }
+        }
+    }
+
+    // MARK: Captions
+
+    /// A caption's block on the timeline (output time), nil while it's cut out.
+    private func captionRect(_ c: Caption) -> CGRect? {
+        guard let a = project.outputTime(source: c.start) else { return nil }
+        let b = project.outputTime(source: c.end).map { max($0, a + 0.1) } ?? a + (c.end - c.start)
+        return CGRect(x: x(a), y: Metrics.captionTop, width: max(x(b) - x(a), 6), height: Metrics.captionHeight)
+    }
+
+    /// The caption under `p` and the end it grabs (`true` = start, nil = the middle).
+    private func captionHit(_ p: CGPoint) -> (caption: Caption, edge: Bool?)? {
+        guard p.y >= Metrics.captionTop, p.y <= Metrics.captionTop + Metrics.captionHeight else { return nil }
+        for c in project.edit.captions {
+            guard let r = captionRect(c), p.x >= r.minX - 3, p.x <= r.maxX + 3 else { continue }
+            let grip = min(Self.grip * 0.8, r.width / 3)
+            if p.x - r.minX < grip { return (c, true) }
+            if r.maxX - p.x < grip { return (c, false) }
+            return (c, nil)
+        }
+        return nil
+    }
+
+    private static let captionFont: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                                                                      .foregroundColor: NSColor(white: 0.92, alpha: 1)]
+
+    private func drawCaptions() {
+        guard !project.edit.captions.isEmpty else { return }
+        let visible = visibleRect.insetBy(dx: -40, dy: 0)
+        let dimmed = !project.edit.showCaptions
+        for c in project.edit.captions {
+            guard let r0 = captionRect(c), r0.intersects(visible) else { continue }
+            let g = glowAmount(AnyHashable(c.id))
+            let r = r0.insetBy(dx: 0.5, dy: -1.5 * g)
+            let selected = state.selectedCaption == c.id
+            let fill = selected ? Self.blue : NSColor(displayP3Red: 0.22 + 0.08 * g, green: 0.33 + 0.08 * g, blue: 0.42 + 0.08 * g, alpha: dimmed ? 0.45 : 1)
+            fill.setFill()
+            let body = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6)
+            body.fill()
+            if g > 0 {
+                NSColor(white: 1, alpha: 0.5 * g).setStroke()
+                body.lineWidth = 1
+                body.stroke()
+            }
+            guard r.width > 18 else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: r.insetBy(dx: 6, dy: 0)).addClip()
+            (c.text as NSString).draw(at: CGPoint(x: r.minX + 7, y: r.midY - 7), withAttributes: Self.captionFont)
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
 
@@ -1171,6 +1228,8 @@ final class VideoTimelineView: NSView {
         case resizeSpan(lane: Lane, id: UUID, leading: Bool)
         case trim(clip: Int, leading: Bool, original: VideoClip, grabX: CGFloat)
         case cut(start: Double)
+        case moveCaption(id: UUID, grab: Double, original: Caption)
+        case resizeCaption(id: UUID, leading: Bool)
     }
     private var drag: Drag?
     private var hoverEdge: (clip: Int, leading: Bool)?
@@ -1352,6 +1411,19 @@ final class VideoTimelineView: NSView {
             return
         }
         select(nil, nil)
+        // A caption: select it (the Captions section shows it), move it, or drag an end to retime it.
+        if let hit = captionHit(p) {
+            state.selectedCaption = hit.caption.id
+            state.section = .captions
+            if let leading = hit.edge {
+                drag = .resizeCaption(id: hit.caption.id, leading: leading)
+            } else {
+                drag = .moveCaption(id: hit.caption.id, grab: t, original: hit.caption)
+                if let start = project.outputTime(source: hit.caption.start) { seek(start) }
+            }
+            return
+        }
+        state.selectedCaption = nil
         // A click on an action selects it and jumps to where it starts.
         if let e = studioEvent(at: p) {
             state.selectedEvent = e.id
@@ -1409,6 +1481,16 @@ final class VideoTimelineView: NSView {
         case .cut(let start):
             cutPreview = (min(start, t), max(start, t))
             hoverCut = t
+        case .moveCaption(let id, let grab, let original):
+            guard let i = project.edit.captions.firstIndex(where: { $0.id == id }) else { return }
+            let length = original.end - original.start
+            let start = min(max(original.start + (t - grab), 0), max(project.sourceDuration - length, 0))
+            project.edit.captions[i].retime(start: start, end: start + length)
+        case .resizeCaption(let id, let leading):
+            guard let i = project.edit.captions.firstIndex(where: { $0.id == id }), let source = project.locate(t)?.source else { return }
+            let c = project.edit.captions[i]
+            if leading { project.edit.captions[i].retime(start: min(source, c.end - 0.2), end: c.end) }
+            else { project.edit.captions[i].retime(start: c.start, end: max(source, c.start + 0.2)) }
         case nil:
             return
         }

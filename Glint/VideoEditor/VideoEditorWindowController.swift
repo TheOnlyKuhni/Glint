@@ -5,13 +5,15 @@ import SwiftUI
 
 /// What the editor shows and where playback is (separate from the edit itself).
 final class VideoEditorState: ObservableObject {
-    enum Section: CaseIterable { case cursor, keystrokes, audio, camera, background, animation }
+    enum Section: CaseIterable { case cursor, keystrokes, audio, captions, camera, background, animation }
     @Published var section: Section = .audio
     @Published var selectedZoom: UUID?
     /// The selected camera action (Studio Mode).
     @Published var selectedCamera: UUID?
     /// The selected action on the events track (`StudioEvent.id`).
     @Published var selectedEvent: String?
+    /// The selected caption (timeline or transcript).
+    @Published var selectedCaption: UUID?
     @Published var selectedClip: UUID?
     /// The cut tool. While it's on, the playhead stays where it is (cutting and clicking don't move it).
     @Published var scissors = false
@@ -279,7 +281,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
         let settings = project.renderSettings(outputScale: previewScale, includeBackground: false)
         let renderSize = CGSize(width: (source.width * previewScale / 2).rounded() * 2, height: (source.height * previewScale / 2).rounded() * 2)
         let key = "\(project.clips.map { "\($0.start)-\($0.end)" })"
-        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)|\(project.edit.removedEvents)"
+        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)|\(project.edit.removedEvents)|\(project.edit.captions.hashValue)|\(project.edit.captionStyle)|\(project.edit.showCaptions)"
         if !force, key == structureKey, let renderer, let item = player.currentItem, let composition = item.videoComposition {
             if look != renderKey {
                 renderKey = look
@@ -339,7 +341,9 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
         let s = project.sourceSize
         return CGSize(width: max((s.width * thumbnailScale / 2).rounded() * 2, 2), height: max((s.height * thumbnailScale / 2).rounded() * 2, 2))
     }
-    private func thumbnailSettings() -> VideoRenderSettings { project.renderSettings(outputScale: thumbnailScale, includeBackground: false) }
+    private func thumbnailSettings() -> VideoRenderSettings {
+        project.renderSettings(outputScale: thumbnailScale, includeBackground: false, includeCaptions: false)
+    }
 
     /// The edited video's frame at output time `t`.
     private func editedStill(at t: Double, maxSize: CGSize) async -> CGImage? {

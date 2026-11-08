@@ -119,6 +119,10 @@ struct VideoEdit: Equatable, Codable {
     var cameraLayouts: [CameraLayout] = []
     /// Studio Mode: actions removed on the timeline (`StudioEvent.id`); their click effects and keystrokes don't show.
     var removedEvents: [String] = []
+    /// Captions (source time), how they look, and whether they show.
+    var captions: [Caption] = []
+    var captionStyle = CaptionStyle()
+    var showCaptions = true
 }
 
 extension VideoEdit {
@@ -129,7 +133,9 @@ extension VideoEdit {
                   zoomAnimation: c.value(.zoomAnimation, or: d.zoomAnimation), motionBlur: c.value(.motionBlur, or: d.motionBlur),
                   volume: c.value(.volume, or: d.volume), includeAudio: c.value(.includeAudio, or: d.includeAudio),
                   cursor: c.value(.cursor, or: d.cursor), keystrokes: c.value(.keystrokes, or: d.keystrokes), camera: c.value(.camera, or: d.camera),
-                  cameraLayouts: c.value(.cameraLayouts, or: d.cameraLayouts), removedEvents: c.value(.removedEvents, or: d.removedEvents))
+                  cameraLayouts: c.value(.cameraLayouts, or: d.cameraLayouts), removedEvents: c.value(.removedEvents, or: d.removedEvents),
+                  captions: c.value(.captions, or: d.captions), captionStyle: c.value(.captionStyle, or: d.captionStyle),
+                  showCaptions: c.value(.showCaptions, or: d.showCaptions))
     }
 }
 
@@ -459,7 +465,7 @@ final class VideoProject: ObservableObject {
     /// A snapshot for the frame renderer (the background picture is drawn here, on the main thread).
     /// `includeBackground: false` is the editor preview: just the video with its zooms (the editor draws the
     /// background, padding, corners and shadow around it as layers, so those settings change instantly).
-    func renderSettings(outputScale: CGFloat = 1, includeBackground: Bool = true) -> VideoRenderSettings {
+    func renderSettings(outputScale: CGFloat = 1, includeBackground: Bool = true, includeCaptions: Bool = true) -> VideoRenderSettings {
         let background = includeBackground ? self.background : VideoBackground()
         let canvas = VideoFrameRenderer.canvas(for: sourceSize, background: background)
         var backdrop: CGImage?
@@ -468,7 +474,25 @@ final class VideoProject: ObservableObject {
                                    shadow: background.isVisible ? background.shadow : 0,
                                    cornerRadius: background.corners * VideoBackground.maxCornerFraction * min(canvas.card.width, canvas.card.height),
                                    zooms: zooms, animation: zoomAnimation, motionBlur: Double(motionBlur) / 3, outputScale: outputScale,
-                                   overlay: makeOverlay())
+                                   overlay: makeOverlay(), captions: includeCaptions ? makeCaptions() : nil)
+    }
+
+    /// The captions on the output timeline: each word at its output time; words in cut parts are left out.
+    var outputCaptions: [[CaptionWord]] {
+        edit.captions.compactMap { caption in
+            let words = caption.words.compactMap { w -> CaptionWord? in
+                guard let start = outputTime(source: w.start) else { return nil }
+                let end = outputTime(source: w.end).map { max($0, start) } ?? start + (w.end - w.start)
+                return CaptionWord(text: w.text, start: start, end: end)
+            }
+            return words.isEmpty ? nil : words
+        }
+    }
+
+    private func makeCaptions() -> CaptionRenderer? {
+        guard edit.showCaptions, !edit.captions.isEmpty else { return nil }
+        let keys = isStudio && edit.keystrokes.show && !edit.keystrokes.position.isTop ? Double(edit.keystrokes.size) : nil
+        return CaptionRenderer(timeline: CaptionTimeline(captions: outputCaptions, style: edit.captionStyle), keysAtBottom: keys)
     }
 
     // MARK: Studio Mode
@@ -638,6 +662,8 @@ struct VideoRenderSettings: @unchecked Sendable {
     var outputScale: CGFloat
     /// Studio Mode: cursor, clicks, keystrokes, camera and the follow-cursor zoom paths.
     var overlay: StudioOverlay?
+    /// Captions (drawn on the video, above the overlays).
+    var captions: CaptionRenderer?
 }
 
 /// Draws one output frame: zoom into the video, then place it on the background (corners, shadow).
@@ -775,6 +801,9 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
         if let overlay = s.overlay {
             video = overlay.draw(on: video, size: CGSize(width: w, height: h), zoom: zoom.rect, time: time, camera: camera)
                 .cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        if let captions = s.captions {
+            video = captions.draw(on: video, size: CGSize(width: w, height: h), time: time).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
         }
 
         var output = video

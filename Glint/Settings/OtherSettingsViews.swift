@@ -23,6 +23,7 @@ struct RecordingSettingsView: View {
     /// Shown in the recorder's settings popover: switches, with Options… left of them.
     var compact = false
     @AppStorage(Prefs.studioAutoZoom) private var autoZoom
+    @AppStorage("captions.preset") private var captionPreset = CaptionPreset.classic.rawValue
 
     var body: some View {
         Form {
@@ -69,6 +70,14 @@ struct RecordingSettingsView: View {
                 } label: {
                     Text("Automatic zooms")
                     Text("New Studio Mode recordings open with zooms where you click or type. Options sets what starts a zoom and how it looks.")
+                }
+            }
+            Section("Captions") {
+                Picker(selection: $captionPreset) {
+                    ForEach(CaptionPreset.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                } label: {
+                    Text("Style for new captions")
+                    Text("Captions are made in the video editor (Captions section). Each video's captions can be restyled there.")
                 }
             }
             Section("Video") {

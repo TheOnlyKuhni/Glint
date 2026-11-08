@@ -28,6 +28,8 @@ struct VideoEditorContent: View {
     let actions: VideoEditorActions
 
     static let timelineHeight: CGFloat = 258
+    /// With captions, the timeline grows by their track.
+    static let captionTrackHeight: CGFloat = 34
     /// The window's smallest height: the 28pt title bar and the head bar, the rail's icons (10 + 6 × 30 + 7 gaps of
     /// 20 + the 30pt scissors + 14) and the whole timeline, so nothing under the video gets cut off.
     static let minWindowHeight: CGFloat = 28 + EditorHeadBar.height + 374 + timelineHeight
@@ -56,10 +58,10 @@ struct VideoEditorContent: View {
                 }
             }
             HStack(spacing: 0) {
-                if project.isStudio { TimelineTrackIcons(hasCamera: project.hasCamera) }
+                if project.isStudio { TimelineTrackIcons(hasCamera: project.hasCamera, hasCaptions: !project.edit.captions.isEmpty) }
                 TimelineHost(timeline: timeline)
             }
-            .frame(height: Self.timelineHeight)
+            .frame(height: Self.timelineHeight + (project.edit.captions.isEmpty ? 0 : Self.captionTrackHeight))
         }
         .background(W.base)
         .environment(\.colorScheme, .dark)
@@ -167,11 +169,12 @@ final class PreviewCanvasView: NSView {
 /// Studio Mode: an icon left of each timeline track (camera, zooms, video, pointer, keyboard), naming it on hover.
 private struct TimelineTrackIcons: View {
     let hasCamera: Bool
+    let hasCaptions: Bool
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color(white: 0x17 / 255.0)
-            ForEach(VideoTimelineView.trackRows(hasCamera: hasCamera)) { row in
+            ForEach(VideoTimelineView.trackRows(hasCamera: hasCamera, hasCaptions: hasCaptions)) { row in
                 TrackIcon(row: row).position(x: 22, y: row.centerY)
             }
         }
@@ -252,6 +255,7 @@ extension VideoEditorState.Section {
         case .cursor: "Cursor"
         case .keystrokes: "Keystrokes"
         case .audio: "Audio"
+        case .captions: "Captions"
         case .camera: "Camera"
         case .background: "Background"
         case .animation: "Animation"
@@ -263,6 +267,7 @@ extension VideoEditorState.Section {
         case .cursor: Image(systemName: "cursorarrow.rays").font(.system(size: 15, weight: .medium))
         case .keystrokes: Image(systemName: "command.square.fill").font(.system(size: 17))
         case .audio: Image(systemName: "speaker.wave.2.fill").font(.system(size: 14))
+        case .captions: Image(systemName: "captions.bubble.fill").font(.system(size: 15))
         case .camera: Image(systemName: "video.fill").font(.system(size: 14))
         case .background: Image(systemName: "photo.fill").font(.system(size: 15))
         case .animation: MotionGlyph().frame(width: 20, height: 14)
@@ -312,6 +317,7 @@ private struct VideoInspector: View {
                         if project.isStudio { CameraInspector(project: project) }
                         else { studioOnly("Camera", "Camera settings are only available for videos recorded in Studio Mode. In this recording the camera is part of the video.") }
                     case .audio: AudioInspector(project: project)
+                    case .captions: CaptionsInspector(project: project, state: state, actions: actions)
                     case .background: VideoBackgroundInspector(project: project)
                     case .animation: AnimationInspector(project: project)
                     }

@@ -171,6 +171,11 @@ private final class ExportModel: ObservableObject {
     @Published var quality: Double = 2
     @Published var includeAudio: Bool
     @Published var exporting = false
+    /// Also write the captions as a subtitles file (.srt) to the export location.
+    @Published var saveSubtitles = UserDefaults.standard.bool(forKey: "captions.exportSRT") {
+        didSet { UserDefaults.standard.set(saveSubtitles, forKey: "captions.exportSRT") }
+    }
+    var hasCaptions: Bool { !project.edit.captions.isEmpty && project.edit.showCaptions }
     @Published var progress: Double = 0
     var close: ((URL?, Bool) -> Void)?
     weak var sheet: NSWindow?
@@ -219,6 +224,21 @@ private final class ExportModel: ObservableObject {
         }
     }
 
+    /// The captions as SubRip, named like the video, in the export location (never over an existing file).
+    private func writeSubtitles() {
+        let folder = FileSaver.exportDirectory
+        let name = project.url.deletingPathExtension().lastPathComponent
+        var url = folder.appendingPathComponent(name).appendingPathExtension("srt")
+        var n = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = folder.appendingPathComponent("\(name) \(n)").appendingPathExtension("srt")
+            n += 1
+        }
+        do { try SubtitleFile.srt(project.outputCaptions).write(to: url, atomically: true, encoding: .utf8) } catch {
+            glintLog("subtitles: \(error)")
+        }
+    }
+
     private func render(replace: Bool) {
         exporting = true
         let scale = resolutions[resolution].scale, format = format
@@ -229,6 +249,7 @@ private final class ExportModel: ObservableObject {
                                                          includeAudio: format != .gif && includeAudio, fileType: format == .mov ? .mov : .mp4) { p in
                     Task { @MainActor in self.progress = p }
                 }
+                if format != .gif, hasCaptions, saveSubtitles { writeSubtitles() }
                 guard format == .gif else { close?(url, replace); return }
                 let gif = url.deletingPathExtension().appendingPathExtension("gif")
                 guard await GIFEncoder.encode(movie: url, to: gif) else { throw CocoaError(.fileWriteUnknown) }
@@ -287,6 +308,13 @@ private struct ExportSheetView: View {
                     Spacer()
                     Text(model.estimate).font(.system(size: 13)).foregroundStyle(.secondary)
                 }
+            }
+            if model.hasCaptions, model.format != .gif {
+                Divider().padding(.vertical, 14)
+                Toggle(isOn: $model.saveSubtitles) {
+                    Text("Also save subtitles (.srt)").font(.system(size: 13))
+                }
+                .help("The captions as a subtitles file, saved to your export location (\(FileManager.default.displayName(atPath: FileSaver.exportDirectory.path)))")
             }
             if model.exporting {
                 ProgressView(value: model.progress).padding(.top, 16)

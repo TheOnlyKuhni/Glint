@@ -205,6 +205,7 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Glint uses the camera only to show your webcam during recordings.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Glint uses the microphone only to record your voice during recordings.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Glint turns the speech in your videos into captions, on your Mac.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -237,6 +238,7 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Glint uses the camera only to show your webcam during recordings.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Glint uses the microphone only to record your voice during recordings.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Glint turns the speech in your videos into captions, on your Mac.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
