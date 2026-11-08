@@ -8,7 +8,14 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     var onCommand: ((String) -> Void)?  // "close", "background", "crop"
     var onGeometryChange: (() -> Void)?
 
-    private enum Handle { case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left, start, end, bend }
+    private enum Handle {
+        case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left, start, end, bend
+        /// A magnifier's bubble (or in-place lens) corners.
+        case lensTopLeft, lensTopRight, lensBottomRight, lensBottomLeft
+    }
+    /// Moving a callout magnifier: its area or its bubble (the other part stays).
+    private enum MagnifierPart { case area, bubble }
+    private var movingPart: MagnifierPart?
     private enum DragState {
         case none
         case creating(UUID)
@@ -217,7 +224,10 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             ctx.setLineJoin(.round)
             ctx.addPath(AnnotationRenderer.smoothPath(a.points))
             ctx.strokePath()
-        } else if case .line = a.kind {} else if case .arrow = a.kind {} else {
+        } else if case .line = a.kind {} else if case .arrow = a.kind {} else if a.kind == .magnifier {
+            if a.magnifierStyle == .callout { ctx.stroke(a.rect.insetBy(dx: -5 / m, dy: -5 / m)) }
+            ctx.stroke(a.bubbleRect.insetBy(dx: -5 / m, dy: -5 / m))
+        } else {
             ctx.stroke(bounds(of: a).insetBy(dx: -5 / m, dy: -5 / m))
         }
         ctx.setLineDash(phase: 0, lengths: [])
@@ -248,6 +258,16 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             return [(.start, a.start), (.bend, a.bendPoint), (.end, a.end)]
         case .line, .arrow:
             return [(.start, a.start), (.end, a.end)]
+        case .magnifier:
+            let b = a.bubbleRect
+            let lens: [(Handle, CGPoint)] = [(.lensTopLeft, CGPoint(x: b.minX, y: b.minY)), (.lensTopRight, CGPoint(x: b.maxX, y: b.minY)),
+                                              (.lensBottomRight, CGPoint(x: b.maxX, y: b.maxY)), (.lensBottomLeft, CGPoint(x: b.minX, y: b.maxY))]
+            guard a.magnifierStyle == .callout else { return lens }
+            let r = a.rect
+            return lens + [(.topLeft, CGPoint(x: r.minX, y: r.minY)), (.top, CGPoint(x: r.midX, y: r.minY)),
+                           (.topRight, CGPoint(x: r.maxX, y: r.minY)), (.right, CGPoint(x: r.maxX, y: r.midY)),
+                           (.bottomRight, CGPoint(x: r.maxX, y: r.maxY)), (.bottom, CGPoint(x: r.midX, y: r.maxY)),
+                           (.bottomLeft, CGPoint(x: r.minX, y: r.maxY)), (.left, CGPoint(x: r.minX, y: r.midY))]
         case .image:
             // Added images resize from their corners only, keeping their proportions.
             let r = a.rect
@@ -273,6 +293,8 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 for (q1, q2) in zip(pts, pts.dropFirst()) where distance(p, toSegment: q1, q2) <= a.lineWidth / 2 + tol { return a }
             case .line, .arrow:
                 if distance(p, toSegment: a.start, a.end) <= a.lineWidth / 2 + tol { return a }
+            case .magnifier:
+                if magnifierPart(a, at: p) != nil { return a }
             case .draw, .highlighter:
                 let w = a.kind == .highlighter ? AnnotationRenderer.highlighterWidth(of: a) : a.lineWidth
                 for (q1, q2) in zip(a.points, a.points.dropFirst()) where distance(p, toSegment: q1, q2) <= w / 2 + tol { return a }
@@ -281,6 +303,14 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 if bounds(of: a).insetBy(dx: -tol, dy: -tol).contains(p) { return a }
             }
         }
+        return nil
+    }
+
+    /// Which part of a magnifier is under `p`: its bubble (or lens), or a callout's area.
+    private func magnifierPart(_ a: Annotation, at p: CGPoint) -> MagnifierPart? {
+        let tol = 5 / magnification
+        if a.bubbleRect.insetBy(dx: -tol, dy: -tol).contains(p) { return .bubble }
+        if a.magnifierStyle == .callout, a.rect.insetBy(dx: -tol, dy: -tol).contains(p) { return .area }
         return nil
     }
 
@@ -342,6 +372,24 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         if !isDrawing { toolCursor.set() }
     }
 
+    /// Scrolling over the selected magnifier changes its zoom (one undo step per gesture).
+    private var lastMagnifierScroll: TimeInterval = 0
+    override func scrollWheel(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let a = doc.selected, a.kind == .magnifier, magnifierPart(a, at: p) != nil,
+              !event.modifierFlags.contains(.command), abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
+        else { super.scrollWheel(with: event); return }
+        if event.phase.contains(.began) || event.timestamp - lastMagnifierScroll > 0.6 { doc.checkpoint("Zoom") }
+        lastMagnifierScroll = event.timestamp
+        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 8
+        let zoom = MagnifierZoom.clamp(a.magnification * exp(delta * 0.01))
+        doc.magnifierZoom = zoom
+        update(a.id) { m in
+            if m.magnifierStyle == .callout { m.magCenter = m.magCenter ?? CGPoint(x: m.bubbleRect.midX, y: m.bubbleRect.midY) }
+            m.magZoom = zoom
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         if spaceHeld {
             isPanning = true
@@ -398,6 +446,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 hit = copy
             }
             doc.selectedID = hit.id
+            movingPart = hit.kind == .magnifier && hit.magnifierStyle == .callout && !flags.contains(.option) ? magnifierPart(hit, at: p) : nil
             beginMove(hit.id, at: p)
             return
         }
@@ -447,6 +496,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             case .line: .line
             case .arrow: .arrow
             case .redact: .redact
+            case .magnifier: .magnifier
             default: .spotlight
             }
             var a = Annotation(kind: kind, start: p, end: p, color: style.color, thickness: style.thickness)
@@ -460,6 +510,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 a.spotSoftness = doc.spotlightSoftness
                 a.spotBorder = doc.spotlightBorder
             case .arrow: a.variant = doc.arrowStyle.rawValue
+            case .magnifier: doc.applyMagnifierOptions(to: &a)
             default: break
             }
             doc.annotations.append(a)
@@ -527,6 +578,20 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                     a.end = shift ? Self.snapAngle(from: anchor, to: p) : p
                     // ⌥: from the center out.
                     a.start = option ? CGPoint(x: 2 * anchor.x - a.end.x, y: 2 * anchor.y - a.end.y) : anchor
+                case .magnifier:
+                    // A callout's drag is the area; an in-place drag is the lens (the area is the lens / zoom).
+                    let end = shift ? Self.square(from: anchor, to: p) : p
+                    let start = option ? CGPoint(x: 2 * anchor.x - end.x, y: 2 * anchor.y - end.y) : anchor
+                    if a.magnifierStyle == .inPlace {
+                        let c = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2), z = a.magnification
+                        let hw = abs(end.x - start.x) / 2 / z, hh = abs(end.y - start.y) / 2 / z
+                        a.start = CGPoint(x: c.x - hw, y: c.y - hh)
+                        a.end = CGPoint(x: c.x + hw, y: c.y + hh)
+                    } else {
+                        a.start = start
+                        a.end = end
+                        self.doc.placeBubble(&a)
+                    }
                 default:
                     a.end = shift ? Self.square(from: anchor, to: p) : p
                     a.start = option ? CGPoint(x: 2 * anchor.x - a.end.x, y: 2 * anchor.y - a.end.y) : anchor
@@ -545,7 +610,21 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             }
             let step = CGVector(dx: d.dx - moveApplied.dx, dy: d.dy - moveApplied.dy)
             moveApplied = d
-            update(id) { $0.offset(by: step) }
+            let part = movingPart
+            update(id) { a in
+                switch part {
+                case .bubble?:
+                    let c = a.magCenter ?? CGPoint(x: a.bubbleRect.midX, y: a.bubbleRect.midY)
+                    a.magCenter = CGPoint(x: c.x + step.dx, y: c.y + step.dy)
+                case .area?:
+                    // The bubble stays where it is.
+                    let c = a.magCenter ?? CGPoint(x: a.bubbleRect.midX, y: a.bubbleRect.midY)
+                    a.offset(by: step)
+                    a.magCenter = c
+                case nil:
+                    a.offset(by: step)
+                }
+            }
         case .resizing(let id, let handle):
             update(id) { a in
                 switch handle {
@@ -560,6 +639,22 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 case .left: a.start.x = p.x
                 case .right: a.end.x = p.x
                 case .bend: a.control = p
+                case .lensTopLeft, .lensTopRight, .lensBottomRight, .lensBottomLeft:
+                    // A callout's bubble sets the zoom (around its center); an in-place lens sets the area's size.
+                    let b = a.bubbleRect, c = CGPoint(x: b.midX, y: b.midY)
+                    let half = CGSize(width: max(abs(p.x - c.x), 8), height: max(abs(p.y - c.y), 8))
+                    if a.magnifierStyle == .inPlace {
+                        let z = a.magnification
+                        let hw = shift ? max(half.width, half.height) / z : half.width / z
+                        let hh = shift ? max(half.width, half.height) / z : half.height / z
+                        a.start = CGPoint(x: c.x - hw, y: c.y - hh)
+                        a.end = CGPoint(x: c.x + hw, y: c.y + hh)
+                    } else {
+                        a.magCenter = a.magCenter ?? c
+                        a.magZoom = MagnifierZoom.clamp(half.width * 2 / max(a.rect.width, 1))
+                        self.doc.magnifierZoom = a.magnification
+                    }
+                    return
                 }
                 // Added images keep their proportions; other shapes do while ⇧ is down.
                 if case .image(let key) = a.kind, let image = self.doc.images[key] {
@@ -580,7 +675,17 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         // New objects stay unselected unless the setting keeps them selected.
         let selectPlaced = Defaults[Prefs.annotateSelectPlaced]
         if case .creating(let id) = dragState, let a = doc.annotations.first(where: { $0.id == id }) {
-            let tooSmall: Bool = switch a.kind {
+            if a.kind == .magnifier, a.rect.width < 4 || a.rect.height < 4 {
+                // A click: a 60 pt area at that point.
+                update(id) { m in
+                    let c = self.arrowAnchor
+                    m.start = CGPoint(x: c.x - 30, y: c.y - 30)
+                    m.end = CGPoint(x: c.x + 30, y: c.y + 30)
+                    if m.magnifierStyle == .callout { self.doc.placeBubble(&m) }
+                }
+            }
+            let tooSmall: Bool = switch doc.annotations.first(where: { $0.id == id })?.kind ?? a.kind {
+            case .magnifier: false
             case .draw, .highlighter: false
             case .line, .arrow: hypot(a.end.x - a.start.x, a.end.y - a.start.y) < 4
             default: a.rect.width < 4 || a.rect.height < 4
@@ -591,6 +696,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         placedID = nil
         alignTarget = nil
         if case .resizing(let id, _) = dragState { normalize(id) }
+        movingPart = nil
         dragState = .none
         lastDragPoint = nil
         straightFrom = nil

@@ -752,6 +752,11 @@ extension AnnotateWindowController {
             setSpotlightKeepsAnnotations: { [weak self] keeps in self?.doc.spotlightKeepsAnnotations = keeps; self?.restyleSelection() },
             setSpotlightSoftness: { [weak self] value in self?.doc.spotlightSoftness = value; self?.restyleSelection() },
             setSpotlightBorder: { [weak self] on in self?.doc.spotlightBorder = on; self?.restyleSelection() },
+            setMagnifier: { [weak self] change in
+                guard let self else { return }
+                change(self.doc)
+                self.restyleSelection()
+            },
             setEmoji: { [weak self] emoji in self?.doc.emoji = emoji },
             setEmojiSize: { [weak self] size in self?.doc.emojiSize = size },
             takeScreenshot: { [weak self] in self?.addScreenshot(nil) },

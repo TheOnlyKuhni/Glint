@@ -85,7 +85,11 @@ struct AnnotationRenderer {
         let brightensAnnotations = dimsAnnotations && !spotlights.isEmpty && outside > 1.01
         // Annotations outside the spotlights get brighter with the screenshot: a white wash on top of them only.
         if brightensAnnotations { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
-        for a in annotations where a.kind != .redact && a.kind != .spotlight {
+        for (index, a) in annotations.enumerated() where a.kind != .redact && a.kind != .spotlight {
+            if a.kind == .magnifier {
+                drawMagnifier(a, over: annotations[..<index], ctx: ctx)
+                continue
+            }
             if a.id == editingTextID {
                 // The text view shows the letters; keep the box or outline behind them.
                 if case .text(let s) = a.kind, case let style = TextStyle(variant: a.variant), style.hasBox || style == .outline {
@@ -130,6 +134,133 @@ struct AnnotationRenderer {
         case .rounded: return roundedRect(r, radius: min(max(10, min(r.width, r.height) * 0.12), 32))
         case .ellipse: return CGPath(ellipseIn: r, transform: nil)
         }
+    }
+
+    // MARK: Magnifier
+
+    /// The bubble's (and the area frame's) line: half the thickness setting, at least 2 pt.
+    static func magnifierBorder(_ a: Annotation) -> CGFloat { max(2, a.lineWidth * 0.5) }
+
+    static func magnifierPath(_ r: CGRect, shape: MagnifierShape) -> CGPath {
+        let radius = min(min(r.width, r.height) * 0.18, 24)
+        return switch shape {
+        case .circle: CGPath(ellipseIn: r, transform: nil)
+        case .rounded: CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        }
+    }
+
+    /// The enlarged copy of the area: the screenshot (and backdrop) under it, plus the annotations drawn before the
+    /// magnifier when it includes them (never other magnifiers), scaled into the bubble. A callout also gets a thin
+    /// frame around its area and a line or cone to the bubble.
+    private func drawMagnifier(_ a: Annotation, over below: ArraySlice<Annotation>, ctx: CGContext) {
+        let source = a.rect, bubble = a.bubbleRect
+        guard source.width > 0.5, source.height > 0.5 else { return }
+        let shape = a.magnifierShape, callout = a.magnifierStyle == .callout
+        let border = Self.magnifierBorder(a), color = a.color.cgColor
+        let bubblePath = Self.magnifierPath(bubble, shape: shape)
+        if callout {
+            ctx.saveGState()
+            ctx.setStrokeColor(color)
+            ctx.setFillColor(a.color.nsColor.withAlphaComponent(0.08).cgColor)
+            ctx.setLineWidth(max(1.5, border * 0.6))
+            ctx.setLineCap(.round)
+            Self.addMagnifierLink(a, ctx: ctx)
+            ctx.addPath(Self.magnifierPath(source, shape: shape))
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
+        if drawsShadows {
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: 2 * deviceScale), blur: 10 * deviceScale,
+                          color: NSColor.black.withAlphaComponent(0.4).cgColor)
+            ctx.setFillColor(color)
+            ctx.addPath(bubblePath)
+            ctx.fillPath()
+            ctx.restoreGState()
+        }
+        ctx.saveGState()
+        ctx.addPath(bubblePath)
+        ctx.clip()
+        ctx.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)  // beyond the canvas
+        ctx.fill(bubble)
+        ctx.interpolationQuality = a.magSmooth == true ? .high : .none
+        ctx.translateBy(x: bubble.minX, y: bubble.minY)
+        ctx.scaleBy(x: a.magnification, y: a.magnification)
+        ctx.translateBy(x: -source.minX, y: -source.minY)
+        var inner = self
+        inner.deviceScale = deviceScale * a.magnification
+        inner.transparencyGridCell = transparencyGridCell.map { $0 / a.magnification }
+        let shown = a.magIncludes == false ? [] : below.filter { $0.kind != .magnifier }
+        inner.draw(Array(shown), in: ctx, parts: .all)
+        ctx.restoreGState()
+        ctx.saveGState()
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(border)
+        ctx.addPath(bubblePath)
+        ctx.strokePath()
+        ctx.restoreGState()
+    }
+
+    /// A callout's link from its area to the bubble: a line between their nearest edges, or a cone (two lines and a
+    /// faint fill) as wide as both shapes across the line joining them.
+    private static func addMagnifierLink(_ a: Annotation, ctx: CGContext) {
+        let source = a.rect, bubble = a.bubbleRect
+        let c1 = CGPoint(x: source.midX, y: source.midY), c2 = CGPoint(x: bubble.midX, y: bubble.midY)
+        let dx = c2.x - c1.x, dy = c2.y - c1.y, length = hypot(dx, dy)
+        guard length > 1 else { return }
+        let ux = dx / length, uy = dy / length
+        let shape = a.magnifierShape
+        switch a.magnifierLink {
+        case .none:
+            return
+        case .line:
+            let from = edgePoint(source, shape: shape, direction: CGVector(dx: ux, dy: uy))
+            let to = edgePoint(bubble, shape: shape, direction: CGVector(dx: -ux, dy: -uy))
+            // Overlapping shapes: no line.
+            guard (to.x - from.x) * ux + (to.y - from.y) * uy > 0 else { return }
+            ctx.move(to: from)
+            ctx.addLine(to: to)
+            ctx.strokePath()
+        case .cone:
+            // From the outermost points of both shapes across the line joining them; none while they overlap.
+            guard !source.insetBy(dx: -2, dy: -2).intersects(bubble) else { return }
+            let p = CGVector(dx: -uy, dy: ux)
+            let a1 = supportPoint(source, shape: shape, direction: p), a2 = supportPoint(bubble, shape: shape, direction: p)
+            let neg = CGVector(dx: -p.dx, dy: -p.dy)
+            let b1 = supportPoint(source, shape: shape, direction: neg), b2 = supportPoint(bubble, shape: shape, direction: neg)
+            let cone = CGMutablePath()
+            cone.addLines(between: [a1, a2, b2, b1])
+            cone.closeSubpath()
+            ctx.addPath(cone)
+            ctx.fillPath()
+            ctx.move(to: a1); ctx.addLine(to: a2)
+            ctx.move(to: b1); ctx.addLine(to: b2)
+            ctx.strokePath()
+        }
+    }
+
+    /// The shape's outermost point in `direction` (unit): on an ellipse where its tangent is perpendicular to it, on a
+    /// rectangle the corner that way.
+    private static func supportPoint(_ r: CGRect, shape: MagnifierShape, direction d: CGVector) -> CGPoint {
+        let c = CGPoint(x: r.midX, y: r.midY), a = r.width / 2, b = r.height / 2
+        switch shape {
+        case .circle:
+            let k = max(hypot(a * d.dx, b * d.dy), 0.0001)
+            return CGPoint(x: c.x + a * a * d.dx / k, y: c.y + b * b * d.dy / k)
+        case .rounded:
+            return CGPoint(x: c.x + (d.dx >= 0 ? a : -a), y: c.y + (d.dy >= 0 ? b : -b))
+        }
+    }
+
+    /// Where a ray from the shape's center in `direction` (unit) leaves the shape.
+    private static func edgePoint(_ r: CGRect, shape: MagnifierShape, direction d: CGVector) -> CGPoint {
+        let c = CGPoint(x: r.midX, y: r.midY), hw = r.width / 2, hh = r.height / 2
+        let t: CGFloat
+        switch shape {
+        case .circle: t = 1 / max(hypot(d.dx / max(hw, 0.01), d.dy / max(hh, 0.01)), 0.0001)
+        case .rounded: t = min(abs(d.dx) > 0.0001 ? hw / abs(d.dx) : .infinity, abs(d.dy) > 0.0001 ? hh / abs(d.dy) : .infinity)
+        }
+        return CGPoint(x: c.x + d.dx * t, y: c.y + d.dy * t)
     }
 
     /// How far (points) a spotlight's edge fades, for its Soft edge setting (0…1).
@@ -223,7 +354,7 @@ struct AnnotationRenderer {
             Self.drawText(label, font: font, color: a.color.prefersWhiteText ? .white : .black, centeredIn: pill, ctx: ctx)
         case .text(let string):
             Self.drawStyledText(string, at: a.start, size: a.fontSize, color: a.color, style: TextStyle(variant: a.variant), ctx: ctx)
-        case .redact, .spotlight:
+        case .redact, .spotlight, .magnifier:
             break
         }
     }

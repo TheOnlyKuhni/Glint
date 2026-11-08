@@ -17,6 +17,7 @@ enum ToolGlyph {
         case .text: "character"
         case .redact: "checkerboard.rectangle"
         case .spotlight: "rectangle.center.inset.filled"
+        case .magnifier: "plus.magnifyingglass"
         case .counter: "1.circle.fill"
         case .emoji: "face.smiling"
         case .draw: "pencil"

@@ -87,6 +87,9 @@ final class AnnotationDocument {
             var r = a.rect
             if let c = a.control { r = r.union(CGRect(origin: c, size: .zero)) }
             return r.insetBy(dx: -a.lineWidth * 2, dy: -a.lineWidth * 2)
+        case .magnifier:
+            let border = AnnotationRenderer.magnifierBorder(a) / 2
+            return a.rect.union(a.bubbleRect).insetBy(dx: -border, dy: -border)
         default:
             return a.rect.insetBy(dx: -a.lineWidth / 2, dy: -a.lineWidth / 2)
         }
@@ -110,6 +113,14 @@ final class AnnotationDocument {
     var spotlightKeepsAnnotations = false
     var spotlightSoftness: CGFloat = 0.3
     var spotlightBorder = false
+    /// Magnifier: callout or in place, shape, zoom, what links a callout to its area, smooth scaling, and whether
+    /// annotations under the area are enlarged too.
+    var magnifierStyle: MagnifierStyle = .callout
+    var magnifierShape: MagnifierShape = .circle
+    var magnifierZoom: CGFloat = 2
+    var magnifierLink: MagnifierLink = .line
+    var magnifierSmooth = false
+    var magnifierIncludesAnnotations = true
     var arrowStyle: ArrowStyle = .standard
     var textStyle: TextStyle = .standard
     /// Shared by every counter; changing the size resizes all of them.
@@ -236,6 +247,13 @@ final class AnnotationDocument {
             spotlightKeepsAnnotations = a.spotKeeps
             spotlightSoftness = a.spotSoft
             spotlightBorder = a.spotBorder ?? false
+        case .magnifier:
+            magnifierStyle = a.magnifierStyle
+            magnifierShape = a.magnifierShape
+            magnifierZoom = a.magnification
+            magnifierLink = a.magnifierLink
+            magnifierSmooth = a.magSmooth ?? false
+            magnifierIncludesAnnotations = a.magIncludes ?? true
         case .arrow: arrowStyle = ArrowStyle(rawValue: a.variant) ?? arrowStyle
         case .text: textStyle = TextStyle(variant: a.variant); fontSize = a.fontSize
         default: break
@@ -258,11 +276,48 @@ final class AnnotationDocument {
             a.spotKeepsAnnotations = spotlightKeepsAnnotations
             a.spotSoftness = spotlightSoftness
             a.spotBorder = spotlightBorder
+        case .magnifier:
+            let wasInPlace = a.magnifierStyle == .inPlace
+            applyMagnifierOptions(to: &a)
+            // Back from In Place: the callout gets its own place next to the area.
+            if wasInPlace, magnifierStyle == .callout { placeBubble(&a) }
         case .arrow: a.variant = arrowStyle.rawValue
         case .text: a.variant = textStyle.rawValue
         default: break
         }
         selected = a
+    }
+
+    // MARK: Magnifiers
+
+    func applyMagnifierOptions(to a: inout Annotation) {
+        a.variant = magnifierShape.rawValue
+        a.magStyle = magnifierStyle.rawValue
+        a.magLink = magnifierLink.rawValue
+        a.magSmooth = magnifierSmooth
+        a.magIncludes = magnifierIncludesAnnotations
+        // The zoom keeps the bubble's center: the bubble grows or shrinks around it.
+        a.magZoom = MagnifierZoom.clamp(magnifierZoom)
+    }
+
+    /// Puts a callout's bubble next to its area, on the side with the most free room inside the canvas (12 pt from
+    /// the area), so it stays on the canvas when it fits.
+    func placeBubble(_ a: inout Annotation) {
+        let base = background?.layout(for: imageSize) ?? BackgroundStyle.Layout(canvasSize: imageSize, imageOrigin: .zero)
+        let canvas = CGRect(origin: CGPoint(x: -base.imageOrigin.x, y: -base.imageOrigin.y), size: base.canvasSize)
+        let r = a.rect, z = a.magnification
+        let w = r.width * z, h = r.height * z, gap: CGFloat = 12 + AnnotationRenderer.magnifierBorder(a)
+        let candidates = [
+            (CGPoint(x: r.maxX + gap + w / 2, y: r.midY), canvas.maxX - r.maxX - gap - w),  // right
+            (CGPoint(x: r.minX - gap - w / 2, y: r.midY), r.minX - gap - w - canvas.minX),  // left
+            (CGPoint(x: r.midX, y: r.maxY + gap + h / 2), canvas.maxY - r.maxY - gap - h),  // below
+            (CGPoint(x: r.midX, y: r.minY - gap - h / 2), r.minY - gap - h - canvas.minY),  // above
+        ]
+        guard var center = candidates.max(by: { $0.1 < $1.1 })?.0 else { return }
+        // Slide it along the side into the canvas where there's room.
+        if w < canvas.width { center.x = min(max(center.x, canvas.minX + w / 2), canvas.maxX - w / 2) }
+        if h < canvas.height { center.y = min(max(center.y, canvas.minY + h / 2), canvas.maxY - h / 2) }
+        a.magCenter = center
     }
 
     // MARK: Counters

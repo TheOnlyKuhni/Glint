@@ -120,6 +120,7 @@ struct AnnotateSidebarActions {
     var setSpotlightKeepsAnnotations: (Bool) -> Void
     var setSpotlightSoftness: (CGFloat) -> Void
     var setSpotlightBorder: (Bool) -> Void
+    var setMagnifier: ((AnnotationDocument) -> Void) -> Void
     var setEmoji: (String) -> Void
     var setEmojiSize: (CGFloat) -> Void
     var takeScreenshot: () -> Void
@@ -229,6 +230,7 @@ struct AnnotateOptionsPanel: View {
             styleSection
             if tool == .redact { amountSection }
             if tool == .spotlight { spotlightSection }
+            if tool == .magnifier { magnifierSection }
             if tool == .counter { counterSection }
             if tool == .emoji { emojiSection }
         }
@@ -419,6 +421,59 @@ struct AnnotateOptionsPanel: View {
             .help("A line around the spotlight, in the color below")
             // The border's color, right under its switch (a spotlight has no color otherwise).
             if doc.spotlightBorder { colorSection }
+        }
+    }
+
+    /// Callout or in place, shape, zoom, the callout's link, and what is enlarged.
+    private var magnifierSection: some View {
+        let zoom = Binding(get: { Double(doc.magnifierZoom) }, set: { z in actions.setMagnifier { $0.magnifierZoom = CGFloat(z) } })
+        return VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Style", value: doc.magnifierStyle.title).padding(.top, 6)
+            HStack(spacing: 6) {
+                ForEach(MagnifierStyle.allCases, id: \.self) { style in
+                    TileButton(selected: doc.magnifierStyle == style, height: 30, help: style.help) {
+                        actions.setMagnifier { $0.magnifierStyle = style }
+                    } label: {
+                        Text(style.title).font(.system(size: 12, weight: .medium))
+                    }
+                }
+            }
+            InspectorHeader("Shape", value: doc.magnifierShape.title).padding(.top, 6)
+            HStack(spacing: 6) {
+                ForEach(MagnifierShape.allCases, id: \.self) { shape in
+                    TileButton(selected: doc.magnifierShape == shape, height: 36, help: shape.title) {
+                        actions.setMagnifier { $0.magnifierShape = shape }
+                    } label: {
+                        Image(systemName: shape.symbol).font(.system(size: 15, weight: .medium))
+                    }
+                }
+            }
+            InspectorHeader("Zoom", value: String(format: "%.1f×", doc.magnifierZoom)).padding(.top, 6)
+            StepSlider(value: zoom, range: Double(MagnifierZoom.range.lowerBound)...Double(MagnifierZoom.range.upperBound), step: 0.25, ticks: 10)
+                .help("How much the area is enlarged. You can also scroll over a selected magnifier.")
+            if doc.magnifierStyle == .callout {
+                InspectorHeader("Link", value: doc.magnifierLink.title).padding(.top, 6)
+                HStack(spacing: 6) {
+                    ForEach(MagnifierLink.allCases, id: \.self) { link in
+                        TileButton(selected: doc.magnifierLink == link, height: 30, help: "What joins the area and its enlarged copy") {
+                            actions.setMagnifier { $0.magnifierLink = link }
+                        } label: {
+                            Text(link.title).font(.system(size: 12, weight: .medium))
+                        }
+                    }
+                }
+            }
+            Toggle(isOn: Binding(get: { doc.magnifierIncludesAnnotations }, set: { on in actions.setMagnifier { $0.magnifierIncludesAnnotations = on } })) {
+                Text("Include annotations").font(.system(size: 12.5)).foregroundStyle(.white)
+            }
+            .toggleStyle(.checkbox)
+            .padding(.top, 4)
+            .help("Arrows, text and other annotations under the area are enlarged too")
+            Toggle(isOn: Binding(get: { doc.magnifierSmooth }, set: { on in actions.setMagnifier { $0.magnifierSmooth = on } })) {
+                Text("Smooth").font(.system(size: 12.5)).foregroundStyle(.white)
+            }
+            .toggleStyle(.checkbox)
+            .help("Smooth scaling for photos. Off: every pixel stays sharp, best for text and interfaces.")
         }
     }
 

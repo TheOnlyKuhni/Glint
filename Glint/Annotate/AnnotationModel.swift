@@ -2,7 +2,7 @@ import AppKit
 
 /// Drawing tools of the Annotate editor, in toolbar order.
 enum AnnotateTool: String, CaseIterable, Identifiable {
-    case select, rectangle, filledRectangle, ellipse, line, arrow, text, redact, spotlight, counter, emoji, draw, highlighter
+    case select, rectangle, filledRectangle, ellipse, line, arrow, text, redact, spotlight, magnifier, counter, emoji, draw, highlighter
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .text: "Text"
         case .redact: "Redact"
         case .spotlight: "Spotlight"
+        case .magnifier: "Magnifier"
         case .counter: "Counter"
         case .emoji: "Emoji"
         case .draw: "Draw"
@@ -36,6 +37,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .text: "t"
         case .redact: "p"
         case .spotlight: "h"
+        case .magnifier: "z"
         case .counter: "c"
         case .emoji: "j"
         case .draw: "d"
@@ -54,6 +56,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .text: "textformat.characters"
         case .redact: "checkerboard.rectangle"
         case .spotlight: "rectangle.inset.filled"
+        case .magnifier: "plus.magnifyingglass"
         case .counter: "1.circle.fill"
         case .emoji: "face.smiling"
         case .draw: "pencil"
@@ -69,6 +72,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         case .ellipse: .ellipse
         case .redact: .redact
         case .spotlight: .spotlight
+        case .magnifier: .magnifier
         case .line: .line
         case .arrow: .arrow
         case .draw: .draw
@@ -79,7 +83,7 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
         }
     }
 
-    var usesThickness: Bool { [.rectangle, .ellipse, .line, .arrow, .draw, .highlighter, .counter].contains(self) }
+    var usesThickness: Bool { [.rectangle, .ellipse, .line, .arrow, .draw, .highlighter, .counter, .magnifier].contains(self) }
     var usesColor: Bool { ![.select, .redact, .spotlight, .emoji].contains(self) }
 }
 
@@ -87,6 +91,8 @@ enum AnnotateTool: String, CaseIterable, Identifiable {
 struct Annotation: Identifiable, Equatable, Codable {
     enum Kind: Equatable, Codable {
         case rectangle, filledRectangle, ellipse, redact, spotlight
+        /// `rect` is the area that's enlarged; the enlarged copy (the bubble) is `bubbleRect`.
+        case magnifier
         case line, arrow
         case draw, highlighter
         case text(String)
@@ -124,6 +130,15 @@ struct Annotation: Identifiable, Equatable, Codable {
     /// Counters: this counter's own numbering style and size (set while it's selected); nil = the shared setting.
     var counterStyle: Int?
     var counterSize: CGFloat?
+    /// Magnifiers (`variant` is the `MagnifierShape`): the bubble's center (callouts), the zoom (nil = 2×), the
+    /// `MagnifierStyle` and `MagnifierLink`, smooth instead of pixel-sharp scaling, and whether the annotations under
+    /// the area are enlarged too (nil = yes).
+    var magCenter: CGPoint?
+    var magZoom: CGFloat?
+    var magStyle: Int?
+    var magLink: Int?
+    var magSmooth: Bool?
+    var magIncludes: Bool?
 
     init(kind: Kind, start: CGPoint, end: CGPoint, points: [CGPoint] = [], color: AnnotationColor, thickness: Int, fontSize: CGFloat = 30) {
         id = UUID()
@@ -161,6 +176,19 @@ struct Annotation: Identifiable, Equatable, Codable {
             return CGPoint(x: u * u * start.x + 2 * u * t * c.x + t * t * end.x, y: u * u * start.y + 2 * u * t * c.y + t * t * end.y)
         }
     }
+    var magnification: CGFloat { magZoom ?? 2 }
+    var magnifierStyle: MagnifierStyle { MagnifierStyle(rawValue: magStyle ?? 0) ?? .callout }
+    var magnifierLink: MagnifierLink { MagnifierLink(rawValue: magLink ?? 0) ?? .line }
+    var magnifierShape: MagnifierShape { MagnifierShape(rawValue: variant) ?? .circle }
+
+    /// Where the enlarged copy is shown: the area's size times the zoom, around `magCenter` (a callout) or over the
+    /// area itself (in place).
+    var bubbleRect: CGRect {
+        let r = rect, z = magnification
+        let center = magnifierStyle == .inPlace ? CGPoint(x: r.midX, y: r.midY) : (magCenter ?? CGPoint(x: r.midX, y: r.midY))
+        return CGRect(x: center.x - r.width * z / 2, y: center.y - r.height * z / 2, width: r.width * z, height: r.height * z)
+    }
+
     /// A spotlight's brightness inside it and outside it.
     var spotInside: CGFloat { spotBrightness ?? 1 }
     var spotRest: CGFloat { restBrightness ?? 1 - (0.15 + 0.75 * amount) }
@@ -172,7 +200,7 @@ struct Annotation: Identifiable, Equatable, Codable {
 
     var isRectLike: Bool {
         switch kind {
-        case .rectangle, .filledRectangle, .ellipse, .redact, .spotlight, .image: true
+        case .rectangle, .filledRectangle, .ellipse, .redact, .spotlight, .magnifier, .image: true
         default: false
         }
     }
@@ -188,6 +216,12 @@ struct Annotation: Identifiable, Equatable, Codable {
         copy.spotSoftness = spotSoftness
         copy.spotBorder = spotBorder
         copy.control = control
+        copy.magCenter = magCenter
+        copy.magZoom = magZoom
+        copy.magStyle = magStyle
+        copy.magLink = magLink
+        copy.magSmooth = magSmooth
+        copy.magIncludes = magIncludes
         return copy
     }
 
@@ -195,6 +229,7 @@ struct Annotation: Identifiable, Equatable, Codable {
         start.x += d.dx; start.y += d.dy
         end.x += d.dx; end.y += d.dy
         control = control.map { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
+        magCenter = magCenter.map { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
         points = points.map { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
     }
 }

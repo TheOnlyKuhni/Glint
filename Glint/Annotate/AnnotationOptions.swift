@@ -29,6 +29,31 @@ enum SpotlightShape: Int, CaseIterable {
     var symbol: String { ["square", "app", "circle"][rawValue] }
 }
 
+/// Magnifier: a callout (the area keeps showing; its enlarged copy sits elsewhere) or a lens over the area itself.
+enum MagnifierStyle: Int, CaseIterable {
+    case callout, inPlace
+    var title: String { ["Callout", "In Place"][rawValue] }
+    var help: String { ["The enlarged copy sits next to the area, linked to it", "A lens over the area itself"][rawValue] }
+}
+
+enum MagnifierShape: Int, CaseIterable {
+    case circle, rounded
+    var title: String { ["Circle", "Rounded Rectangle"][rawValue] }
+    var symbol: String { ["circle", "app"][rawValue] }
+}
+
+/// What links a callout to its area.
+enum MagnifierLink: Int, CaseIterable {
+    case line, cone, none
+    var title: String { ["Line", "Cone", "None"][rawValue] }
+}
+
+/// The magnifier's zoom range (sidebar slider, scrolling over a selected magnifier, resizing its bubble).
+enum MagnifierZoom {
+    static let range: ClosedRange<CGFloat> = 1.5...6
+    static func clamp(_ z: CGFloat) -> CGFloat { min(max(z, range.lowerBound), range.upperBound) }
+}
+
 enum ArrowStyle: Int, CaseIterable {
     case standard, fancy, curved, double
     var title: String { ["Standard", "Fancy", "Curved", "Double"][rawValue] }
