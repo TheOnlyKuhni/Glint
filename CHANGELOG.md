@@ -6,6 +6,16 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 
 ### Added
 
+- Captions in the video editor: Generate Captions turns the speech into timed captions on your Mac, or add them by
+  hand. Show them as phrases or word by word (social media style, with a pop or fade), pick a style (Classic,
+  Outline, Social, Minimal) and adjust font, size, colors, box and position. Edit the transcript in the sidebar or
+  move and retime captions on their timeline track. They're burned into exports (GIFs too), and Export can also save
+  a subtitles file (.srt)
+- Magnifier tool (Z) in the screenshot editor: an enlarged copy of an area, as a callout linked to it by a line or
+  a cone, or as a lens in place. Circle or rounded rectangle, 1.5×–6× zoom (scroll over it to change it), pixel-sharp
+  or smooth, with or without the annotations underneath
+- Hand-drawn style for rectangles, ellipses, lines and arrows: sketched, slightly wobbly strokes with hatched fills,
+  in three roughness levels. ⌘R draws the selected shape anew
 - Quick Access: a bar above the top card tucks the stack away. It shows while the pointer is over the stack
 - Quick Access: pull a card down (or swipe down with two fingers) to tuck the stack away, and pull the tab at the
   bottom up (or click it, or swipe up) to bring it back
@@ -26,6 +36,8 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 - Video editor, Studio Mode: icons left of the timeline name each track (camera, zooms, video, pointer, keyboard)
 - Aspect ratios for social media: 4:5, 3:4, 2:3 and 1.91:1 in the Background tool, the video editor and Crop (and
   1.91:1 for recordings). The menus and tooltips say where each ratio is used
+- The screenshot and video editors can go full screen
+- Video editor: − and + beside the timeline zoom slider zoom in small steps
 
 ### Changed
 
@@ -44,18 +56,30 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
   of 3 days, the recorder remembers the last area, and auto-close (when turned on) closes cards instead of saving
   them. Settings you changed yourself stay as they are
 - README: step-by-step instructions for turning off Apple's screenshot shortcuts
+- Opening Glint from Spotlight or Finder opens its menu bar menu instead of Settings, also when it wasn't running
+- Screenshots include Glint's editors, Settings and History like any other window (only overlays and Quick Access
+  stay out), and starting a screenshot no longer brings an open editor to the front
+- Video editor: the rail buttons react to the pointer like the screenshot editor's; the timeline's track icons use
+  the editor's own icons and Keystrokes uses a keyboard icon
 
 ### Fixed
 
 - Spotlight no longer darkens the background around the screenshot (in the rounded corners, and around window
   captures with transparent edges)
-- Capture History: Return on a capture did nothing (it was handled as the Trash's Put Back); it now restores it
+- Capture History: Return on a capture did nothing; it now restores it
 - The File menu showed AutoFill, Start Dictation and Emoji & Symbols; they're back in the Edit menu
 - Recordings at 24 fps came out at about 21 fps on 60 Hz displays. Frames are now placed on an exact grid of the
   chosen frame rate, so 24, 30 and 60 fps recordings have exactly that rate, and the video editor exports them at it
   (it sometimes took a 30 fps recording for 60 fps)
 - "Optimize GIFs" made GIFs up to 2.7× bigger. It now only merges repeated frames, so it never makes a GIF bigger and
   saves frames where the screen doesn't change
+- The video editor preview showed macOS's generated subtitles next to your captions while playing
+- Studio Mode keystrokes showed text that was typed later, cut off mid-word. Typing now builds up key by key
+- Clicking into a caption's text could crash Glint, and merging captions after a split kept only the first text
+- Quick Access could jump in front of the editor when a setting changed (for example in the Background tool), and
+  reacted to the pointer while another window covered it
+- A card stayed "Being edited…" after pinning from the editor
+- A 2:3 background ratio zoomed the screenshot editor in instead of fitting the image
 
 ## [0.2] – Beta
 

@@ -117,15 +117,15 @@ if you prefer.
   self-timer, All-In-One (⇧⌘5), scrolling capture, freeze screen and crosshair with magnifier.
 - **Capture Text (OCR):** copy the text in any part of the screen; also reads QR codes and barcodes.
 - **Annotate:** arrows, shapes, text styles, counters, pen, highlighter (snaps to text lines), blur, pixelate,
-  spotlight and added images.
+  spotlight, a magnifier for enlarged callouts, a hand-drawn look for shapes, and added images.
 - **Backgrounds:** gradients, your wallpaper or any image, padding, inset, shadow, rounded corners, alignment,
   aspect ratios and presets.
 - **Crop & Resize:** ratios, exact sizes, rotate and flip, output size, and a zoom lens for placing handles to the
   pixel. Saved edits stay editable.
 - **Record:** screen or window as video or GIF, with microphone and system audio, camera overlay, highlighted clicks
   and keystrokes, and Do Not Disturb while recording.
-- **Video editor:** trim and cut, zooms, background presets, padding, corners and shadow, keyboard scrubbing, and export
-  to MP4, MOV or GIF.
+- **Video editor:** trim and cut, zooms, captions from your speech (transcribed on your Mac, as phrases or word by
+  word), background presets, padding, corners and shadow, keyboard scrubbing, and export to MP4, MOV or GIF.
 - **Studio Mode:** record the screen as an editable project: automatic zooms that follow the cursor, cursor size,
   style, smoothing and click effects, keystrokes and the camera, all adjustable after recording.
 - **Quick Access:** a floating stack of your latest captures to copy, save, annotate, pin or drag anywhere. Pull a
