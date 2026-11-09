@@ -14,17 +14,15 @@ final class CaptureHistory {
     private var model: HistoryModel?
     private var previousApp: NSRunningApplication?
 
-    /// `trash`: opens on the Trash instead of the history.
-    func show(trash: Bool = false) {
+    func show() {
         if let window {
-            model?.setTrash(trash)
             window.makeKeyAndOrderFront(nil)
             return
         }
         HistoryStore.shared.prune()
         guard let screen = NSScreen.withMouse ?? NSScreen.main else { return }
         previousApp = NSWorkspace.shared.frontmostApplication.flatMap { $0 == .current ? nil : $0 }
-        let model = HistoryModel(inTrash: trash)
+        let model = HistoryModel()
         self.model = model
         let window = HistoryWindow(screen: screen, model: model)
         model.actions = HistoryActions(owner: self)
@@ -58,22 +56,6 @@ final class CaptureHistory {
         return alert.runModal()
     }
 
-    /// Asks, then deletes everything in the Trash. True if it did.
-    @discardableResult
-    func confirmEmptyTrash() -> Bool {
-        let count = HistoryStore.shared.trashCount
-        guard count > 0 else { return false }
-        let alert = NSAlert()
-        alert.messageText = "Empty the Trash?"
-        alert.informativeText = "\(count == 1 ? "1 capture" : "\(count) captures") will be deleted for good. This can't be undone."
-        alert.addButton(withTitle: "Empty Trash")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons.first?.hasDestructiveAction = true
-        NSApp.activate()
-        guard runAlert(alert) == .alertFirstButtonReturn else { return false }
-        HistoryStore.shared.emptyTrash()
-        return true
-    }
 }
 
 enum HistoryFilter: CaseIterable {
@@ -92,24 +74,14 @@ enum HistoryFilter: CaseIterable {
 
 final class HistoryModel: ObservableObject {
     @Published var entries: [HistoryStore.Entry]
-    /// Showing the Trash instead of the history.
-    @Published private(set) var inTrash: Bool
     @Published var filter: HistoryFilter = .all
     @Published var selected: URL?
     /// ⌥ is held (drag-out is off then).
     @Published var optionHeld = false
     var actions: HistoryActions?
 
-    init(inTrash: Bool = false) {
-        self.inTrash = inTrash
-        entries = HistoryStore.shared.entries(inTrash: inTrash)
-        selected = entries.first?.fileURL
-    }
-
-    func setTrash(_ on: Bool) {
-        inTrash = on
-        filter = .all
-        entries = HistoryStore.shared.entries(inTrash: on)
+    init() {
+        entries = HistoryStore.shared.entries()
         selected = entries.first?.fileURL
     }
 
@@ -133,7 +105,7 @@ final class HistoryModel: ObservableObject {
     }
 
     func reload() {
-        entries = HistoryStore.shared.entries(inTrash: inTrash)
+        entries = HistoryStore.shared.entries()
         if selectedEntry == nil { selected = visible.first?.fileURL }
     }
 }
@@ -189,27 +161,17 @@ struct HistoryActions {
         owner?.close()
     }
 
-    /// Delete: to the Trash; from the Trash, for good (asks first).
+    /// Delete: for good, after asking (the history is where removed captures wait; there's nothing after it).
     func delete(_ entry: HistoryStore.Entry, in model: HistoryModel) {
-        if model.inTrash {
-            let alert = NSAlert()
-            alert.messageText = "Delete “\(entry.fileURL.lastPathComponent)” for good?"
-            alert.informativeText = "This can't be undone."
-            alert.addButton(withTitle: "Delete")
-            alert.addButton(withTitle: "Cancel")
-            alert.buttons.first?.hasDestructiveAction = true
-            guard owner?.runAlert(alert) == .alertFirstButtonReturn else { return }
-        }
+        let alert = NSAlert()
+        alert.messageText = "Delete “\(entry.fileURL.lastPathComponent)”?"
+        alert.informativeText = "It's deleted for good. This can't be undone."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard owner?.runAlert(alert) == .alertFirstButtonReturn else { return }
         let next = neighbor(of: entry, in: model)
-        if model.inTrash { HistoryStore.shared.delete(entry) } else { HistoryStore.shared.moveToTrash(entry) }
-        model.selected = next?.fileURL
-        model.reload()
-    }
-
-    /// Back into the history from the Trash.
-    func putBack(_ entry: HistoryStore.Entry, in model: HistoryModel) {
-        let next = neighbor(of: entry, in: model)
-        HistoryStore.shared.putBack(entry)
+        HistoryStore.shared.delete(entry)
         model.selected = next?.fileURL
         model.reload()
     }
@@ -262,14 +224,12 @@ final class HistoryWindow: NSPanel, QLPreviewPanelDataSource {
         case 53: CaptureHistory.shared.close()
         case 123: model.moveSelection(-1)
         case 124: model.moveSelection(1)
-        // (`where` binds to each pattern on its own: with "36, 76 where …" Return always took this branch.)
-        case 36 where model.inTrash, 76 where model.inTrash: if let entry { model.actions?.putBack(entry, in: model) }
         // Return restores the selection and keeps the history open (pick the next one with the arrow keys).
         case 36, 76: if let entry { model.actions?.restore(entry, keepOpen: true) }
         case 49: if entry != nil { model.actions?.quickLook() }
         case 51, 117: if let entry { model.actions?.delete(entry, in: model) }
-        case 8 where cmd && !model.inTrash: if let entry { model.actions?.copy(entry) }
-        case 14 where cmd && !model.inTrash: if let entry { model.actions?.annotate(entry) }
+        case 8 where cmd: if let entry { model.actions?.copy(entry) }
+        case 14 where cmd: if let entry { model.actions?.annotate(entry) }
         default: super.keyDown(with: event)
         }
     }
@@ -336,20 +296,6 @@ struct HistoryPanel: View {
             .frame(height: 22)
             .padding(.top, 15)
             HStack {
-                if model.inTrash {
-                    Button { model.setTrash(false) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
-                            Text("Trash").font(.system(size: 13, weight: .semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(height: 22)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(HoverButtonStyle())
-                    .help("Back to the history")
-                    .padding(.leading, 20).padding(.top, 15)
-                }
                 Spacer()
                 MoreButton(model: model).padding(.trailing, 20).padding(.top, 15)
             }
@@ -360,7 +306,7 @@ struct HistoryPanel: View {
     @ViewBuilder private var strip: some View {
         let entries = model.visible
         if entries.isEmpty {
-            Text(model.inTrash ? (model.entries.isEmpty ? "The Trash is empty" : "Nothing here") : (model.entries.isEmpty ? "No captures yet" : "Nothing here yet"))
+            Text(model.entries.isEmpty ? "No captures yet" : "Nothing here yet")
                 .font(.system(size: 15))
                 .foregroundStyle(Color.white.opacity(0.45))
                 .frame(maxWidth: .infinity)
@@ -400,8 +346,7 @@ struct HistoryItem: View {
                 .frame(width: 185, height: 130)
                 .onHover { if $0 { model.selected = entry.fileURL } }
                 .onTapGesture {
-                    // In the Trash a click only selects: Put Back is its button.
-                    if model.inTrash { model.selected = entry.fileURL } else { model.actions?.restore(entry, keepOpen: NSEvent.modifierFlags.contains(.option)) }
+                    model.actions?.restore(entry, keepOpen: NSEvent.modifierFlags.contains(.option))
                 }
                 // Holding ⌥ turns dragging off (so an ⌥-click restore can't start an accidental drag).
                 .modifier(DragOut(url: entry.fileURL, enabled: !model.optionHeld))
@@ -409,11 +354,11 @@ struct HistoryItem: View {
             ZStack {
                 if isSelected {
                     Button {
-                        if model.inTrash { model.actions?.putBack(entry, in: model) } else { model.actions?.restore(entry) }
+                        model.actions?.restore(entry)
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "return").font(.system(size: 11, weight: .semibold))
-                            Text(model.inTrash ? "Put Back" : "Restore").font(.system(size: 13, weight: .medium))
+                            Text("Restore").font(.system(size: 13, weight: .medium))
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 9.5)
@@ -481,17 +426,6 @@ struct HistoryItem: View {
     }
 
     @ViewBuilder private var menu: some View {
-        if model.inTrash {
-            Button("Put Back") { model.actions?.putBack(entry, in: model) }.keyboardShortcut(.return, modifiers: [])
-            Button("Quick Look") { model.selected = entry.fileURL; model.actions?.quickLook() }.keyboardShortcut(.space, modifiers: [])
-            Divider()
-            Button("Delete for Good...") { model.actions?.delete(entry, in: model) }.keyboardShortcut(.delete, modifiers: [])
-        } else {
-            historyMenu
-        }
-    }
-
-    @ViewBuilder private var historyMenu: some View {
         if entry.isVideo || entry.isGIF {
             Button("Open Video Editor...") { model.actions?.editVideo(entry) }.keyboardShortcut("e")
         } else {
@@ -505,7 +439,7 @@ struct HistoryItem: View {
         Button("Show in Finder") { model.actions?.reveal(entry) }
         Button("Restore") { model.actions?.restore(entry) }.keyboardShortcut(.return, modifiers: [])
         Divider()
-        Button("Move to Trash") { model.actions?.delete(entry, in: model) }.keyboardShortcut(.delete, modifiers: [])
+        Button("Delete...") { model.actions?.delete(entry, in: model) }.keyboardShortcut(.delete, modifiers: [])
     }
 
     private static let formatter: RelativeDateTimeFormatter = {
@@ -561,30 +495,20 @@ struct HistoryItem: View {
     }
 }
 
-/// The "…" button: Keep History, the Trash and Clear History….
+/// The "…" button: Keep History and Clear History….
 struct MoreButton: View {
     @ObservedObject var model: HistoryModel
     @AppStorage(Prefs.historyDays) private var days
 
     var body: some View {
         Menu {
-            if model.inTrash {
-                Button("Back to History") { model.setTrash(false) }
-                Divider()
-                Button("Empty Trash...") { if CaptureHistory.shared.confirmEmptyTrash() { model.reload() } }
-                    .disabled(model.entries.isEmpty)
-            } else {
-                Section("Keep History") {
-                    ForEach([(-1, "Never"), (1, "1 day"), (3, "3 days"), (7, "1 week"), (30, "1 month")], id: \.0) { value, title in
-                        Toggle(title, isOn: Binding(get: { days == value }, set: { if $0 { days = value; HistoryStore.shared.prune(); model.reload() } }))
-                    }
+            Section("Keep History") {
+                ForEach([(-1, "Never"), (1, "1 day"), (3, "3 days"), (7, "1 week"), (30, "1 month")], id: \.0) { value, title in
+                    Toggle(title, isOn: Binding(get: { days == value }, set: { if $0 { days = value; HistoryStore.shared.prune(); model.reload() } }))
                 }
-                Divider()
-                Button("Show Trash") { model.setTrash(true) }
-                Button("Empty Trash...") { CaptureHistory.shared.confirmEmptyTrash() }
-                Divider()
-                Button("Clear History...") { confirmClear() }
             }
+            Divider()
+            Button("Clear History...") { confirmClear() }
         } label: {
             HStack(spacing: 3) {
                 ForEach(0..<3, id: \.self) { _ in Circle().fill(Color.white.opacity(0.6)).frame(width: 4, height: 4) }
@@ -601,7 +525,7 @@ struct MoreButton: View {
     private func confirmClear() {
         let alert = NSAlert()
         alert.messageText = "Clear Capture History?"
-        alert.informativeText = "All captures in the history move to the Trash."
+        alert.informativeText = "All captures in the history are deleted for good. This can't be undone."
         alert.addButton(withTitle: "Clear History")
         alert.addButton(withTitle: "Cancel")
         guard CaptureHistory.shared.runAlert(alert) == .alertFirstButtonReturn else { return }

@@ -157,8 +157,6 @@ enum Prefs {
     static let add2xSuffix = Pref(key: "advanced.add2xSuffix", defaultValue: false)
     static let clipboardMode = Pref(key: "advanced.clipboardMode", defaultValue: ClipboardMode.fileAndImage)
     static let historyDays = Pref(key: "advanced.historyDays", defaultValue: 7)
-    /// Days until a capture in the Trash is deleted for good; 0 = only when the Trash is emptied by hand.
-    static let trashDays = Pref(key: "advanced.trashDays", defaultValue: 30)
     /// Capture Text language: "auto" (the system languages) or one recognizer language code.
     static let ocrLanguage = Pref(key: "advanced.ocrLanguage", defaultValue: "auto")
     static let ocrKeepLineBreaks = Pref(key: "advanced.ocrKeepLineBreaks", defaultValue: true)
