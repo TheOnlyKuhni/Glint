@@ -145,6 +145,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         DispatchQueue.main.async { AppRouter.perform(action) }
     }
 
+    /// Opens the menu bar menu, as a click on the icon does. False when there's no menu to open (the icon is
+    /// hidden, or it's a stop button while recording).
+    func openMenu() -> Bool {
+        guard statusItem.isVisible, statusItem.menu != nil, let button = statusItem.button else { return false }
+        DispatchQueue.main.async { button.performClick(nil) }
+        return true
+    }
+
     @objc private func openSettings() { SettingsWindowController.shared.show() }
     @objc private func openAbout() { SettingsWindowController.shared.show(pane: .about) }
     @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }

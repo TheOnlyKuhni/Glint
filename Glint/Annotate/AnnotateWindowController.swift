@@ -477,10 +477,10 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         closeAfterDrop()
     }
 
-    /// After "Drag Me" delivered the image: close without asking to save and without handing the capture back
-    /// to Quick Access.
+    /// After "Drag Me" or Pin delivered the image: close without asking to save. Quick Access gets its card back
+    /// as it was (no longer "being edited"); the edited image isn't handed to it.
     private func closeAfterDrop() {
-        finished = true
+        finish(with: sourceItem)
         doc.markSaved()
         window?.close()
     }
@@ -585,9 +585,12 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         // A long scrolling capture would shrink to a sliver: it fits the left, top and right edges instead (sideways
         // ones: top, left and bottom), at most 100% so narrow captures aren't blown up, and scrolls along its length
         // from the top (left) end. The scroll view's elasticity lets it overshoot a little at both ends and spring back.
-        if !doc.isCropping, fitHeight < fitWidth / 2 {
+        // Long means the image itself (over 2.5 times longer than wide), not just taller than the window's shape:
+        // a 2:3 backdrop still fits whole.
+        let aspect = canvasSize.height / max(canvasSize.width, 1)
+        if !doc.isCropping, aspect > 2.5, fitHeight < fitWidth / 2 {
             setZoom(min(fitWidth, 1), atStart: true)
-        } else if !doc.isCropping, fitWidth < fitHeight / 2 {
+        } else if !doc.isCropping, aspect < 0.4, fitWidth < fitHeight / 2 {
             setZoom(min(fitHeight, 1), atStart: true)
         } else {
             setZoom(fit)
