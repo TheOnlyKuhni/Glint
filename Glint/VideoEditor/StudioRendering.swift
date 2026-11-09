@@ -411,31 +411,33 @@ nonisolated struct KeyLabel: Sendable {
     var start: Double
     var end: Double
     var text: String
+    /// Typing: the same label one key later (it doesn't fade in again).
+    var continues = false
+
+    /// Typed text shows its last words, up to about 28 characters.
+    static let typingLength = 28
 
     static func make(_ keys: [StudioRecording.Key], filter: KeystrokeFilter, excluded: [ExcludedKey] = []) -> [KeyLabel] {
         var labels: [KeyLabel] = []
-        var typing: KeyLabel?
-        func endTyping() { if let t = typing { labels.append(t) }; typing = nil }
+        // What has been typed so far, while the typing label is still showing.
+        var typed = "", typingUntil = -Double.infinity
         for key in keys.sorted(by: { $0.t < $1.t }) where !excluded.contains(where: { $0.matches(code: key.code, flags: key.flags) }) {
             let flags = NSEvent.ModifierFlags(rawValue: key.flags)
             let shortcut = flags.contains(.command) || flags.contains(.control) || flags.contains(.option)
             // Space is part of the text.
             let special = key.code == 49 ? nil : Self.special(key.code)
-            if !shortcut, special == nil, filter != .shortcuts {
-                // Plain typing becomes one growing label (its last 24 characters).
-                if var t = typing, key.t - t.end < 0.2 {
-                    t.text = String((t.text + key.chars).suffix(24))
-                    t.end = key.t + 1.2
-                    typing = t
-                } else {
-                    endTyping()
-                    typing = KeyLabel(start: key.t, end: key.t + 1.2, text: key.chars)
-                }
+            let typing = key.t < typingUntil
+            // Plain typing is one label that grows key by key, so it only ever shows what has been typed by then;
+            // Delete takes the last character back off it.
+            if !shortcut, filter != .shortcuts, special == nil || (key.code == 51 && typing && !typed.isEmpty) {
+                if special != nil { typed.removeLast() } else { typed = typing ? typed + key.chars : key.chars }
+                labels.append(KeyLabel(start: key.t, end: key.t + 1.2, text: tail(typed), continues: typing))
+                typingUntil = key.t + 1.4
                 continue
             }
-            // Text shows nothing else; Shortcuts only keys held with ⌘, ⌥ or ⌃.
+            typingUntil = -.infinity
+        // Text shows nothing else; Shortcuts only keys held with ⌘, ⌥ or ⌃.
             guard filter != .text, shortcut || filter == .all else { continue }
-            endTyping()
             var parts: [String] = []
             if flags.contains(.control) { parts.append("⌃") }
             if flags.contains(.option) { parts.append("⌥") }
@@ -444,10 +446,17 @@ nonisolated struct KeyLabel: Sendable {
             parts.append(special ?? key.chars.uppercased())
             labels.append(KeyLabel(start: key.t, end: key.t + 1.2, text: parts.joined(separator: " ")))
         }
-        endTyping()
         // A new label replaces the one before it.
         for i in labels.indices.dropLast() where labels[i].end > labels[i + 1].start { labels[i].end = labels[i + 1].start }
         return labels
+    }
+
+    /// The end of the typed text, starting at a word when it's cut ("…this is Philipp maybe").
+    static func tail(_ typed: String) -> String {
+        guard typed.count > typingLength else { return typed }
+        var end = typed.suffix(typingLength)
+        if let space = end.firstIndex(of: " "), end[space...].count > 1 { end = end[end.index(after: space)...] }
+        return "…" + end
     }
 
     static func special(_ code: Int) -> String? {
@@ -713,8 +722,9 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
         guard let i = lastIndex(labels, before: t, time: { $0.start }) else { return video }
         let label = labels[i]
         let fade = 0.15
-        guard t < label.end + fade else { return video }
-        let alpha = min(1, (t - label.start) / fade, (label.end + fade - t) / fade)
+        // (Typing deleted back to nothing shows nothing.)
+        guard t < label.end + fade, !label.text.isEmpty else { return video }
+        let alpha = min(1, label.continues ? 1 : (t - label.start) / fade, (label.end + fade - t) / fade)
         let short = min(size.width, size.height)
         let fontSize = max(12, (short * 0.042 * keystrokes.size).rounded())
         guard var pill = labelImage(label.text, fontSize: fontSize) else { return video }

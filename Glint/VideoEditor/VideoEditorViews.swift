@@ -898,10 +898,10 @@ private struct VideoTransport: View {
                     ScrubButton(symbol: "chevron.right", help: "Move forward through the video; hold to go faster (→)", direction: 1, actions: actions)
                 }
                 .padding(.trailing, 6)
-                HStack(spacing: 2) {
+                HStack(spacing: 0) {
                     zoomStep("minus", -1, help: "Zoom out a little")
                     Slider(value: $state.timelineZoom, in: 0...1) { state.timelineZoomEditing = $0 }.controlSize(.mini).frame(width: 100).tint(Color(white: 0.4))
-                        .padding(.horizontal, 4)
+                        .padding(.horizontal, 2)
                         .help("Zoom the timeline in or out (⌘+ / ⌘−)")
                     zoomStep("plus", 1, help: "Zoom in a little")
                 }
@@ -916,17 +916,37 @@ private struct VideoTransport: View {
         .padding(.horizontal, 20)
     }
 
-    /// The − and + beside the zoom slider: a small step each click (⌘− / ⌘+ take bigger ones).
+    /// The − and + beside the zoom slider: a small step each click (⌘− / ⌘+ take bigger ones). They look and react
+    /// like the ‹ › buttons next to them, with the whole 22 × 24 pt square clickable.
     private func zoomStep(_ symbol: String, _ direction: Double, help: String) -> some View {
         Button {
             state.timelineZoom = min(max(state.timelineZoom + direction * 0.04, 0), 1)
         } label: {
-            Image(systemName: symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(white: 0.6)).frame(width: 18, height: 18)
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 24)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(HoverButtonStyle())
-        .disabled(direction < 0 ? state.timelineZoom <= 0 : state.timelineZoom >= 1)
+        .buttonStyle(StepStyle())
         .help(help)
         .accessibilityLabel(help)
+    }
+
+    private struct StepStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View { StepBody(configuration: configuration) }
+    }
+
+    private struct StepBody: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(hovering ? Color.white : Color(white: 0.75))
+                .scaleEffect(configuration.isPressed ? 0.9 : (hovering ? 1.15 : 1))
+                .animation(.easeOut(duration: 0.15), value: hovering)
+                .animation(.spring(response: 0.22, dampingFraction: 0.65), value: configuration.isPressed)
+                .onHover { hovering = $0 }
+        }
     }
 
     private func transportButton(_ symbol: String, help: String, size: CGFloat = 15, action: @escaping () -> Void) -> some View {
