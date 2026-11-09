@@ -166,7 +166,8 @@ final class PreviewCanvasView: NSView {
     }
 }
 
-/// Studio Mode: an icon left of each timeline track (camera, zooms, video, pointer, keyboard), naming it on hover.
+/// Studio Mode: an icon left of each timeline track (camera, zooms, video, pointer, keyboard, captions), naming it
+/// in a tooltip.
 private struct TimelineTrackIcons: View {
     let hasCamera: Bool
     let hasCaptions: Bool
@@ -182,20 +183,16 @@ private struct TimelineTrackIcons: View {
         .overlay(alignment: .trailing) { Rectangle().fill(W.line).frame(width: 1) }
     }
 
+    /// Not a button: just the icon, with the track's name as its tooltip.
     private struct TrackIcon: View {
         let row: VideoTimelineView.TrackRow
-        @State private var hovering = false
 
         var body: some View {
             Image(systemName: row.symbol)
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(Color.white.opacity(hovering ? 0.95 : 0.5))
+                .foregroundStyle(Color.white.opacity(0.5))
                 .frame(width: 26, height: 18)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(hovering ? 0.1 : 0)))
-                .scaleEffect(hovering ? 1.08 : 1)
                 .contentShape(Rectangle())
-                .onHover { hovering = $0 }
-                .animation(.easeOut(duration: 0.15), value: hovering)
                 .help(row.title)
         }
     }
@@ -265,7 +262,7 @@ extension VideoEditorState.Section {
     @ViewBuilder var icon: some View {
         switch self {
         case .cursor: Image(systemName: "cursorarrow.rays").font(.system(size: 15, weight: .medium))
-        case .keystrokes: Image(systemName: "command.square.fill").font(.system(size: 17))
+        case .keystrokes: Image(systemName: "keyboard.fill").font(.system(size: 14))
         case .audio: Image(systemName: "speaker.wave.2.fill").font(.system(size: 14))
         case .captions: Image(systemName: "captions.bubble.fill").font(.system(size: 15))
         case .camera: Image(systemName: "video.fill").font(.system(size: 14))
@@ -901,12 +898,13 @@ private struct VideoTransport: View {
                     ScrubButton(symbol: "chevron.right", help: "Move forward through the video; hold to go faster (→)", direction: 1, actions: actions)
                 }
                 .padding(.trailing, 6)
-                HStack(spacing: 8) {
-                    Image(systemName: "minus").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(white: 0.45))
+                HStack(spacing: 2) {
+                    zoomStep("minus", -1, help: "Zoom out a little")
                     Slider(value: $state.timelineZoom, in: 0...1) { state.timelineZoomEditing = $0 }.controlSize(.mini).frame(width: 100).tint(Color(white: 0.4))
-                    Image(systemName: "plus").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(white: 0.45))
+                        .padding(.horizontal, 4)
+                        .help("Zoom the timeline in or out (⌘+ / ⌘−)")
+                    zoomStep("plus", 1, help: "Zoom in a little")
                 }
-                .help("Zoom the timeline in or out (⌘+ / ⌘−)")
             }
             .font(.system(size: 13, weight: .medium).monospacedDigit())
             HStack(spacing: 34) {
@@ -916,6 +914,19 @@ private struct VideoTransport: View {
             }
         }
         .padding(.horizontal, 20)
+    }
+
+    /// The − and + beside the zoom slider: a small step each click (⌘− / ⌘+ take bigger ones).
+    private func zoomStep(_ symbol: String, _ direction: Double, help: String) -> some View {
+        Button {
+            state.timelineZoom = min(max(state.timelineZoom + direction * 0.04, 0), 1)
+        } label: {
+            Image(systemName: symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color(white: 0.6)).frame(width: 18, height: 18)
+        }
+        .buttonStyle(HoverButtonStyle())
+        .disabled(direction < 0 ? state.timelineZoom <= 0 : state.timelineZoom >= 1)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private func transportButton(_ symbol: String, help: String, size: CGFloat = 15, action: @escaping () -> Void) -> some View {

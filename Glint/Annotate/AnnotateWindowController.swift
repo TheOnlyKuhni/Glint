@@ -123,7 +123,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 1000, height: 560)  // the head bar's tools and buttons and the sidebar fit
         window.title = document.fileName
-        if Defaults[Prefs.annotateAlwaysOnTop] { window.level = .floating }
+        if Defaults[Prefs.annotateAlwaysOnTop] { window.level = .floating }  // until Quick Access's layering takes over
         EditorTabbing.configure(window)
         super.init(window: window)
         window.delegate = self
@@ -146,7 +146,8 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.window?.level = Defaults[Prefs.annotateAlwaysOnTop] ? .floating : .normal
+                // The window's level has one owner, which also keeps Quick Access behind the editors.
+                QuickAccessManager.shared.updateLevels()
                 // "Grow canvas" is one setting for every editor (bottom bar button or Settings).
                 let grows = Defaults[Prefs.annotateExpandCanvas]
                 if self.doc.expandsCanvas != grows { self.doc.expandsCanvas = grows }

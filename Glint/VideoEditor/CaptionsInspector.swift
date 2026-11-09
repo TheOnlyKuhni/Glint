@@ -328,7 +328,11 @@ private struct CaptionRow: View {
                 .onSubmit(commit)
                 .onChange(of: focused) { if !focused { commit() } }
                 .onChange(of: selection) {
-                    if case .selection(let range)? = selection?.indices { cursor = text.distance(from: text.startIndex, to: range.lowerBound) }
+                    // The field's selection can still point into the text it had before (it's updated a moment
+                    // later), so only use it when it's a valid place in the current text.
+                    guard case .selection(let range)? = selection?.indices, range.lowerBound <= text.endIndex,
+                          let at = String.Index(range.lowerBound, within: text) else { return }
+                    cursor = text.distance(from: text.startIndex, to: at)
                 }
         }
         .padding(10)

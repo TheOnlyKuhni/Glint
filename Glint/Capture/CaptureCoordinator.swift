@@ -71,6 +71,7 @@ final class CaptureCoordinator {
             defer {
                 if hideIcons { DesktopIconsHider.shared.show(animated: false) }
                 isBusy = false
+                QuickAccessManager.shared.captureEnded()
             }
             guard let result else { CLIReply.cancelled(); return }
             // Give the window server a moment to remove the overlay before capturing.

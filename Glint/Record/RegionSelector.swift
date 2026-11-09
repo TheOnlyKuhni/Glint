@@ -53,7 +53,7 @@ final class RegionSelector {
         previousApp = NSWorkspace.shared.frontmostApplication
         window.alphaValue = 0
         window.orderFrontRegardless()
-        NSApp.activate()
+        QuickAccessManager.shared.activateForCapture()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         ShortcutManager.shared.setEscapeHandler { [weak self] in self?.cancel() }

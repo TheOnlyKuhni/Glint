@@ -51,6 +51,10 @@ final class QuickAccessManager {
                      NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 if let window = note.object as? NSWindow, !Self.isEditor(window) { return }
+                // A capture is over once Glint leaves the front or an editor is used again.
+                if note.name == NSApplication.didResignActiveNotification || note.name == NSWindow.didBecomeKeyNotification {
+                    MainActor.assumeIsolated { self?.captureFront = nil }
+                }
                 let closing = note.name == NSWindow.willCloseNotification
                 // After the editor's own close handling, so `isEditorOpen` is up to date.
                 DispatchQueue.main.async {
@@ -328,9 +332,10 @@ final class QuickAccessManager {
 
     /// Layering while Glint is in front with an editor open: the editors on top, then Quick Access, then other apps'
     /// windows. The cards stay floating panels throughout (as normal windows they'd show up in Mission Control).
-    private func updateLevels() {
+    /// This is the only place that sets the editors' levels (Always on top included), so nothing else can undo it.
+    func updateLevels() {
         let editors = NSApp.windows.filter { $0.isVisible && Self.isEditor($0) }
-        let raise = NSApp.isActive && !editors.isEmpty
+        let raise = NSApp.isActive && !editors.isEmpty && captureFront == nil
         let above = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         for window in editors {
             // Above the normal level, macOS leaves windows out of Mission Control unless they say they take part.
@@ -341,6 +346,40 @@ final class QuickAccessManager {
         // The color panel (custom colors) must stay above the raised editors.
         if raise, NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.level = NSWindow.Level(rawValue: above.rawValue + 1) }
         for panel in entries.map(\.panel) + [hideBar, restoreTab].compactMap({ $0 }) { panel.level = .floating }
+        // Activating Glint brought its editors forward: back behind the window that was in front.
+        if let front = captureFront {
+            for window in NSApp.orderedWindows.reversed() where editors.contains(window) { window.order(.below, relativeTo: front.window) }
+        }
+    }
+
+    // MARK: Captures
+
+    /// While a capture's overlay has Glint in front, the editors stay where they were: behind the app the user is
+    /// capturing (activating Glint would otherwise bring them forward and raise them over everything).
+    private var captureFront: (app: NSRunningApplication, window: Int)?
+
+    /// Activates Glint for a capture overlay (it needs the keyboard) without bringing the editors forward.
+    func activateForCapture() {
+        captureFront = nil
+        if let app = NSWorkspace.shared.frontmostApplication, app != .current,
+           NSApp.windows.contains(where: { $0.isVisible && Self.isEditor($0) }),
+           let window = Self.frontWindow(of: app.processIdentifier) {
+            captureFront = (app, window)
+        }
+        NSApp.activate()
+        updateLevels()
+    }
+
+    /// After a screenshot: the keyboard goes back to the app that was in front, and the editors stay behind it.
+    func captureEnded() {
+        guard let front = captureFront else { return }
+        if NSApp.isActive { front.app.activate() } else { captureFront = nil; updateLevels() }
+    }
+
+    /// The frontmost normal window of an app.
+    private static func frontWindow(of pid: pid_t) -> Int? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return list.first { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }?[kCGWindowNumber as String] as? Int
     }
 
     /// Clicking a card that's open in an editor brings that editor forward.

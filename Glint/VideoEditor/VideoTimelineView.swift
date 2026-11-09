@@ -38,7 +38,8 @@ final class VideoTimelineView: NSView {
         static let captionHeight: CGFloat = 24
     }
 
-    /// A Studio Mode track's icon and name, centered on its row (for the icons left of the timeline).
+    /// A Studio Mode track's icon and name, centered on its row (for the icons left of the timeline). The icons are
+    /// the editor's own: the rail's for camera, cursor, keystrokes and captions, the Magnifier's for zooms.
     struct TrackRow: Identifiable {
         let symbol: String
         let title: String
@@ -48,14 +49,14 @@ final class VideoTimelineView: NSView {
 
     static func trackRows(hasCamera: Bool, hasCaptions: Bool = false) -> [TrackRow] {
         var rows: [TrackRow] = []
-        if hasCamera { rows.append(TrackRow(symbol: "web.camera", title: "Camera", centerY: Metrics.cameraTop + Metrics.cameraHeight / 2)) }
+        if hasCamera { rows.append(TrackRow(symbol: "video.fill", title: "Camera", centerY: Metrics.cameraTop + Metrics.cameraHeight / 2)) }
         rows += [
             TrackRow(symbol: "plus.magnifyingglass", title: "Zooms", centerY: Metrics.zoomTop + Metrics.zoomHeight / 2),
             TrackRow(symbol: "film", title: "Video", centerY: Metrics.clipTop + Metrics.clipHeight / 2),
-            TrackRow(symbol: "cursorarrow.click", title: "Clicks, drags and scrolling", centerY: Metrics.pointerRow),
-            TrackRow(symbol: "keyboard", title: "Typing and shortcuts", centerY: Metrics.keyRow),
+            TrackRow(symbol: "cursorarrow.rays", title: "Clicks, drags and scrolling", centerY: Metrics.pointerRow),
+            TrackRow(symbol: "keyboard.fill", title: "Typing and shortcuts", centerY: Metrics.keyRow),
         ]
-        if hasCaptions { rows.append(TrackRow(symbol: "captions.bubble", title: "Captions", centerY: Metrics.captionTop + Metrics.captionHeight / 2)) }
+        if hasCaptions { rows.append(TrackRow(symbol: "captions.bubble.fill", title: "Captions", centerY: Metrics.captionTop + Metrics.captionHeight / 2)) }
         return rows
     }
 

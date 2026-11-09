@@ -12,6 +12,7 @@ import ScreenCaptureKit
 ///     glint://debug-click?x=…&y=…&right=1&pick=Remove   (a right-click; `pick` chooses from its menu)
 ///     glint://debug-drag?x1=…&y1=…&x2=…&y2=…[&mods=…]
 ///     glint://debug-move?x=…&y=…   (the pointer moves there: hover effects)
+///     glint://debug-scroll?x=…&y=…&dy=300   (scrolls the scroll view there; down is positive)
 ///     glint://debug-resize?w=…&h=…   (the window's size; "min" for its minimum)
 ///     glint://debug-screenshot?path=/tmp/x.png   (the main display, Glint's windows included)
 ///     glint://debug-film?dir=/tmp/f&x=&y=&w=&h=&seconds=2&fps=30   (frames of a rect, for animations)
@@ -193,6 +194,18 @@ enum DebugHooks {
                 view.mouseMoved(with: e)
                 glintLog("debug-move: \(type(of: view))")
             } else { glintLog("debug-move: no view") }
+        case "debug-scroll":
+            // Scrolls the scroll view under x,y by dy points (down is positive).
+            let p = point("x", "y")
+            var view = window.contentView?.hitTest(window.contentView!.convert(p, from: nil))
+            while let v = view, !(v is NSScrollView) { view = v.superview }
+            if let scroll = view as? NSScrollView {
+                let clip = scroll.contentView
+                var origin = clip.bounds.origin
+                origin.y += CGFloat(Double(query["dy"] ?? "") ?? 0) * (clip.isFlipped ? 1 : -1)
+                clip.scroll(to: origin)
+                scroll.reflectScrolledClipView(clip)
+            } else { glintLog("debug-scroll: no scroll view") }
         case "debug-resize":
             func side(_ key: String, _ min: CGFloat) -> CGFloat { query[key] == "min" ? min : CGFloat(Double(query[key] ?? "") ?? 0) }
             let size = CGSize(width: side("w", window.minSize.width), height: side("h", window.minSize.height))

@@ -97,7 +97,7 @@ final class SelectionOverlay {
             window.orderFrontRegardless()
         }
         ShortcutManager.shared.setEscapeHandler { [weak self] in self?.finish(nil) }
-        NSApp.activate()
+        QuickAccessManager.shared.activateForCapture()
         let mouseScreen = NSScreen.withMouse
         let keyWindow = overlayWindows.first { $0.screen == mouseScreen } ?? overlayWindows.first
         keyWindow?.makeKeyAndOrderFront(nil)
