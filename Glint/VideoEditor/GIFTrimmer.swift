@@ -49,6 +49,7 @@ final class GIFTrimmer: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         playerView.player = AVPlayer(url: movie)
+        playerView.player?.hideSystemSubtitles()
         playerView.controlsStyle = .inline
         playerView.showsFullScreenToggleButton = false
         playerView.frame = window.contentView?.bounds ?? .zero

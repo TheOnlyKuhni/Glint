@@ -127,6 +127,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     private init(project: VideoProject, sourceFile: URL) {
         self.project = project
         self.sourceFile = sourceFile
+        player.appliesMediaSelectionCriteriaAutomatically = false  // no subtitles of the player's own
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1180, height: 858),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
@@ -318,6 +319,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
                 editedFrames = (composition, thumbnailComposition)
                 timeline.setEditedSource(asset: composition, composition: thumbnailComposition)
                 let item = AVPlayerItem(asset: composition)
+                item.hideSystemSubtitles()
                 item.videoComposition = videoComposition
                 item.audioMix = mix
                 let wasPlaying = state.isPlaying
