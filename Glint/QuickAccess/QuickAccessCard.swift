@@ -210,7 +210,8 @@ final class HoverTrackingView: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { onHoverChanged?(true) }
+    // Tracking areas also fire under another app's window; only a pointer that's really on the panel counts.
+    override func mouseEntered(with event: NSEvent) { if window?.isTopmost(at: NSEvent.mouseLocation) != false { onHoverChanged?(true) } }
     override func mouseExited(with event: NSEvent) { onHoverChanged?(false) }
 }
 
@@ -330,4 +331,11 @@ struct DelayedHint: ViewModifier {
 
 extension View {
     func delayedHint(_ text: String, above: Bool = false) -> some View { modifier(DelayedHint(text: text, above: above)) }
+}
+
+extension NSWindow {
+    /// Whether this window is the one on top at a screen point (not covered there by another window).
+    func isTopmost(at point: NSPoint) -> Bool {
+        NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0) == windowNumber
+    }
 }

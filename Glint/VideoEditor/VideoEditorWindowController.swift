@@ -136,7 +136,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 960, height: VideoEditorContent.minWindowHeight)
         window.title = sourceFile.lastPathComponent
-        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.collectionBehavior.formUnion([.moveToActiveSpace, .fullScreenPrimary])
         EditorTabbing.configure(window)
         super.init(window: window)
         window.delegate = self

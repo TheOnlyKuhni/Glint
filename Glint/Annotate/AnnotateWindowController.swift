@@ -119,7 +119,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
                               backing: .buffered, defer: false)
         EditorHeadBar.configure(window)
         window.appearance = NSAppearance(named: .darkAqua)
-        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.collectionBehavior.formUnion([.moveToActiveSpace, .fullScreenPrimary])
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 1000, height: 560)  // the head bar's tools and buttons and the sidebar fit
         window.title = document.fileName

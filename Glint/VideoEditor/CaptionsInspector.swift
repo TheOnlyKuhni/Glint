@@ -291,6 +291,8 @@ private struct CaptionRow: View {
     @ObservedObject var state: VideoEditorState
     let actions: VideoEditorActions
     @State private var text = ""
+    /// The caption's text as the field last took it over: only text typed since then is saved.
+    @State private var synced = ""
     @State private var selection: TextSelection?
     /// Where the text cursor last was (clicking Split takes the focus, and the selection, away).
     @State private var cursor: Int?
@@ -343,8 +345,9 @@ private struct CaptionRow: View {
             Button("Back to Where It Was Said") { resetTiming() }.disabled(caption.matched == nil)
             Button("Delete Caption") { delete() }
         }
-        .onAppear { text = caption.text }
-        .onChange(of: caption.text) { if !focused { text = caption.text } }
+        .onAppear { sync() }
+        // Changed elsewhere (merged, split, retimed): the field follows unless something is being typed in it.
+        .onChange(of: caption.text) { if !focused || text == synced { sync() } }
     }
 
     private func icon(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
@@ -355,8 +358,14 @@ private struct CaptionRow: View {
         .help(help)
     }
 
+    private func sync() {
+        text = caption.text
+        synced = caption.text
+    }
+
     private func commit() {
-        guard let i = index, text != project.edit.captions[i].text else { return }
+        guard let i = index, text != synced, text != project.edit.captions[i].text else { return }
+        synced = text
         var next = project.edit
         next.captions[i].setText(text)
         if next.captions[i].words.isEmpty { next.captions.remove(at: i) }
@@ -378,6 +387,7 @@ private struct CaptionRow: View {
         project.edit = next
         // The field still shows the whole text: it would put the moved words back when it loses the focus.
         text = next.captions[i].text
+        synced = text
         cursor = nil
     }
 

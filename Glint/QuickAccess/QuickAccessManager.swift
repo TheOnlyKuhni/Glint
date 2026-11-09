@@ -292,7 +292,7 @@ final class QuickAccessManager {
         let now = Date()
         // Backs up the bars' tracking areas, which miss a pointer that's already inside when a bar appears.
         for bar in [hideBar, restoreTab].compactMap({ $0 }) where bar.isVisible {
-            let inside = bar.frame.contains(mouse)
+            let inside = bar.frame.contains(mouse) && bar.isTopmost(at: mouse)
             if bar.state.hovering != inside { bar.state.hovering = inside }
         }
         if isCollapsed, let tab = restoreTab {
@@ -331,21 +331,27 @@ final class QuickAccessManager {
     }
 
     /// Layering while Glint is in front with an editor open: the editors on top, then Quick Access, then other apps'
-    /// windows. The cards stay floating panels throughout (as normal windows they'd show up in Mission Control).
-    /// This is the only place that sets the editors' levels (Always on top included), so nothing else can undo it.
+    /// windows. The editors always stay at the normal level (only those can go full screen); the cards come down
+    /// from floating to sit right behind them instead. This is the only place that sets these levels (Always on
+    /// top included), so nothing else can undo it.
     func updateLevels() {
         let editors = NSApp.windows.filter { $0.isVisible && Self.isEditor($0) }
         let raise = NSApp.isActive && !editors.isEmpty && captureFront == nil
-        let above = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         for window in editors {
-            // Above the normal level, macOS leaves windows out of Mission Control unless they say they take part.
             window.collectionBehavior.insert(.managed)
-            let base: NSWindow.Level = window.windowController is AnnotateWindowController && Defaults[Prefs.annotateAlwaysOnTop] ? .floating : .normal
-            window.level = raise ? above : base
+            let onTop = window.windowController is AnnotateWindowController && Defaults[Prefs.annotateAlwaysOnTop]
+            window.level = onTop && !window.styleMask.contains(.fullScreen) ? .floating : .normal
         }
-        // The color panel (custom colors) must stay above the raised editors.
-        if raise, NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.level = NSWindow.Level(rawValue: above.rawValue + 1) }
-        for panel in entries.map(\.panel) + [hideBar, restoreTab].compactMap({ $0 }) { panel.level = .floating }
+        let panels = entries.map(\.panel) + [hideBar, restoreTab].compactMap({ $0 })
+        let backmost = NSApp.orderedWindows.last { editors.contains($0) && !$0.styleMask.contains(.fullScreen) }
+        for panel in panels {
+            if raise, let backmost {
+                panel.level = backmost.level
+                if panel.isVisible { panel.order(.below, relativeTo: backmost.windowNumber) }
+            } else {
+                panel.level = .floating
+            }
+        }
         // Activating Glint brought its editors forward: back behind the window that was in front.
         if let front = captureFront {
             for window in NSApp.orderedWindows.reversed() where editors.contains(window) { window.order(.below, relativeTo: front.window) }

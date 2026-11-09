@@ -176,10 +176,11 @@ private struct TimelineTrackIcons: View {
         ZStack(alignment: .topLeading) {
             Color(white: 0x17 / 255.0)
             ForEach(VideoTimelineView.trackRows(hasCamera: hasCamera, hasCaptions: hasCaptions)) { row in
-                TrackIcon(row: row).position(x: 22, y: row.centerY)
+                TrackIcon(row: row).position(x: 24.5, y: row.centerY)
             }
         }
-        .frame(width: 38)
+        // As wide as the rail above plus its line (49 + 1), so both lines sit at the same x at any window size.
+        .frame(width: 50)
         .overlay(alignment: .trailing) { Rectangle().fill(W.line).frame(width: 1) }
     }
 
