@@ -93,7 +93,7 @@ find_app() {
 # Starts Glint if needed. A link sent while it's still launching can get lost, so it waits a moment.
 ensure_running() {
   pgrep -x Glint >/dev/null && return
-  open -g -a $APP || die "couldn't open $APP"
+  open -g -a $APP --args --background || die "couldn't open $APP"
   local i
   for i in {1..40}; do pgrep -x Glint >/dev/null && break; sleep 0.25; done
   pgrep -x Glint >/dev/null || die "Glint didn't start"

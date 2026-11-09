@@ -213,7 +213,7 @@ private struct VideoRail: View {
     @ObservedObject var state: VideoEditorState
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             ForEach(VideoEditorState.Section.allCases, id: \.self) { section in
                 railButton(selected: state.section == section && state.selectedZoom == nil && state.selectedCamera == nil,
                            title: section.title, help: section.title) {
@@ -234,16 +234,44 @@ private struct VideoRail: View {
     }
 
     private func railButton(selected: Bool, title: String, help: String, @ViewBuilder icon: () -> some View, action: @escaping () -> Void) -> some View {
+        VideoRailButton(selected: selected, title: title, help: help, icon: AnyView(icon()), action: action)
+    }
+}
+
+/// The same button as the screenshot editor's rail: on hover a light square, a white icon that grows a little;
+/// pressing shrinks it.
+private struct VideoRailButton: View {
+    let selected: Bool
+    let title: String
+    let help: String
+    let icon: AnyView
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
         Button(action: action) {
-            icon()
-                .foregroundStyle(selected ? Color.white : Color(white: 0.55))
-                .frame(width: 30, height: 30)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? W.blue : .clear))
+            icon
+                .foregroundStyle(selected || hovering ? Color.white : Color(white: 0.55))
+                .scaleEffect(hovering && !selected ? 1.12 : 1)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(selected ? W.blue : Color.white.opacity(hovering ? 0.1 : 0)))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(HoverButtonStyle(lift: 1.1))
+        .buttonStyle(PressStyle())
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovering)
+        .animation(.easeOut(duration: 0.15), value: selected)
+        .onHover { hovering = $0 }
         .help(help)
         .accessibilityLabel(title)
+    }
+
+    private struct PressStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.9 : 1)
+                .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
+        }
     }
 }
 

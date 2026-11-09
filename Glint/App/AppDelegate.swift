@@ -26,6 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { HistoryStore.shared.prune() }
         }
         _ = Updater.shared
+        // Started by the user (Spotlight, Finder, Launchpad): the menu bar menu opens, as when Glint was already
+        // running. Not when started for a file or link, by the glint command (`--background`), or at login (Launch
+        // at login starts it within the first minutes after the Mac starts up).
+        let isDefault = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? false
+        let startedByUser = isDefault && !ProcessInfo.processInfo.arguments.contains("--background")
+            && ProcessInfo.processInfo.systemUptime > 180
+        if startedByUser { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in _ = self?.statusItemController?.openMenu() } }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -42,11 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         urls.forEach { AnnotateWindowController.open(url: $0) }
     }
 
-    /// Opening Glint again (Spotlight, Finder, the Dock) opens its menu bar menu; Settings only when the menu bar
-    /// icon is hidden, so there's still a way in.
+    /// Opening Glint again (Spotlight, Finder, the Dock) opens its menu bar menu, editors open or not; Settings only
+    /// when the menu bar icon is hidden, so there's still a way in.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // With an editor or Settings open, reopening just brings those forward (macOS does that).
-        if NSApp.windows.contains(where: { $0.isVisible && !($0 is NSPanel) && $0.styleMask.contains(.titled) }) { return true }
         if statusItemController?.openMenu() != true { SettingsWindowController.shared.show() }
         return true
     }
