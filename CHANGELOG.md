@@ -81,6 +81,11 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 - A card stayed "Being edited…" after pinning from the editor
 - A 2:3 background ratio zoomed the screenshot editor in instead of fitting the image
 
+### Removed
+
+- The Trash: the Capture History already keeps what you close in Quick Access until "Keep history" runs out.
+  Deleting from the history now deletes for good (Glint asks first)
+
 ## [0.2] – Beta
 
 The first public release.

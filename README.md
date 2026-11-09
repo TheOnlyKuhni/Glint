@@ -132,7 +132,7 @@ if you prefer.
   card down, swipe down with two fingers or click the bar above the stack to tuck it away; pull or swipe a card toward
   the screen edge to close it.
 - **Export formats:** screenshots as PNG, JPEG, HEIC or TIFF.
-- **Pin to the Screen** and **Capture History** to restore earlier captures, with a **Trash** for ones you remove.
+- **Pin to the Screen** and **Capture History** to restore earlier captures.
 - **Open images from Finder:** any PNG, JPEG, HEIC, TIFF, WebP or BMP opens in Annotate through **Open With**.
 - **Automation:** the `glint` command (`glint fullscreen` takes a screenshot and prints its path) for scripts and AI
   agents, and `glint://` links for Shortcuts, Raycast and others. See [docs/command-line.md](docs/command-line.md).
@@ -231,7 +231,7 @@ curl -fsSL https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/Tools/unins
 
 | Location | Contents |
 |---|---|
-| `~/Library/Application Support/Glint` | Capture History, Trash and saved edits |
+| `~/Library/Application Support/Glint` | Capture History and saved edits |
 | `~/Library/Preferences/com.philippk.glint.plist` | Settings |
 | `~/Library/Logs/Glint` | Log file |
 | `~/Library/Caches/com.philippk.glint` | Update cache |
