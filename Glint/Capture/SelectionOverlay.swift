@@ -18,15 +18,17 @@ struct WindowInfo {
     var pid: pid_t = 0
 
     /// On-screen windows of other apps, front to back.
-    static func onScreen() -> [WindowInfo] {
+    /// `ownWindows`: Glint's editors, Settings and History can be picked too (screenshots show them).
+    static func onScreen(ownWindows: Bool = false) -> [WindowInfo] {
         let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
         let list = raw as? [[String: Any]] ?? []
         let pid = ProcessInfo.processInfo.processIdentifier
+        let shown = ownWindows ? ScreenCapturer.shownOwnWindows : []
         let menuLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
         return list.compactMap { info in
             guard let id = info[kCGWindowNumber as String] as? CGWindowID,
                   let layer = info[kCGWindowLayer as String] as? Int, layer >= 0, layer < menuLevel,
-                  let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner != pid,
+                  let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner != pid || shown.contains(Int(id)),
                   (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
@@ -83,7 +85,7 @@ final class SelectionOverlay {
         self.mode = mode
         self.snapshots = snapshots
         self.showsSnapshot = showsSnapshot
-        self.windows = WindowInfo.onScreen()
+        self.windows = WindowInfo.onScreen(ownWindows: true)
     }
 
     func begin(completion: @escaping (SelectionResult?) -> Void) {
@@ -113,7 +115,7 @@ final class SelectionOverlay {
     /// window is always the one really on top, also after windows moved or Mission Control reordered them.
     fileprivate func currentWindows() -> [WindowInfo] {
         if !showsSnapshot, Date().timeIntervalSince(windowsRead) > 0.25 {
-            windows = WindowInfo.onScreen()
+            windows = WindowInfo.onScreen(ownWindows: true)
             windowsRead = Date()
         }
         return windows
@@ -145,7 +147,7 @@ final class SelectionOverlay {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, self.completion != nil else { return }
             let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            let list = WindowInfo.onScreen()
+            let list = WindowInfo.onScreen(ownWindows: true)
             guard let picked = list.first(where: { $0.pid == pid }) ?? list.first,
                   let screen = NSScreen.containing(cgRect: picked.frame) ?? NSScreen.main else {
                 for window in self.overlayWindows { window.ignoresMouseEvents = false; window.alphaValue = 1 }

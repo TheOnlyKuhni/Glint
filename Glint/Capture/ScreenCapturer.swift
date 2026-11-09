@@ -17,6 +17,12 @@ enum ScreenCapturer {
     /// Window titles of Glint windows that must stay visible in captures (e.g. the desktop-icon cover).
     static let includedOwnWindowTitle = "GlintDesktopCover"
 
+    /// Glint's own windows that belong in a screenshot like any other app's: the titled, non-panel ones (editors,
+    /// Settings, History). Overlays, Quick Access and toolbars are panels or borderless and stay out.
+    static var shownOwnWindows: Set<Int> {
+        Set(NSApp.windows.filter { $0.isVisible && !($0 is NSPanel) && $0.styleMask.contains(.titled) }.map(\.windowNumber))
+    }
+
     static func content() async throws -> SCShareableContent {
         try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     }
@@ -28,8 +34,9 @@ enum ScreenCapturer {
             throw CaptureError.noDisplay
         }
         let pid = ProcessInfo.processInfo.processIdentifier
+        let shown = shownOwnWindows
         let ownWindows = content.windows.filter {
-            $0.owningApplication?.processID == pid && $0.title != includedOwnWindowTitle
+            $0.owningApplication?.processID == pid && $0.title != includedOwnWindowTitle && !shown.contains(Int($0.windowID))
         }
         let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
         let scale = screen.backingScaleFactor
