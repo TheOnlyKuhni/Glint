@@ -74,7 +74,7 @@ Then open it:
 open -a /Applications/Glint.app
 ```
 
-Glint shows an icon in the menu bar. It has no Dock icon and no window on first launch.
+Glint shows an icon in the menu bar and opens its menu once. It has no Dock icon and no window.
 
 ### 5. Screen Recording permission
 
@@ -87,7 +87,7 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapt
 
 The pane is called **Screen & System Audio Recording** on recent macOS versions. Ask them to switch on
 **Glint** (or add it with **+**). macOS may ask to quit and reopen Glint; let it, or run
-`open -a Glint` again afterwards.
+`open -g -a Glint --args --background` afterwards (it starts without opening its menu).
 
 Glint asks for the other permissions only when a feature needs them, so there's nothing to do for them now:
 

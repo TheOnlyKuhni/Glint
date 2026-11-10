@@ -4,6 +4,10 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 
 ## [Unreleased]
 
+## [0.3] – Beta
+
+Captions, a magnifier and hand-drawn shapes, plus many fixes from testing.
+
 ### Added
 
 - Captions in the video editor: Generate Captions turns the speech into timed captions on your Mac, or add them by

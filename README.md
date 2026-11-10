@@ -7,7 +7,7 @@
 **Screenshots, screen recordings and annotations for macOS, right from the menu bar.**
 
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-blue)
-![Version 0.2 beta](https://img.shields.io/badge/version-0.2%20beta-orange)
+![Version 0.3 beta](https://img.shields.io/badge/version-0.3%20beta-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 <br>
@@ -27,7 +27,7 @@ macOS's built-in Screenshot app. Glint is not affiliated with, endorsed by or co
 names are trademarks of their respective owners.
 
 > [!NOTE]
-> Glint is in **beta (0.2)**. Expect rough edges, and please [report bugs](../../issues/new/choose). Questions and ideas
+> Glint is in **beta (0.3)**. Expect rough edges, and please [report bugs](../../issues/new/choose). Questions and ideas
 > are welcome in [Discussions](../../discussions).
 
 ## A quick look

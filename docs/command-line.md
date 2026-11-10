@@ -122,7 +122,7 @@ open -g "glint://open-annotate?filepath=/Users/me/Desktop/My%20Shot.png"
 `open` hands the link to macOS, which passes it to Glint (and starts Glint first if needed). `-g` keeps your current
 app in front. Good to know:
 
-- A link sent while Glint is still starting can get lost. Start it first (`open -a Glint`) and wait a few seconds.
+- A link sent while Glint is still starting can get lost. Start it first (`open -g -a Glint --args --background`) and wait a few seconds.
 - Glint doesn't answer a link. An unknown command beeps. A capture that's still running ignores the next one.
 - To find the result, look at the newest file in the Capture History (below), or use the `glint` command instead.
 
@@ -147,7 +147,7 @@ changing them, so it doesn't write its own values back, and open it again afterw
 ```bash
 osascript -e 'quit app "Glint"'
 defaults write com.philippk.glint screenshots.format -string jpeg
-open -a Glint
+open -g -a Glint --args --background
 ```
 
 | Key | Type | Values (default first) |
