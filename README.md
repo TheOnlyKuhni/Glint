@@ -35,24 +35,26 @@ names are trademarks of their respective owners.
 Annotate a screenshot, put it on a background, edit a recording, and keep your latest captures at hand. (The dashboard
 in these pictures is made up.)
 
-**Screenshot editor:** arrows, shapes, text, counters, highlighter and blur.
+**Screenshot editor:** arrows, shapes (also hand-drawn), text, counters, highlighter, blur and a magnifier for
+enlarged callouts.
 
-![The screenshot editor with annotations on a sample dashboard](docs/images/screenshot-editor.png)
+![The screenshot editor with hand-drawn shapes, a magnifier callout and other annotations on a sample dashboard](docs/images/screenshot-editor.png)
 
 **Backgrounds:** gradients, wallpapers, padding, shadow and round corners, with presets.
 
 ![The Background panel with a gradient behind the sample dashboard](docs/images/background.png)
 
-**Video editor:** trim, cut and zoom a recording, add a background, export as MP4, MOV or GIF.
+**Video editor:** trim, cut and zoom a recording, add captions and a background, export as MP4, MOV or GIF.
 
 ![The video editor with zooms on the timeline and a gradient background](docs/images/video-editor.png)
 
 **Studio Mode:** the screen, pointer, keys and camera are recorded separately, so all of it stays adjustable after
 recording. Automatic zooms follow your cursor, and you can change the cursor's size, style, smoothing and click effects,
 show or hide keystrokes, and move or resize the camera. The timeline shows every click, drag, scroll, shortcut and typed
-word, so you can find a moment quickly or remove what shouldn't be seen.
+word, so you can find a moment quickly or remove what shouldn't be seen. Captions turn what you say into text, here on
+your Mac, and stay editable on their own track.
 
-![Studio Mode with automatic zooms, a camera action and recorded clicks and keystrokes on the timeline](docs/images/studio-mode.png)
+![Studio Mode with automatic zooms, a camera action, recorded clicks and keystrokes, and captions on the timeline](docs/images/studio-mode.png)
 
 <table>
 <tr>
