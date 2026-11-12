@@ -422,8 +422,8 @@ enum RecordMenus {
         menu.addItem(.separator())
         for device in devices(.audio) {
             let item = ClosureMenuItem(title: device.localizedName) {
-                AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    DispatchQueue.main.async { if granted { Defaults[Prefs.recMicDevice] = device.uniqueID } }
+                OverlayWindow.requestAccess(for: .audio) { granted in
+                    if granted { Defaults[Prefs.recMicDevice] = device.uniqueID }
                 }
             }
             item.state = device.uniqueID == current ? .on : .off
@@ -440,12 +440,10 @@ enum RecordMenus {
         menu.addItem(check(ClosureMenuItem(title: "None") { Defaults[Prefs.recCamera] = ""; WebcamOverlay.shared.update() }, current.isEmpty))
         for device in devices(.video) {
             menu.addItem(check(ClosureMenuItem(title: device.localizedName) {
-                AVCaptureDevice.requestAccess(for: .video) { granted in
-                    DispatchQueue.main.async {
-                        guard granted else { return }
-                        Defaults[Prefs.recCamera] = device.uniqueID
-                        WebcamOverlay.shared.update()
-                    }
+                OverlayWindow.requestAccess(for: .video) { granted in
+                    guard granted else { return }
+                    Defaults[Prefs.recCamera] = device.uniqueID
+                    WebcamOverlay.shared.update()
                 }
             }, device.uniqueID == current))
         }
@@ -489,8 +487,12 @@ enum KeystrokePermission {
 
     /// Asks for the permission (adds Glint to the list) and explains where to turn it on.
     static func explain() {
+        OverlayWindow.whilePrompting { showExplanation() }
+    }
+
+    private static func showExplanation() {
         CGRequestListenEventAccess()
-        NSApp.activate()
+        NSApp.bringToFront()
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Glint needs Device Control and Data Access permissions to display keystrokes while recording"

@@ -108,7 +108,7 @@ final class WebcamOverlay {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: break
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in DispatchQueue.main.async { if granted { self.update() } } }
+            OverlayWindow.requestAccess(for: .video) { granted in if granted { self.update() } }
             return
         default:
             glintLog("camera: no access")

@@ -25,11 +25,11 @@ final class Updater {
             let alert = NSAlert()
             alert.messageText = "Updates aren't set up for this build"
             alert.informativeText = "This copy of Glint was built without an update key. Download new versions from GitHub."
-            NSApp.activate()
+            NSApp.bringToFront()
             alert.runModal()
             return
         }
-        NSApp.activate()
+        NSApp.bringToFront()
         controller.checkForUpdates(nil)
     }
 }

@@ -9,7 +9,7 @@ final class QuickLook: NSObject, QLPreviewPanelDataSource {
     static func show(_ url: URL) {
         shared.url = url
         guard let panel = QLPreviewPanel.shared() else { return }
-        NSApp.activate()
+        NSApp.bringToFront()
         panel.dataSource = shared
         panel.reloadData()
         panel.makeKeyAndOrderFront(nil)

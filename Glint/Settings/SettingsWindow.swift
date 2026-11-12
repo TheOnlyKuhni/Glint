@@ -106,7 +106,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSS
 
     func show(pane: SettingsPane? = nil) {
         if let pane { model.selection = pane }
-        NSApp.activate()
+        NSApp.bringToFront()
         // Glint is a menu bar app: bring the window in front of other apps' windows, on the current Space.
         window?.collectionBehavior.insert(.moveToActiveSpace)
         window?.makeKeyAndOrderFront(nil)

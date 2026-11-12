@@ -61,8 +61,8 @@ struct BackgroundPanel: View {
                     Text("Put the screenshot on a backdrop, with padding, shadow and round corners.")
                         .font(.system(size: 12)).foregroundStyle(Color(white: 0.55)).fixedSize(horizontal: false, vertical: true)
                 }
-                presetRow
                 noneButton
+                presetRow
                 gradientSection
                 wallpaperSection.id(wallpaperLoaded)
                 colorSection

@@ -615,7 +615,7 @@ enum ScrollingTutorial {
             }
         }
         w.center()
-        NSApp.activate()
+        NSApp.bringToFront()
         w.makeKeyAndOrderFront(nil)
         window = w
     }

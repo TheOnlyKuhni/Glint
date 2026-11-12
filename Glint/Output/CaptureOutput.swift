@@ -167,7 +167,7 @@ enum FileNaming {
     }
 
     static func askForName(defaultName: String) -> String? {
-        NSApp.activate()
+        NSApp.bringToFront()
         let alert = NSAlert()
         alert.messageText = "Name your capture"
         let field = NSTextField(string: defaultName)
@@ -221,7 +221,7 @@ enum FileSaver {
     }
 
     static func saveWithPanel(_ item: CaptureItem) -> URL? {
-        NSApp.activate()
+        NSApp.bringToFront()
         let panel = NSSavePanel()
         panel.nameFieldStringValue = item.fileURL.lastPathComponent
         panel.directoryURL = exportDirectory

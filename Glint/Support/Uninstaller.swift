@@ -22,7 +22,7 @@ enum Uninstaller {
     }
 
     static func confirmAndRun() {
-        NSApp.activate()
+        NSApp.bringToFront()
         let alert = NSAlert()
         alert.messageText = "Uninstall Glint?"
         alert.informativeText = """

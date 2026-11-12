@@ -138,7 +138,7 @@ final class RegionSelector {
     func runBelowAlert(_ alert: NSAlert) -> NSApplication.ModalResponse {
         let level = window.level
         window.level = .floating
-        NSApp.activate()
+        NSApp.bringToFront()
         let response = alert.runModal()
         window.level = level
         window.makeKeyAndOrderFront(nil)

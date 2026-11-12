@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Carbon.HIToolbox
 import QuartzCore
 
@@ -204,10 +205,64 @@ final class OverlayWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
         animationBehavior = .none
+        Self.live.add(self)
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // MARK: Stepping aside for prompts
+
+    /// Every overlay, so they can all step aside while a permission prompt is up.
+    private static let live = NSHashTable<OverlayWindow>.weakObjects()
+    private static var asideCount = 0
+    private var levelBeforeAside: NSWindow.Level?
+    private var wasKeyBeforeAside = false
+
+    /// Drops the visible overlays to the normal window level, so the system's permission prompts (microphone,
+    /// camera, keyboard monitoring) and Glint's own alerts show above them and can be clicked. Pair with `stepBack()`.
+    static func stepAside() {
+        asideCount += 1
+        guard asideCount == 1 else { return }
+        for window in live.allObjects where window.isVisible {
+            window.levelBeforeAside = window.level
+            window.wasKeyBeforeAside = window.isKeyWindow
+            window.level = .normal
+        }
+    }
+
+    /// Puts the overlays back on top once the last prompt is answered.
+    static func stepBack() {
+        guard asideCount > 0 else { return }
+        asideCount -= 1
+        guard asideCount == 0 else { return }
+        for window in live.allObjects {
+            guard let level = window.levelBeforeAside else { continue }
+            window.levelBeforeAside = nil
+            window.level = level
+            if window.isVisible, window.wasKeyBeforeAside { window.makeKeyAndOrderFront(nil) }
+        }
+    }
+
+    /// Runs `body` (a modal alert, say) with the overlays stepped aside.
+    @discardableResult
+    static func whilePrompting<T>(_ body: () -> T) -> T {
+        stepAside()
+        defer { stepBack() }
+        return body()
+    }
+
+    /// `AVCaptureDevice.requestAccess`, with the overlays stepped aside while macOS asks (only when it will ask).
+    static func requestAccess(for media: AVMediaType, completion: @escaping (Bool) -> Void) {
+        let asks = AVCaptureDevice.authorizationStatus(for: media) == .notDetermined
+        if asks { stepAside() }
+        AVCaptureDevice.requestAccess(for: media) { granted in
+            DispatchQueue.main.async {
+                if asks { stepBack() }
+                completion(granted)
+            }
+        }
+    }
 }
 
 /// Draws the selection UI for one display. Uses flipped (top-left origin) coordinates, matching CG.

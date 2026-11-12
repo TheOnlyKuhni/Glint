@@ -28,7 +28,7 @@ final class CaptureHistory {
         model.actions = HistoryActions(owner: self)
         self.window = window
         // SwiftUI hover (which selects items) only works while Glint is active.
-        NSApp.activate()
+        NSApp.bringToFront()
         window.alphaValue = 0
         window.makeKeyAndOrderFront(nil)
         NSAnimationContext.runAnimationGroup { $0.duration = 0.15; window.animator().alphaValue = 1 }

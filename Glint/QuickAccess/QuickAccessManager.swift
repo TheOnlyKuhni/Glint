@@ -372,7 +372,7 @@ final class QuickAccessManager {
            let window = Self.frontWindow(of: app.processIdentifier) {
             captureFront = (app, window)
         }
-        NSApp.activate()
+        NSApp.bringToFront()
         updateLevels()
     }
 
@@ -395,7 +395,7 @@ final class QuickAccessManager {
             if entry.item.isRecording {
                 VideoEditorWindowController.open(url: entry.item.fileURL)  // fronts the open editor
             } else if let window = entry.editor?.window {
-                NSApp.activate()
+                NSApp.bringToFront()
                 window.makeKeyAndOrderFront(nil)
             }
         }
@@ -496,7 +496,7 @@ final class QuickAccessManager {
     /// The close button: recordings ask first ("You may lose the file if it hasn't been saved.").
     private func closeRequested(_ entry: Entry) {
         guard entry.item.isRecording, Defaults[Prefs.recConfirmClose] else { close(entry); return }
-        NSApp.activate()
+        NSApp.bringToFront()
         let alert = NSAlert()
         alert.messageText = "Are you sure you want to close this recording?"
         alert.informativeText = "You may lose the file if it hasn't been saved."

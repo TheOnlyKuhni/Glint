@@ -44,7 +44,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         let controller = AnnotateWindowController(document: AnnotationDocument(image: image, scale: scale, fileName: name))
         open.append(controller)
         updateActivationPolicy()
-        NSApp.activate()
+        NSApp.bringToFront()
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         controller.window?.orderFrontRegardless()
@@ -92,7 +92,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     static func openFromPanel() {
-        NSApp.activate()
+        NSApp.bringToFront()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         if panel.runModal() == .OK, let url = panel.url { open(url: url) }
@@ -356,7 +356,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
                 image = try? await ScreenCapturer.capture(rect: rect, on: result.screen, showCursor: false)
             }
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate()
+            NSApp.bringToFront()
             guard let image, let scale = result?.screen.backingScaleFactor else { return }
             insertImage(image, pointSize: CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale))
         }

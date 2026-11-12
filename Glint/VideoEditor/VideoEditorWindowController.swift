@@ -66,7 +66,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
         if url.pathExtension.lowercased() == "gif" { GIFTrimmer.open(url: url, onClose: onClose); return }
         if let existing = open.first(where: { $0.sourceFile == url }) {
             existing.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate()
+            NSApp.bringToFront()
             if let window = existing.window { opened?(window) }
             return
         }
@@ -95,7 +95,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
             controller.onClose = onClose
             open.append(controller)
             NSApp.setActivationPolicy(Defaults[Prefs.annotateShowDockIcon] ? .regular : .accessory)
-            NSApp.activate()
+            NSApp.bringToFront()
             controller.window?.center()
             controller.showWindow(nil)
             if let window = controller.window { opened?(window) }
@@ -103,7 +103,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
             // right away: the window goes on top regardless, and asks again once the Dock icon is there.
             controller.window?.orderFrontRegardless()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NSApp.activate()
+                NSApp.bringToFront()
                 controller.window?.makeKeyAndOrderFront(nil)
             }
             controller.rebuild(force: true)
@@ -113,7 +113,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     static func openFromPanel() {
-        NSApp.activate()
+        NSApp.bringToFront()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie]
         if panel.runModal() == .OK, let url = panel.url { open(url: url) }

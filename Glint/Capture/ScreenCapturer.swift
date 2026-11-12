@@ -92,7 +92,7 @@ enum Permissions {
     static func ensureScreenRecording() -> Bool {
         if hasScreenRecording { return true }
         CGRequestScreenCaptureAccess()
-        NSApp.activate()
+        NSApp.bringToFront()
         let alert = NSAlert()
         alert.messageText = "Glint requires Screen Recording permission"
         alert.informativeText = """

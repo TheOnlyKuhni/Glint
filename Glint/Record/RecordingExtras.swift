@@ -100,7 +100,7 @@ enum DoNotDisturb {
         alert.informativeText = "macOS lets apps switch Focus only through Shortcuts. Glint adds two small shortcuts, “\(onShortcut)” and “\(offShortcut)”, and runs them when a recording starts and ends. Click “Add Shortcut” for each in the Shortcuts app."
         alert.addButton(withTitle: "Add Shortcuts")
         alert.addButton(withTitle: "Cancel")
-        NSApp.activate()
+        NSApp.bringToFront()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             for (name, on) in [(onShortcut, true), (offShortcut, false)] {

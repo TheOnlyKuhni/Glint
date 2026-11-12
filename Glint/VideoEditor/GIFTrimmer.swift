@@ -17,7 +17,7 @@ final class GIFTrimmer: NSWindowController, NSWindowDelegate {
     static func open(url: URL, onClose: (() -> Void)? = nil) {
         if let existing = open.first(where: { $0.sourceFile == url }) {
             existing.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate()
+            NSApp.bringToFront()
             return
         }
         Task {
@@ -27,7 +27,7 @@ final class GIFTrimmer: NSWindowController, NSWindowDelegate {
             let controller = GIFTrimmer(source: url, movie: movie, pixelSize: size)
             controller.onClose = onClose
             open.append(controller)
-            NSApp.activate()
+            NSApp.bringToFront()
             controller.window?.center()
             controller.showWindow(nil)
             controller.beginTrimming()

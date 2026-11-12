@@ -34,7 +34,7 @@ enum EditorTabbing {
         }
         chooser.showWindow(nil)
         chooser.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        NSApp.bringToFront()
     }
 
     /// The editor that replaces a chooser: it takes the chooser's place in the tabs.

@@ -24,7 +24,7 @@ final class PinManager {
     }
 
     func pinFromPanel() {
-        NSApp.activate()
+        NSApp.bringToFront()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
@@ -349,7 +349,7 @@ final class PinWindow: NSPanel, NSDraggingSource {
         add("Extract text") { [weak self] in self?.extractText() }
         add("Save As...", "s") { [weak self] in
             guard let self else { return }
-            NSApp.activate()
+            NSApp.bringToFront()
             _ = FileSaver.saveWithPanel(item)
         }
         menu.addItem(.separator())
