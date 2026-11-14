@@ -310,6 +310,14 @@ struct AboutSettingsView: View {
                     Text("Glint").font(.system(size: 26, weight: .semibold))
                     Text("\(Bundle.main.shortVersion) (\(Bundle.main.buildNumber))").foregroundStyle(.secondary)
                     Text("Screenshots, recordings and annotations for macOS.").font(.callout).foregroundStyle(.tertiary)
+                    Text("Free and open source. If Glint is useful to you, a small tip helps keep it going.")
+                        .font(.callout).foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                    Button { NSWorkspace.shared.open(SupportNote.url) } label: {
+                        Label("Support Glint", systemImage: "heart")
+                    }
+                    .controlSize(.small)
+                    .padding(.top, 6)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
@@ -324,7 +332,7 @@ struct AboutSettingsView: View {
                     NSWorkspace.shared.open(URL(string: "https://github.com/TheOnlyKuhni/Glint")!)
                 }
                 link("cup.and.saucer", "Support Glint on Ko-fi") {
-                    NSWorkspace.shared.open(URL(string: "https://ko-fi.com/kuhni")!)
+                    NSWorkspace.shared.open(SupportNote.url)
                 }
                 link("doc.text", "Acknowledgements") {
                     if let url = Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt") { NSWorkspace.shared.open(url) }

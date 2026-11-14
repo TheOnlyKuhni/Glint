@@ -183,6 +183,9 @@ enum Prefs {
 
     // MARK: State
     static let lastAreaRect = Pref(key: "state.lastAreaRect", defaultValue: "")
+    /// Captures delivered so far, counted until the support note has shown (see `SupportNote`).
+    static let captureCount = Pref(key: "state.captureCount", defaultValue: 0)
+    static let supportNoteShown = Pref(key: "state.supportNoteShown", defaultValue: false)
 }
 
 // MARK: - Option types

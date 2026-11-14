@@ -22,6 +22,7 @@ import ScreenCaptureKit
 ///     glint://debug-quick-access?path=&hover=1   (a file as a Quick Access card, with its buttons showing)
 ///     glint://debug-settings?pane=screenshots   (a Settings pane)
 ///     glint://debug-history   (opens the Capture History)
+///     glint://debug-support-note   (the 50th-capture support note, right away)
 ///     glint://debug-state   (logs the frontmost video editor's playhead and timeline scroll)
 ///     glint://debug-key?…&queue=1   (through the app's event queue, so event monitors see it)
 ///     glint://debug-drag?…&hold=1   (no mouse-up at the end), glint://debug-mouseup?x=&y=
@@ -49,6 +50,10 @@ enum DebugHooks {
         }
         if command == "debug-history" {
             CaptureHistory.shared.show()
+            return true
+        }
+        if command == "debug-support-note" {
+            SupportNote.show()
             return true
         }
         if command == "debug-preset" {

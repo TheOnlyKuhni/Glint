@@ -7,8 +7,12 @@
 **Screenshots, screen recordings and annotations for macOS, right from the menu bar.**
 
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-blue)
-![Version 0.3 beta](https://img.shields.io/badge/version-0.3%20beta-orange)
+![Version 1.0](https://img.shields.io/badge/version-1.0-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+<br>
+
+**[Download Glint 1.0](../../releases/latest)** · free · macOS 15 or later · Apple silicon and Intel
 
 <br>
 
@@ -27,45 +31,15 @@ macOS's built-in Screenshot app. Glint is not affiliated with, endorsed by or co
 names are trademarks of their respective owners.
 
 > [!NOTE]
-> Glint is in **beta (0.3)**. Expect rough edges, and please [report bugs](../../issues/new/choose). Questions and ideas
+> Glint is free and open source, made by one person. Please [report bugs](../../issues/new/choose); questions and ideas
 > are welcome in [Discussions](../../discussions).
 
-## A quick look
+## See it in action
 
-Annotate a screenshot, put it on a background, edit a recording, and keep your latest captures at hand. (The dashboard
-in these pictures is made up.)
+https://github.com/user-attachments/assets/c00b964d-317a-4ded-8038-74ec53f49b71
 
-**Screenshot editor:** arrows, shapes (also hand-drawn), text, counters, highlighter, blur and a magnifier for
-enlarged callouts.
-
-![The screenshot editor with hand-drawn shapes, a magnifier callout and other annotations on a sample dashboard](docs/images/screenshot-editor.png)
-
-**Backgrounds:** gradients, wallpapers, padding, shadow and round corners, with presets.
-
-![The Background panel with a gradient behind the sample dashboard](docs/images/background.png)
-
-**Video editor:** trim, cut and zoom a recording, add captions and a background, export as MP4, MOV or GIF.
-
-![The video editor with zooms on the timeline and a gradient background](docs/images/video-editor.png)
-
-**Studio Mode:** the screen, pointer, keys and camera are recorded separately, so all of it stays adjustable after
-recording. Automatic zooms follow your cursor, and you can change the cursor's size, style, smoothing and click effects,
-show or hide keystrokes, and move or resize the camera. The timeline shows every click, drag, scroll, shortcut and typed
-word, so you can find a moment quickly or remove what shouldn't be seen. Captions turn what you say into text, here on
-your Mac, and stay editable on their own track.
-
-![Studio Mode with automatic zooms, a camera action, recorded clicks and keystrokes, and captions on the timeline](docs/images/studio-mode.png)
-
-<table>
-<tr>
-<td width="50%"><strong>Quick Access:</strong> your latest captures float in the corner, to copy, save, annotate, pin or drag anywhere.</td>
-<td width="50%"><strong>Settings:</strong> formats, shortcuts, and what happens after each capture.</td>
-</tr>
-<tr>
-<td><img src="docs/images/quick-access.png" alt="Two Quick Access cards, one showing its Copy and Save buttons"></td>
-<td><img src="docs/images/settings.png" alt="The Screenshots pane of Glint's settings"></td>
-</tr>
-</table>
+All six features in under three minutes. Each one has its own short video in the [feature tour](#feature-tour) below,
+together with the settings it offers. (The Tidewater team and its numbers are made up.)
 
 ## Opening Glint for the first time
 
@@ -98,9 +72,16 @@ if you prefer.
 
 ## Contents
 
-- [A quick look](#a-quick-look)
+- [See it in action](#see-it-in-action)
 - [Opening Glint for the first time](#opening-glint-for-the-first-time)
 - [Features](#features)
+- [Feature tour](#feature-tour)
+  - [Area screenshots and annotations](#area-screenshots-and-annotations)
+  - [Scrolling Capture](#scrolling-capture)
+  - [Capture Text](#capture-text)
+  - [Studio Mode](#studio-mode)
+  - [Capture History](#capture-history)
+  - [Pin to the Screen](#pin-to-the-screen)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Getting started](#getting-started)
@@ -114,6 +95,8 @@ if you prefer.
 - [Acknowledgements](#acknowledgements)
 
 ## Features
+
+Everything Glint does, in short. The [feature tour](#feature-tour) shows six of them in action, with their settings.
 
 - **Capture:** area, window (on your wallpaper with padding and shadow, or transparent), full screen, previous area,
   self-timer, All-In-One (⇧⌘5), scrolling capture, freeze screen and crosshair with magnifier.
@@ -139,6 +122,183 @@ if you prefer.
 - **Automation:** the `glint` command (`glint fullscreen` takes a screenshot and prints its path) for scripts and AI
   agents, and `glint://` links for Shortcuts, Raycast and others. See [docs/command-line.md](docs/command-line.md).
 
+## Feature tour
+
+Each video shows one feature from start to finish. Below each video are the settings it uses, in **Settings** unless a
+different place is named.
+
+### Area screenshots and annotations
+
+https://github.com/user-attachments/assets/648d695d-075c-4f3c-9bb5-960cc4afb7cd
+
+Choose **Capture Area** in the menu bar (or press ⇧⌘4) and drag over any part of the screen. The capture lands in
+**Quick Access** in the corner. From there you can copy it, save it, pin it, drag it into another app, or click the
+pencil to open the editor. In the editor you add arrows, text and counters, highlight or blur private details, and put
+everything on a background. Then you drag the result straight into a chat or document.
+
+The same flow works for a **window** (press Space while selecting), the **full screen**, the **previous area**, a
+**timer**, and **All-In-One** (⇧⌘5), which offers every mode in one place.
+
+<details>
+<summary><strong>Settings for screenshots, Quick Access and the editor</strong></summary>
+
+**General**
+- Export location, play sounds and the shutter sound, hide desktop icons while capturing.
+- **After Capture**, separately for screenshots and recordings: show Quick Access, copy to the clipboard, save, open the
+  editor, pin to the screen (recordings: open the video editor). Any combination is allowed.
+
+**Screenshots**
+- File format: PNG, JPEG, HEIC or TIFF. Convert to the sRGB profile, scale Retina screenshots to 1×, add a 1px border.
+- A background preset applied to every screenshot, the timer interval, and showing the cursor (full screen and
+  timer only).
+- Freeze the screen while selecting; crosshair mode with a magnifier for pixel-exact selections.
+- Window screenshots: on the wallpaper with padding, or transparent (hold ⇧ while capturing for a transparent one
+  once), and the window's shadow. The wallpaper itself (your desktop picture, a color or an image) is set in
+  **Wallpaper**.
+
+**Quick Access**
+- Position (left or right), move to the screen the pointer is on, and the size of the cards.
+- Auto-close after an interval (it waits while an editor is open), close after dragging (hold ⌥ to keep the card),
+  and what the Save button does (⌥-click always asks for a place).
+
+**Annotate**
+- Reverse arrow direction, select objects after placing them, smooth drawing, hand-drawn shapes, shadows on objects,
+  grow the canvas to fit annotations, and remember whether the Background panel was open.
+- Window: always on top, show a Dock icon, open editors as tabs in one window.
+
+**Advanced:** the file name format (with date placeholders), or a name asked after every capture.
+
+</details>
+
+### Scrolling Capture
+
+https://github.com/user-attachments/assets/ba06ce3b-a999-4ca8-97c5-806ef5617fbe
+
+Choose **Scrolling Capture** in the menu bar and select the part of a window that scrolls, such as a web page, a chat
+or a long document. Click **Start Capture**. Then either click **Auto-Scroll** and let Glint scroll for you, or scroll
+slowly yourself. A live preview grows next to the selection while Glint stitches the page together. Click **Done** and
+you have the whole page in one image. Vertical and horizontal scrolling both work.
+
+<details>
+<summary><strong>Settings and tips</strong></summary>
+
+- The result follows **General → After Capture** like any screenshot, and uses the file format from **Screenshots**.
+- **Auto-Scroll** needs the Accessibility permission. Glint asks for it the first time you use it.
+- For a clean result, avoid animations or videos inside the selection, don't scroll too fast, and don't scroll back
+  up while capturing. **How it works** in the capture bar explains this with short animations.
+
+</details>
+
+### Capture Text
+
+https://github.com/user-attachments/assets/a7fa3704-0ad5-4ab6-9e64-f51926822386
+
+Choose **Capture Text (OCR)** and select anything with text in it: a picture, a video, a slide or a PDF. The text is
+copied as real, editable text, ready to paste. QR codes and barcodes are read too, and when the text contains a link,
+the notification offers to open it. Text recognition runs on your Mac; nothing is uploaded.
+
+<details>
+<summary><strong>Settings (Advanced → Text Recognition)</strong></summary>
+
+- **Language:** detect it automatically, or choose one.
+- **Keep line breaks** as in the original, or join the lines into paragraphs.
+- **Keep list formatting:** bullets become "-", numbering like "1." stays, and indented lines stay indented.
+- **Detect links:** when the text contains a link, the notification offers to open it.
+- **Copy text together with QR codes:** when off, only the code's content is copied.
+- A pinned screenshot can do the same: right-click it and choose **Extract text**.
+
+</details>
+
+### Studio Mode
+
+https://github.com/user-attachments/assets/1a822c6b-f416-4adb-83bb-af394b80aa07
+
+Studio Mode records the screen, pointer, keystrokes and camera separately, so you polish the video *after* recording
+instead of recording it again. Glint adds zooms that follow your clicks and typing. You can then:
+- restyle the cursor;
+- fine-tune every zoom;
+- give each scene its own camera layout;
+- add captions transcribed from your voice on your Mac.
+
+Turn it on in the recording bar (**Record Screen** in the menu bar), record as usual, and the video editor opens with
+everything editable.
+
+<details>
+<summary><strong>What you can change in the editor</strong></summary>
+
+- **Cursor:** show or hide it, size, style (macOS, Bold, Light, Touch), movement (natural or smooth), press and ripple
+  animations, hide it when it doesn't move or while typing.
+- **Zooms:** each zoom on the timeline has its own level, length and animation. It can follow the cursor or stay on
+  one spot. **Apply Zoom Level to All** changes every zoom at once.
+- **Camera:** show or hide it, position, size, shape, flip. Camera actions on the timeline switch it between full size,
+  resized and hidden for a scene. You can also make it shrink while zoomed in.
+- **Captions:** Classic, Outline, Social Media or Minimal. Show them as phrases or word by word, highlight the spoken
+  word, and edit or delete any caption. **Back to Where It Was Said** jumps to a caption's moment. The language can be
+  chosen.
+- **Keystrokes and clicks:** every click, drag, scroll, shortcut and typed word is on the timeline. Use it to find a
+  moment, or remove what shouldn't be seen.
+- **Everything from the regular video editor:** trim and cut, background, padding, corners and shadow, and export to
+  MP4, MOV or GIF with resolution, quality and an estimated file size. Subtitles can be saved as .srt.
+
+</details>
+
+<details>
+<summary><strong>Recording settings (Settings → Screen Recording)</strong></summary>
+
+- **General:** controls while recording, countdown, dim the screen, recording time in the menu bar, remember the last
+  selection, Do Not Disturb while recording.
+- **Cursor and keystrokes:** show the cursor, highlight clicks (color, ring or filled, size), show keystrokes
+  (position, size, display time).
+- **Studio Mode:** automatic zooms on clicks, drags, right-clicks, typing (three or more keys in a row) and scrolling,
+  following the cursor. The zoom level, and the style for new captions.
+- **Video:** frame rate, maximum resolution, scale Retina videos to 1×.
+- **Audio:** microphone and system audio, mono, and separate audio tracks.
+- **GIF:** resolution, quality, and optimized GIFs.
+
+</details>
+
+### Capture History
+
+https://github.com/user-attachments/assets/9ea8fa2a-11c8-4823-9d24-998817b56263
+
+Nothing gets lost. **Capture History** in the menu bar opens a panel with all recent captures, newest first. Filter by
+type (All, Screenshots, Videos, Studio, GIFs), move through them with the pointer or the arrow keys, and click one to
+bring it back to Quick Access. Hold ⌥ while clicking to keep the panel open.
+
+<details>
+<summary><strong>Settings and shortcuts</strong></summary>
+
+- **Keep history** (Settings → Advanced): 1, 3, 7, 14 or 30 days, or forever. Older captures are removed on their own,
+  even while Glint stays open for weeks.
+- Right-click a capture to open it in the editor (⌘E), pin it, Quick Look it (Space), copy it (⌘C), save it (⌘S), show
+  it in Finder, restore it (Return) or delete it. You can also drag a capture straight into another app.
+- **…** in the panel's corner has **Clear History**.
+- Studio Mode recordings stay editable in the history: they keep their pointer, keys and camera.
+
+</details>
+
+### Pin to the Screen
+
+https://github.com/user-attachments/assets/3976571e-c068-4261-a680-a2d5c5b53f9e
+
+Keep a screenshot floating above everything else as a reference while you work. Pin it from Quick Access (the pin
+button), from Capture History, as an automatic **After Capture** action, or open any image with **Pin to the Screen…**
+in the menu bar.
+
+<details>
+<summary><strong>What a pin can do</strong></summary>
+
+- Drag it to move it (or nudge it with the arrow keys, ⇧ for bigger steps). Scroll or pinch to zoom, and click the
+  zoom level for the options.
+- **Lock** makes it click-through: while the pointer is over a locked pin, the pin fades so you can work with what's
+  behind it.
+- Right-click it to open it in the editor, copy, share, extract its text, save it, send it to the back, change the
+  zoom or opacity, or toggle its shadow, rounded corners and border.
+- **Hide/Show Pinned Screenshots** hides all pins at once.
+- Rounded corners, shadow and border for new pins are set in **Settings → Advanced → Pinned Screenshots**.
+
+</details>
+
 ## Requirements
 
 - macOS 15 Sequoia or later
@@ -148,7 +308,7 @@ if you prefer.
 
 ### Download
 
-1. Download the latest `Glint-<version>.zip` from [Releases](../../releases).
+1. Download `Glint-<version>.zip` from the [latest release](../../releases/latest).
 2. Unzip it and move **Glint.app** to your **Applications** folder.
 3. Open Glint. macOS blocks it the first time: follow [these steps](#opening-glint-for-the-first-time).
 4. Glint lives in the menu bar; there's no Dock icon.

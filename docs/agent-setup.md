@@ -27,8 +27,8 @@ ls -d /Applications/Glint.app 2>/dev/null
 
 ### 2. Download the latest release
 
-Get it only from this repository's Releases page. Glint is in beta, so the newest release is marked as a
-pre-release and GitHub's "latest" endpoint skips it. List all releases (newest first) and take the first zip:
+Get it only from this repository's Releases page. Some releases are marked as pre-releases, which GitHub's "latest"
+endpoint skips, so list all releases (newest first) and take the first zip:
 
 ```bash
 mkdir -p "$TMPDIR/glint-install" && cd "$TMPDIR/glint-install"

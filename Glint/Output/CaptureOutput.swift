@@ -83,6 +83,7 @@ enum CaptureOutput {
         } else if opts.showQuickAccess {
             QuickAccessManager.shared.show(item)
         }
+        SupportNote.captureDelivered()
     }
 }
 
@@ -110,6 +111,7 @@ extension CaptureOutput {
         if opts.save { _ = FileSaver.saveToExportLocation(item) }
         if Defaults[Prefs.afterCapture(.openVideoEditor, .recording)] { VideoEditorWindowController.open(url: url) }
         if opts.showQuickAccess { QuickAccessManager.shared.show(item) }
+        SupportNote.captureDelivered()
     }
 
     /// A Studio Mode recording: the video (without the cursor) goes into the history with its `Studio` folder next to
@@ -134,6 +136,7 @@ extension CaptureOutput {
         glintLog("delivered studio recording \(url.lastPathComponent)")
         CLIReply.delivered(url)
         VideoEditorWindowController.open(url: url)
+        SupportNote.captureDelivered()
     }
 }
 

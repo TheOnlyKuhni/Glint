@@ -9,12 +9,10 @@ How updates work, the one-time setup, and the steps for each release.
 Everyone can see and download Glint; macOS blocks it on first open, and the README explains how to get past that.
 
 1. Raise the version and build, and move the `[Unreleased]` notes in `CHANGELOG.md` under the new version.
-2. Update the version badge and the beta note in `README.md`. Add a screenshot or GIF near the top.
+2. Update the version badge in `README.md`.
 3. Run `Tools/release.sh`, try the resulting zip, then attach it to a GitHub Release.
 4. Commit and push `appcast.xml` and the version bump.
-5. Make the repo public: `gh repo edit TheOnlyKuhni/Glint --visibility public --accept-visibility-change-consequences`.
-   Every commit becomes visible, including the email address on them.
-6. Check while signed out of GitHub: the README and its links, the zip's download, and the feed
+5. Check while signed out of GitHub: the README and its links, the zip's download, and the feed
    (`https://raw.githubusercontent.com/TheOnlyKuhni/Glint/main/appcast.xml`).
 
 ### Remove the macOS warning (paid)
@@ -31,13 +29,6 @@ first time" section from the README.
   signature. Glint only installs a zip whose signature matches the public key in `SUPublicEDKey`.
 - Without a key in `SUPublicEDKey`, the updater stays off. The key is in the repo, so builds from source do check for
   updates unless the builder removes it.
-
-> [!WARNING]
-> **Private repository:** GitHub serves `raw.githubusercontent.com` files and release downloads of a private repo
-> only to signed-in users, so Sparkle can't reach them. While the repo is private, testers update by downloading the
-> new zip from the Releases page (or by pulling and building). Updates start working as soon as the repo is public.
-> If you want automatic updates during the private beta, host `appcast.xml` and the zips somewhere public (for
-> example a separate public repo with only releases) and point `SUFeedURL` and the `REPO` in `Tools/release.sh` there.
 
 ## One-time setup
 

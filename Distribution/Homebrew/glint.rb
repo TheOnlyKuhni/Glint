@@ -1,8 +1,8 @@
 # Homebrew cask for Glint. Copy into a tap repository (github.com/TheOnlyKuhni/homebrew-glint, file Casks/glint.rb)
 # and update version + sha256 for each release (Tools/release.sh prints both). See docs/RELEASING.md.
 cask "glint" do
-  version "0.3"
-  sha256 "8233d0c5c639b13a4b8cb31004a43ea19720918ea6590f41a8f5db01ea2ddde9"
+  version "1.0"
+  sha256 "b7005a3e13779a16228ef18311648e90b5ab3c7ee687dbe850de35bd38ece8f0"
 
   url "https://github.com/TheOnlyKuhni/Glint/releases/download/v#{version}/Glint-#{version}.zip"
   name "Glint"

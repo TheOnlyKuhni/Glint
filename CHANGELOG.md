@@ -4,6 +4,21 @@ All notable changes to Glint are listed here. Versions follow [Semantic Versioni
 
 ## [Unreleased]
 
+## [1.0]
+
+The first stable release.
+
+### Added
+
+- About: a Support Glint button under the version, linking to Ko-fi
+- After your 50th capture, a small note says thanks and links to Ko-fi. It shows once, closes with its ✕, and
+  disappears by itself after half a minute
+
+### Fixed
+
+- Glint's windows (editors, Settings, Capture History) open in front instead of behind the app you were in
+- Microphone, camera and keyboard permission prompts, and Glint's own alerts, show above the capture overlays
+
 ## [0.3] – Beta
 
 Captions, a magnifier and hand-drawn shapes, plus many fixes from testing.
