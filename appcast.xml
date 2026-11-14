@@ -6,6 +6,15 @@
     <description>Glint updates</description>
     <language>en</language>
     <item>
+      <title>Version 1.0</title>
+      <pubDate>Sat, 14 Nov 2026 01:45:00 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/TheOnlyKuhni/Glint/releases/tag/v1.0</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/TheOnlyKuhni/Glint/releases/download/v1.0/Glint-1.0.zip" type="application/octet-stream" sparkle:edSignature="UWIoo95/5xMnW2+BMF2AnrGrJvQ2F41bdnOkmAoivojK91M4eEQkNaTIqYPe7oNlvUAoZSAY8vXhyIN/2cb/CA==" length="8478718"/>
+    </item>
+    <item>
       <title>Version 0.3</title>
       <pubDate>Tue, 10 Nov 2026 06:08:41 +0000</pubDate>
       <sparkle:version>3</sparkle:version>
