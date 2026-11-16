@@ -677,25 +677,8 @@ private struct BigActionButton: View {
 
 // MARK: Crop
 
-/// A group in the Crop & Resize panel: a divider (except for the first), its name and what it's for.
-private struct CropSection: View {
-    let title: String
-    let subtitle: String
-    var first = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if !first { Rectangle().fill(W.line).frame(height: 1).padding(.bottom, 14) }
-            Text(title).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white)
-            Text(subtitle).font(.system(size: 12)).foregroundStyle(Color(white: 0.55)).fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, first ? 0 : 10)
-        .padding(.bottom, 2)
-    }
-}
-
-/// Crop & Resize mode in three groups (crop: ratio, fill, snapping; resize: output size; rotate and flip); Cancel or
-/// Apply at the bottom.
+/// Crop & Resize mode, in the order it's used: rotate or flip first, then the crop (ratio, snapping), the fill
+/// around it, and the result's size; Cancel or Apply at the bottom. Explanations are tooltips.
 private struct CropPanel: View {
     @Bindable var state: CropState
     let doc: AnnotationDocument
@@ -703,25 +686,38 @@ private struct CropPanel: View {
     let actions: AnnotateSidebarActions
 
     private static let fills: [CropState.Fill] = [.transparent, .auto, .white, .gray, .black]
+    private static let landscape: [CropState.Ratio] = [.r4x3, .r3x2, .r16x9, .r16x10, .r191x1]
+    private static let portrait: [CropState.Ratio] = [.r4x5, .r3x4, .r2x3, .r9x16]
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    PanelTitle(title: "Crop & Resize", subtitle: "Crop picks the part to keep, Resize sets how many pixels the result has. Both apply together.")
-
-                    CropSection(title: "Crop", subtitle: "Drag the frame or its handles. Drag it past the screenshot to add room around it.", first: true)
-                    InspectorHeader("Aspect ratio")
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                        // Custom last; picking it opens its line below.
-                        ForEach(CropState.Ratio.allCases.filter { $0 != .customRatio } + [.customRatio]) { ratio in
-                            TileButton(selected: state.ratio == ratio, height: 28, help: ratio == .customRatio ? "Type your own ratio" : SocialRatio.hint(ratio.title).map { "\(ratio.title): \($0)" } ?? ratio.title) {
-                                actions.setCropRatio(ratio)
-                            } label: {
-                                Text(ratio == .customRatio ? "Custom" : ratio.title).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
-                            }
+                    PanelTitle(title: "Crop & Resize", subtitle: "Drag the frame or its handles. Past the screenshot's edge adds room around it.")
+                    HStack(spacing: 6) {
+                        TileButton(selected: false, height: 32, help: "Rotate 90° (annotations turn along)", action: actions.rotate) {
+                            Label("Rotate", systemImage: "rotate.right").font(.system(size: 12.5, weight: .medium))
+                        }
+                        TileButton(selected: doc.isFlipped, height: 32, help: doc.isFlipped ? "Flipped: flip back" : "Mirror horizontally (annotations go along)",
+                                   action: actions.flip) {
+                            Label("Flip", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right").font(.system(size: 12.5, weight: .medium))
                         }
                     }
+                    .padding(.top, 4)
+                    divider
+
+                    InspectorHeader("Aspect ratio")
+                    Picker("", selection: Binding(get: { state.ratio }, set: { actions.setCropRatio($0) })) {
+                        ForEach([CropState.Ratio.freeform, .original, .square]) { Text(title($0)).tag($0) }
+                        Divider()
+                        ForEach(Self.landscape) { Text(title($0)).tag($0) }
+                        Divider()
+                        ForEach(Self.portrait) { Text(title($0)).tag($0) }
+                        Divider()
+                        Text("Custom Ratio…").tag(CropState.Ratio.customRatio)
+                    }
+                    .labelsHidden()
+                    .help("The crop frame's shape (Freeform: any)")
                     if state.ratio == .customRatio {
                         HStack(spacing: 8) {
                             Text("Custom ratio").font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
@@ -738,39 +734,34 @@ private struct CropPanel: View {
                         }
                         .transition(.opacity)
                     }
+                    Toggle(isOn: $state.snapToEdges) {
+                        Text("Snap to edges").font(.system(size: 13.5)).foregroundStyle(.white)
+                    }
+                    .toggleStyle(BlueSwitch())
+                    .padding(.top, 4)
+                    .help("The frame snaps to the screenshot's edges and middle. Hold ⌘ while dragging to stop snapping for a moment.")
+                    divider
 
-                    InspectorHeader("Fill around the screenshot").padding(.top, 6)
-                    HStack(spacing: 8) {
+                    InspectorHeader("Fill around the screenshot", value: isCustom ? "Custom" : state.fill.title)
+                    HStack(spacing: 10) {
                         ForEach(Self.fills, id: \.title) { fill in
                             fillDot(fill)
                         }
                         Button(action: actions.customCropFill) {
                             Image(nsImage: SwatchImage.colorWheel(diameter: 22)).resizable().frame(width: 26, height: 26)
-                                .overlay(Circle().strokeBorder(isCustom ? Color.white : .clear, lineWidth: 2).padding(-3))
+                                .overlay(Circle().strokeBorder(isCustom ? W.blue : .clear, lineWidth: 2).padding(-3))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(HoverButtonStyle(lift: 1.12))
                         .help("Custom color…")
                     }
+                    .help("Shows where the frame reaches past the screenshot")
+                    divider
 
-                    Toggle(isOn: $state.snapToEdges) {
-                        Text("Snap to edges").font(.system(size: 13.5)).foregroundStyle(.white)
-                    }
-                    .toggleStyle(BlueSwitch())
-                    .padding(.top, 6)
-                    Text("Hold ⌘ while dragging to stop snapping for a moment.").font(.system(size: 12)).foregroundStyle(Color(white: 0.55))
-
-                    CropSection(title: "Resize", subtitle: "The result's size. Lower it for a smaller file, e.g. 50% to turn a Retina screenshot into standard size.")
-                    InspectorHeader("Image size")
+                    InspectorHeader("Size", value: "\(Int(state.outputPixels.width.rounded())) × \(Int(state.outputPixels.height.rounded())) px")
                     imageSize
-
-                    CropSection(title: "Rotate & Flip", subtitle: "Turns or mirrors the screenshot right away; annotations go along.")
-                    HStack(spacing: 6) {
-                        TileButton(selected: false, height: 32, help: "Rotate 90°", action: actions.rotate) {
-                            Label("Rotate", systemImage: "rotate.right").font(.system(size: 12.5, weight: .medium))
-                        }
-                        TileButton(selected: doc.isFlipped, height: 32, help: doc.isFlipped ? "Flipped: flip back" : "Flip horizontally", action: actions.flip) {
-                            Label("Flip", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right").font(.system(size: 12.5, weight: .medium))
-                        }
+                    ChoiceButtons(titles: ["Pixels", "Percent"], selected: state.outputInPercent ? 1 : 0,
+                                  helps: ["Type the size in pixels", "Type the size in percent, e.g. 50% turns a Retina screenshot into standard size"]) {
+                        state.outputInPercent = $0 == 1
                     }
                 }
                 .padding(EdgeInsets(top: 22, leading: 22, bottom: 16, trailing: 22))
@@ -790,6 +781,14 @@ private struct CropPanel: View {
         }
     }
 
+    private var divider: some View { Rectangle().fill(W.line).frame(height: 1).padding(.vertical, 6) }
+
+    /// "16:9 · YouTube, X, LinkedIn video": where a shape is used, after it.
+    private func title(_ ratio: CropState.Ratio) -> String {
+        let hint = SocialRatio.hint(ratio == .square ? "1:1" : ratio.title)
+        return hint.map { "\(ratio.title)  ·  \($0)" } ?? ratio.title
+    }
+
     private var isCustom: Bool { if case .custom = state.fill { true } else { false } }
 
     private func fillDot(_ fill: CropState.Fill) -> some View {
@@ -807,53 +806,42 @@ private struct CropPanel: View {
             .overlay(alignment: .bottomTrailing) {
                 if fill == .auto { Text("A").font(.system(size: 8, weight: .bold)).foregroundStyle(.white).padding(2).background(Circle().fill(Color.black.opacity(0.6))) }
             }
-            .overlay(Circle().strokeBorder(selected ? Color.white : .clear, lineWidth: 2).padding(-3))
+            .overlay(Circle().strokeBorder(selected ? W.blue : .clear, lineWidth: 2).padding(-3))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle(lift: 1.12))
         .help(fill == .auto ? "Auto: the screenshot's edge color" : fill.title)
     }
 
-    /// Width and height of the result, a lock that keeps their ratio, pixels or percent.
+    /// Width and height of the result with the lock that keeps their ratio, evenly across the panel.
     private var imageSize: some View {
         HStack(spacing: 6) {
             sizeField(width: true)
             Button { state.lockOutputRatio.toggle() } label: {
                 Image(systemName: state.lockOutputRatio ? "lock.fill" : "lock.open").font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 30, height: 30)
                     .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(state.lockOutputRatio ? W.blue : W.box))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle())
             .help(state.lockOutputRatio ? "Unlock the ratio" : "Lock the ratio")
             sizeField(width: false)
-            HStack(spacing: 2) {
-                ForEach([("px", false), ("%", true)], id: \.1) { title, percent in
-                    Button { state.outputInPercent = percent } label: {
-                        Text(title).font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(state.outputInPercent == percent ? Color.white : Color(white: 0.55))
-                            .frame(width: 24, height: 24)
-                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(state.outputInPercent == percent ? W.blue : .clear))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(2)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
         }
     }
 
     private func sizeField(width: Bool) -> some View {
         let px = state.outputPixels
         let value = state.outputInPercent ? ((width ? state.outputScaleX : state.outputScaleY) * 100).rounded() : (width ? px.width : px.height)
-        return HStack(spacing: 2) {
+        return HStack(spacing: 4) {
             Text(width ? "W" : "H").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color(white: 0.55))
-            CropDraftField(current: CropNumber.text(value), width: 38) { text in
+            CropDraftField(current: CropNumber.text(value), width: 44) { text in
                 guard let v = CropNumber.parse(text), v > 0 else { return }
                 state.setOutput(v, width: width)
             }
+            Text(state.outputInPercent ? "%" : "px").font(.system(size: 11)).foregroundStyle(Color(white: 0.45))
         }
-        .padding(.horizontal, 6)
-        .frame(height: 28)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity).frame(height: 30)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
+        .help(width ? "The result's width" : "The result's height")
     }
 }

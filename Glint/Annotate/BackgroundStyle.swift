@@ -88,9 +88,14 @@ struct BackgroundStyle: Codable, Equatable {
         let imageOrigin: CGPoint
     }
 
+    /// Padding and inset in points. Less than half a point is none: it showed as 0 but left a thin line of
+    /// background along one side of the screenshot.
+    var paddingPoints: CGFloat { padding * Self.maxPadding < 0.5 ? 0 : padding * Self.maxPadding }
+    var insetPoints: CGFloat { inset * Self.maxInset < 0.5 ? 0 : inset * Self.maxInset }
+
     func layout(for image: CGSize) -> Layout {
-        let pad = padding * Self.maxPadding
-        let ins = inset * Self.maxInset
+        let pad = paddingPoints
+        let ins = insetPoints
         let content = CGSize(width: image.width + ins * 2, height: image.height + ins * 2)
         // Canvas = card + padding on every side (expanded to a fixed ratio if chosen). Alignment only slides the card
         // across the free space until its edge meets the canvas edge; the sizes stay the same.
@@ -318,7 +323,7 @@ extension BackgroundStyle {
         // Where the screenshot reaches the frame's edge (no padding there), the backdrop stops one screen pixel short:
         // at zooms where that edge falls between pixels, the pixel was part backdrop and part screenshot, and the
         // backdrop's share showed as a thin line along the edge.
-        let ins = inset * Self.maxInset
+        let ins = insetPoints
         let card = CGRect(origin: .zero, size: imageSize).insetBy(dx: -ins, dy: -ins)
         // Only for opaque screenshots: a window capture's transparent corners must keep the backdrop behind them.
         let px = Self.isOpaqueAtCorner(baseImage) ? 1 / max(deviceScale, 1) : 0
@@ -380,7 +385,7 @@ extension BackgroundStyle {
     func clipScreenshot(imageSize: CGSize, ctx: CGContext) {
         let radii = cornerRadii(imageSize: imageSize)
         guard radii.contains(where: { $0 > 0 }) else { return }
-        let ins = inset * Self.maxInset
+        let ins = insetPoints
         ctx.addPath(Self.cornerPath(CGRect(origin: .zero, size: imageSize).insetBy(dx: -ins, dy: -ins), radii: radii))
         ctx.clip()
     }
@@ -392,10 +397,10 @@ extension BackgroundStyle {
     static let maxRadius: CGFloat = maxInset / (1 - 1 / 2.squareRoot())
 
     func cornerRadii(imageSize size: CGSize) -> [CGFloat] {
-        let ins = inset * Self.maxInset
+        let ins = insetPoints
         let card = CGSize(width: size.width + ins * 2, height: size.height + ins * 2)
         let r = max(0, min(corners * Self.maxRadius, min(card.width, card.height) / 2))
-        guard padding > 0 else { return [r, r, r, r] }
+        guard paddingPoints > 0 else { return [r, r, r, r] }
         let col = alignment % 3, row = alignment / 3
         let left = col == 0, right = col == 2, top = row == 0, bottom = row == 2
         return [(top || left) ? 0 : r, (top || right) ? 0 : r, (bottom || right) ? 0 : r, (bottom || left) ? 0 : r]

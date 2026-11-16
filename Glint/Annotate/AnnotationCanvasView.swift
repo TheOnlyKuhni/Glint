@@ -189,7 +189,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         }
         screenshotView.image = doc.baseImage
         screenshotView.frame = CGRect(origin: .zero, size: doc.imageSize)
-        let ins = (displayedBackground?.inset ?? 0) * Glint.BackgroundStyle.maxInset
+        let ins = displayedBackground?.insetPoints ?? 0
         let clip: CGPath? = displayedBackground.flatMap { bg -> CGPath? in
             let radii = bg.cornerRadii(imageSize: doc.imageSize)
             guard radii.contains(where: { $0 > 0 }) else { return nil }

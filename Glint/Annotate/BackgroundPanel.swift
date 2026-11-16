@@ -474,7 +474,9 @@ private struct ValueSlider: View {
                     .font(.system(size: 12.5, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(.white)
             }
-            StepSlider(value: Binding(get: { Double(value) }, set: { value = CGFloat($0) }), range: 0...1, ticks: 5)
+            // A value that shows as "0" is 0: a sliver of padding (0.3pt, shown as 0) left a thin line of background
+            // along one side of the screenshot.
+            StepSlider(value: Binding(get: { Double(value) }, set: { value = CGFloat($0) * range < 0.5 ? 0 : CGFloat($0) }), range: 0...1, ticks: 5)
         }
     }
 }
