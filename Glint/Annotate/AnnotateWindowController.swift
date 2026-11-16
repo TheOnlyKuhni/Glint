@@ -133,7 +133,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         canvas.onToolShortcut = { [weak self] tool in self?.pickTool(tool) }
         canvas.onCommand = { [weak self] command in self?.handle(command) }
         doc.onSelectionChange = { [weak self] in self?.selectionChanged() }
-        canvas.onGeometryChange = { [weak self] in self?.zoomToFit() }
+        canvas.onGeometryChange = { [weak self] before in self?.canvasResized(imageOriginBefore: before) }
         // Space-bar panning works wherever keyboard focus is in the window (except while typing text).
         spaceMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             guard let self, event.window === self.window, event.keyCode == 49, self.canvas.textView == nil,
@@ -560,6 +560,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Sets the zoom and recenters the image (the clip view centers it when it fits; otherwise scroll to the middle).
     /// `atStart`: show the top (left) end instead of the middle (long scrolling captures).
     func setZoom(_ value: CGFloat, atStart: Bool = false) {
+        zoomIsFit = false
         if doc.isCropping { cropZoom(value); return }
         let clamped = min(max(value, scrollView.minMagnification), scrollView.maxMagnification)
         scrollView.magnification = clamped
@@ -574,7 +575,23 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         bottomModel.zoom = clamped
     }
 
+    /// Whether the zoom is "fit" (the last zoom came from Zoom to Fit): then a canvas change fits again.
+    private var zoomIsFit = true
+
+    /// The canvas grew or shrank (padding, ratio, Grow Canvas…): at "fit" it fits again; otherwise the zoom stays and
+    /// the image keeps its place on screen.
+    private func canvasResized(imageOriginBefore before: CGPoint) {
+        guard !zoomIsFit, !doc.isCropping else { zoomToFit(); return }
+        let after = doc.layout.imageOrigin, clip = scrollView.contentView
+        var origin = clip.bounds.origin
+        origin.x += after.x - before.x
+        origin.y += after.y - before.y
+        clip.scroll(to: clip.constrainBoundsRect(CGRect(origin: origin, size: clip.bounds.size)).origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
     func zoomToFit() {
+        defer { zoomIsFit = true }
         if doc.isCropping { cropZoomToFit(); return }
         let available = scrollView.frame.size
         // Scale until one side of the canvas meets the edge of the visible area.
@@ -599,6 +616,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc private func magnificationChanged() {
+        zoomIsFit = false  // pinched
         bottomModel.zoom = scrollView.magnification
         if doc.isCropping { updateCropRoom(growOnly: true) }
     }

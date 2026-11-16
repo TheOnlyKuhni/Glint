@@ -315,7 +315,19 @@ extension BackgroundStyle {
         let layout = layout(for: imageSize)
         let canvas = CGRect(origin: CGPoint(x: -layout.imageOrigin.x, y: -layout.imageOrigin.y), size: layout.canvasSize)
         ctx.saveGState()
-        ctx.clip(to: canvas)
+        // Where the screenshot reaches the frame's edge (no padding there), the backdrop stops one screen pixel short:
+        // at zooms where that edge falls between pixels, the pixel was part backdrop and part screenshot, and the
+        // backdrop's share showed as a thin line along the edge.
+        let ins = inset * Self.maxInset
+        let card = CGRect(origin: .zero, size: imageSize).insetBy(dx: -ins, dy: -ins)
+        // Only for opaque screenshots: a window capture's transparent corners must keep the backdrop behind them.
+        let px = Self.isOpaqueAtCorner(baseImage) ? 1 / max(deviceScale, 1) : 0
+        var area = canvas
+        if card.minX <= canvas.minX + 0.01 { area.origin.x += px; area.size.width -= px }
+        if card.maxX >= canvas.maxX - 0.01 { area.size.width -= px }
+        if card.minY <= canvas.minY + 0.01 { area.origin.y += px; area.size.height -= px }
+        if card.maxY >= canvas.maxY - 0.01 { area.size.height -= px }
+        ctx.clip(to: area)
         switch fill {
         case .gradient(let index):
             BackgroundPalette.drawGradient(index, in: canvas, ctx: ctx)
@@ -337,8 +349,6 @@ extension BackgroundStyle {
             ctx.fill(canvas)
         }
 
-        let ins = inset * Self.maxInset
-        let card = CGRect(origin: .zero, size: imageSize).insetBy(dx: -ins, dy: -ins)
         let radii = cornerRadii(imageSize: imageSize)
         let cardPath = Self.cornerPath(card, radii: radii)
         for layer in BackgroundShadow.layers(shadow) {
@@ -424,6 +434,26 @@ extension BackgroundStyle {
         if tl > 0 { p.addArc(tangent1End: CGPoint(x: r.minX, y: r.minY), tangent2End: CGPoint(x: r.minX + tl, y: r.minY), radius: tl) }
         p.closeSubpath()
         return p
+    }
+
+    private static var opaqueCache: [(image: CGImage, opaque: Bool)] = []
+
+    /// Whether the screenshot is opaque (no alpha, or an opaque top-left pixel; window captures have transparent
+    /// rounded corners there).
+    static func isOpaqueAtCorner(_ image: CGImage) -> Bool {
+        if [.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo) { return true }
+        if let cached = opaqueCache.first(where: { $0.image === image }) { return cached.opaque }
+        var pixel: [UInt8] = [0, 0, 0, 0]
+        var opaque = true
+        if let corner = image.cropping(to: CGRect(x: 0, y: 0, width: 1, height: 1)),
+           let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.draw(corner, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            opaque = pixel[3] > 250
+        }
+        if opaqueCache.count > 8 { opaqueCache.removeFirst() }
+        opaqueCache.append((image, opaque))
+        return opaque
     }
 
     private static var edgeColorCache: [(image: CGImage, color: CGColor)] = []

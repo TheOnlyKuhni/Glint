@@ -108,14 +108,17 @@ struct BackgroundPanel: View {
     private var noneButton: some View {
         Button {
             // None keeps the slider values and shows no backdrop (transparent).
-            if var bg = doc.background { bg.fill = .transparent; doc.background = bg }
+            if var bg = doc.background { bg.fill = .transparent; doc.changeBackground(to: bg) }
         } label: {
+            // Like the video editor's None: a dark box, with a blue border while it's the choice.
             let none = doc.background == nil || doc.background?.fill == .transparent
-            Text("None").font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(none ? W.blue : W.box))
+            Text("None").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 40)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(W.box))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(none ? W.blue : .clear, lineWidth: 2.5))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Hover darkens, press shrinks: like the video editor's None button.
+        .buttonStyle(HoverButtonStyle())
         .help("No background")
     }
 
@@ -218,7 +221,7 @@ struct BackgroundPanel: View {
         // The old blurred-wallpaper fills become the wallpaper with a blur level.
         if case .blurred = bg.fill { bg.fill = .wallpaper }
         bg.blur = level
-        doc.background = bg
+        doc.changeBackground(to: bg)
         BackgroundStyle.lastUsed = bg
     }
 
@@ -273,7 +276,7 @@ struct BackgroundPanel: View {
                 BrightnessSlider(value: Binding(get: { doc.background?.brightness ?? 1 }, set: { value in
                     var bg = doc.background ?? BackgroundStyle(fill: .transparent)
                     bg.brightness = abs(value - 1) < 0.005 ? nil : value
-                    doc.background = bg
+                    doc.changeBackground(to: bg)
                     BackgroundStyle.lastUsed = bg
                 }))
                 .frame(maxWidth: .infinity)
@@ -316,7 +319,7 @@ struct BackgroundPanel: View {
         return Button {
             var bg = doc.background ?? BackgroundStyle(fill: .transparent)
             bg.alignment = index
-            doc.background = bg
+            doc.changeBackground(to: bg)
         } label: {
             RoundedRectangle(cornerRadius: 3).strokeBorder(Color.secondary, lineWidth: 1)
                 .frame(width: 24, height: 18)
@@ -352,9 +355,7 @@ struct BackgroundPanel: View {
                 // With "None", moving a slider starts a transparent background.
                 var bg = doc.background ?? BackgroundStyle(fill: .transparent)
                 bg[keyPath: keyPath] = newValue
-                // Window captures: dragging Padding to 0 switches to the transparent background.
-                if doc.isWindowCapture, keyPath == \BackgroundStyle.padding, (newValue as? CGFloat) == 0 { bg.fill = .transparent }
-                doc.background = bg
+                doc.changeBackground(to: bg)
                 BackgroundStyle.lastUsed = bg
             }
         )
@@ -363,14 +364,14 @@ struct BackgroundPanel: View {
     private func select(_ fill: BackgroundStyle.Fill) {
         var bg = doc.background ?? BackgroundStyle(fill: fill)
         bg.fill = fill
-        doc.background = bg
+        doc.changeBackground(to: bg)
         BackgroundStyle.lastUsed = bg
     }
 
     private func apply(_ preset: BackgroundStyle) {
         var preset = preset
         preset.name = nil
-        doc.background = preset
+        doc.changeBackground(to: preset)
         BackgroundStyle.lastUsed = preset
     }
 

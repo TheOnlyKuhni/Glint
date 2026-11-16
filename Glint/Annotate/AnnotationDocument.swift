@@ -31,6 +31,35 @@ final class AnnotationDocument {
     var fontSize: CGFloat = 30
     /// Backdrop from the Background tool; nil = none.
     var background: BackgroundStyle? { didSet { isDirty = true; updateExpansion() } }
+
+    /// A background change made in the Background panel: undoable. A slider drag (changes less than 0.6 s apart) is
+    /// one step, so ⌘Z goes back to how it was before the drag began.
+    func changeBackground(to value: BackgroundStyle?) {
+        guard value != background else { return }
+        if !backgroundUndoOpen {
+            backgroundUndoOpen = true
+            let before = background
+            undoManager.registerUndo(withTarget: self) { $0.restoreBackground(before) }
+            undoManager.setActionName("Change Background")
+        }
+        backgroundUndoClose?.cancel()
+        let close = DispatchWorkItem { [weak self] in self?.backgroundUndoOpen = false }
+        backgroundUndoClose = close
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: close)
+        background = value
+    }
+
+    @ObservationIgnored private var backgroundUndoOpen = false
+    @ObservationIgnored private var backgroundUndoClose: DispatchWorkItem?
+
+    private func restoreBackground(_ value: BackgroundStyle?) {
+        let current = background
+        undoManager.registerUndo(withTarget: self) { $0.restoreBackground(current) }
+        undoManager.setActionName("Change Background")
+        backgroundUndoOpen = false
+        background = value
+        BackgroundStyle.lastUsed = value
+    }
     var isBackgroundPanelOpen = false
     /// Window capture (raw window with its own shadow): only Padding is adjustable in the Background tool.
     var isWindowCapture = false

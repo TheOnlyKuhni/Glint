@@ -6,7 +6,8 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
     let doc: AnnotationDocument
     var onToolShortcut: ((AnnotateTool) -> Void)?
     var onCommand: ((String) -> Void)?  // "close", "background", "crop"
-    var onGeometryChange: (() -> Void)?
+    /// The canvas changed size: with the image's previous origin in it (to keep the image where it was on screen).
+    var onGeometryChange: ((CGPoint) -> Void)?
 
     private enum Handle {
         case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left, start, end, bend
@@ -131,10 +132,11 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
                 CATransaction.commit()
                 if self.frame.size != layout.canvasSize || self.bounds.origin != CGPoint(x: -layout.imageOrigin.x, y: -layout.imageOrigin.y) {
                     // Resize and refit in one transaction so no frame shows the old zoom with the new size.
+                    let before = CGPoint(x: -self.bounds.origin.x, y: -self.bounds.origin.y)
                     CATransaction.begin()
                     CATransaction.setDisableActions(true)
                     self.updateGeometry()
-                    self.onGeometryChange?()
+                    self.onGeometryChange?(before)
                     CATransaction.commit()
                     self.enclosingScrollView?.displayIfNeeded()
                 }
