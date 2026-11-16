@@ -176,7 +176,7 @@ final class AnnotationDocument {
     func detectText() {
         let image = baseImage, scale = scale
         Task {
-            textLines = await TextRecognizer.recognize(image, scale: scale).map(\.rect)
+            textLines = await TextRecognizer.recognize(image, scale: scale, accurate: false).map(\.rect)  // only the line boxes
         }
     }
 

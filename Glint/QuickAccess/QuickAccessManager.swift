@@ -69,6 +69,14 @@ final class QuickAccessManager {
 
     func show(_ item: CaptureItem) { _ = add(item) }
 
+    /// Restoring a capture (History, Restore Last Capture): one that's still showing isn't added a second time; the
+    /// stack comes back instead when it's tucked away or hidden.
+    func restore(_ item: CaptureItem) {
+        guard isShowing(item.fileURL) else { show(item); return }
+        if isHidden { toggleVisibility() }
+        if isCollapsed { expand() } else { restartTimers() }
+    }
+
     /// Shows the capture and opens it in its editor right away (the "Open Annotate tool" after-capture action).
     func showEditing(_ item: CaptureItem) { annotate(add(item)) }
 
@@ -98,7 +106,7 @@ final class QuickAccessManager {
         panel.contentView = container
         panel.dragFileURL = item.fileURL
         panel.dragImage = item.nsImage
-        panel.onDragEnded = { [weak self] dropped in self?.dragEnded(entry, dropped: dropped) }
+        panel.onDragEnded = { [weak self] dropped, option in self?.dragEnded(entry, dropped: dropped, option: option) }
         panel.onDoubleClick = { [weak self] in self?.annotate(entry) }
         panel.onClick = { [weak self] in self?.clicked(entry) }
         panel.dismissTowardRight = Defaults[Prefs.quickAccessPosition] == .right
@@ -473,8 +481,9 @@ final class QuickAccessManager {
         picker.show(relativeTo: CGRect(x: view.bounds.maxX - 20, y: 4, width: 16, height: 16), of: view, preferredEdge: .maxX)
     }
 
-    private func dragEnded(_ entry: Entry, dropped: Bool) {
-        guard dropped, Defaults[Prefs.quickAccessCloseAfterDragging], !NSEvent.modifierFlags.contains(.option) else { return }
+    /// ⌥ held at any point of the drag keeps the card (screenshots and recordings alike).
+    private func dragEnded(_ entry: Entry, dropped: Bool, option: Bool) {
+        guard dropped, Defaults[Prefs.quickAccessCloseAfterDragging], !option else { return }
         close(entry)
     }
 
@@ -620,7 +629,9 @@ final class QuickAccessManager {
 final class QuickAccessPanel: NSPanel, NSDraggingSource {
     var dragFileURL: URL?
     var dragImage: NSImage?
-    var onDragEnded: ((Bool) -> Void)?
+    /// Dropped somewhere; ⌥ was held during the drag.
+    var onDragEnded: ((Bool, Bool) -> Void)?
+    private var optionDuringDrag = false
     var onDoubleClick: (() -> Void)?
     /// A single click that didn't turn into a drag.
     var onClick: (() -> Void)?
@@ -752,6 +763,7 @@ final class QuickAccessPanel: NSPanel, NSDraggingSource {
         pbItem.setPropertyList([url.path], forType: NSPasteboard.PasteboardType("NSFilenamesPboardType"))
         let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
         dragItem.setDraggingFrame(view.bounds, contents: dragImage)
+        optionDuringDrag = event.modifierFlags.contains(.option)
         let session = view.beginDraggingSession(with: [dragItem], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
     }
@@ -760,8 +772,13 @@ final class QuickAccessPanel: NSPanel, NSDraggingSource {
         [.copy, .generic, .link]
     }
 
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        if NSEvent.modifierFlags.contains(.option) { optionDuringDrag = true }
+    }
+
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        onDragEnded?(!operation.isEmpty)
+        onDragEnded?(!operation.isEmpty, optionDuringDrag || NSEvent.modifierFlags.contains(.option))
+        optionDuringDrag = false
     }
 }
 

@@ -31,7 +31,7 @@ final class CaptureCoordinator {
         case .annotateLastScreenshot:
             if let last = HistoryStore.shared.lastCapture { AnnotateWindowController.open(item: last) } else { NSSound.beep() }
         case .restoreLastCapture:
-            if let last = HistoryStore.shared.lastCapture { QuickAccessManager.shared.show(last) } else { NSSound.beep() }
+            if let last = HistoryStore.shared.lastCapture { QuickAccessManager.shared.restore(last) } else { NSSound.beep() }
         case .openHistory: CaptureHistory.shared.show()
         case .recordScreen: RecordingController.shared.toggle()
         case .recordStudio: RecordingController.shared.toggle(studio: true)

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Vision
+import os
 
 /// On-device text recognition (Vision) for Capture Text and the text-aware highlighter.
 enum TextRecognizer {
@@ -10,23 +11,46 @@ enum TextRecognizer {
         let rect: CGRect
     }
 
-    /// Uses the fast recognizer: on macOS 27 the accurate model currently never returns (tested with both Vision APIs).
-    static func recognize(_ image: CGImage, scale: CGFloat) async -> [Line] {
+    /// `accurate` reads bullets and dashes (the fast model drops them). On macOS 27.0 the accurate model sometimes
+    /// never returned, so after a few seconds without an answer the fast one reads the image instead.
+    static func recognize(_ image: CGImage, scale: CGFloat, accurate: Bool = true) async -> [Line] {
         let languages = preferredLanguages
-        return await Task.detached(priority: .userInitiated) {
+        if accurate, let lines = await run(image, scale: scale, level: .accurate, languages: languages, timeout: 4) { return lines }
+        return await run(image, scale: scale, level: .fast, languages: languages, timeout: nil) ?? []
+    }
+
+    /// nil when `timeout` passed first (the request is cancelled).
+    nonisolated private static func run(_ image: CGImage, scale: CGFloat, level: VNRequestTextRecognitionLevel,
+                                        languages: [String], timeout: Double?) async -> [Line]? {
+        await withCheckedContinuation { (cont: CheckedContinuation<[Line]?, Never>) in
             let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .fast
+            request.recognitionLevel = level
             request.usesLanguageCorrection = true
             request.recognitionLanguages = languages
-            try? VNImageRequestHandler(cgImage: image).perform([request])
-            let size = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
-            return (request.results ?? []).compactMap { obs -> Line? in
-                guard let text = obs.topCandidates(1).first?.string else { return nil }
-                let b = obs.boundingBox  // normalized, bottom-left origin
-                let rect = CGRect(x: b.minX * size.width, y: (1 - b.maxY) * size.height, width: b.width * size.width, height: b.height * size.height)
-                return Line(text: text, rect: rect)
+            let answered = OSAllocatedUnfairLock(initialState: false)
+            // The first of the result and the timeout answers.
+            func answer(_ lines: [Line]?) -> Bool {
+                let first = answered.withLock { done -> Bool in defer { done = true }; return !done }
+                if first { cont.resume(returning: lines) }
+                return first
             }
-        }.value
+            DispatchQueue.global(qos: .userInitiated).async {
+                try? VNImageRequestHandler(cgImage: image).perform([request])
+                let size = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
+                let lines = (request.results ?? []).compactMap { obs -> Line? in
+                    guard let text = obs.topCandidates(1).first?.string else { return nil }
+                    let b = obs.boundingBox  // normalized, bottom-left origin
+                    let rect = CGRect(x: b.minX * size.width, y: (1 - b.maxY) * size.height, width: b.width * size.width, height: b.height * size.height)
+                    return Line(text: text, rect: rect)
+                }
+                _ = answer(lines)
+            }
+            if let timeout {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    if answer(nil) { request.cancel(); glintLog("ocr: \(level == .accurate ? "accurate" : "fast") timed out") }
+                }
+            }
+        }
     }
 
     /// Contents of the QR codes and barcodes in the image, top to bottom.

@@ -444,6 +444,8 @@ private final class RegionView: NSView {
         case kVK_Escape: owner?.cancel()
         case kVK_Return, kVK_ANSI_KeypadEnter: owner?.confirm(option: event.modifierFlags.contains(.option))
         case kVK_Space:
+            // Held down, Space repeats: only the first press switches (like the screenshot overlay).
+            guard !event.isARepeat else { return }
             windowMode.toggle()
             windows = WindowInfo.onScreen()
             hoveredWindow = nil

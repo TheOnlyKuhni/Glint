@@ -124,7 +124,7 @@ struct HistoryActions {
     func restore(_ entry: HistoryStore.Entry, keepOpen: Bool = false) {
         guard let item = item(entry) else { return }
         if !keepOpen { owner?.close() }
-        QuickAccessManager.shared.show(item)
+        QuickAccessManager.shared.restore(item)
     }
 
     func editVideo(_ entry: HistoryStore.Entry) {

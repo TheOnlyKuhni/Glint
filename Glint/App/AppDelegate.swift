@@ -27,12 +27,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         _ = Updater.shared
         // Started by the user (Spotlight, Finder, Launchpad): the menu bar menu opens, as when Glint was already
-        // running. Not when started for a file or link, by the glint command (`--background`), or at login (Launch
-        // at login starts it within the first minutes after the Mac starts up).
+        // running. Not when started for a file or link, by the glint command (`--background`), or at login.
         let isDefault = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? false
-        let startedByUser = isDefault && !ProcessInfo.processInfo.arguments.contains("--background")
-            && ProcessInfo.processInfo.systemUptime > 180
+        let startedByUser = isDefault && !ProcessInfo.processInfo.arguments.contains("--background") && !Self.launchedAtLogin
         if startedByUser { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in _ = self?.statusItemController?.openMenu() } }
+    }
+
+    /// Launch at login (or the windows reopened at login) starts Glint in the first minutes after the Mac starts up
+    /// or the user logs in. Logging in can take longer than any time since startup (FileVault, slow sign-in), so
+    /// the time counts from the user's session start: when the Dock started, which happens at login.
+    private static var launchedAtLogin: Bool {
+        let window: TimeInterval = 240
+        if ProcessInfo.processInfo.systemUptime < window { return true }
+        guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
+              let started = processStart(dock.processIdentifier) else { return false }
+        return Date().timeIntervalSince(started) < window
+    }
+
+    private static func processStart(_ pid: pid_t) -> Date? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let t = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(t.tv_sec) + TimeInterval(t.tv_usec) / 1_000_000)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
