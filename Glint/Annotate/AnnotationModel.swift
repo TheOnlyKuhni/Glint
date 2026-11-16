@@ -124,6 +124,8 @@ struct Annotation: Identifiable, Equatable, Codable {
     var spotKeepsAnnotations: Bool?
     var spotSoftness: CGFloat?
     var spotBorder: Bool?
+    /// Redact: only the text inside the box is covered (nil = the whole box).
+    var redactTextOnly: Bool?
     /// Curved and double arrows: the point the arrow bends through (set by dragging its middle handle).
     /// nil = straight (the default).
     var control: CGPoint?
@@ -219,6 +221,7 @@ struct Annotation: Identifiable, Equatable, Codable {
         copy.spotKeepsAnnotations = spotKeepsAnnotations
         copy.spotSoftness = spotSoftness
         copy.spotBorder = spotBorder
+        copy.redactTextOnly = redactTextOnly
         copy.control = control
         copy.magCenter = magCenter
         copy.magZoom = magZoom

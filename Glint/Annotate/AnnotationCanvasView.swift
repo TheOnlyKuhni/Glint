@@ -119,7 +119,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
 
     private func observeDocument() {
         withObservationTracking {
-            _ = doc.annotations; _ = doc.selectedID; _ = doc.editingTextID; _ = doc.tool; _ = doc.background; _ = doc.counter; _ = doc.imageSize; _ = doc.expansion; _ = doc.baseImage; _ = doc.expandsCanvas
+            _ = doc.annotations; _ = doc.selectedID; _ = doc.editingTextID; _ = doc.tool; _ = doc.background; _ = doc.counter; _ = doc.imageSize; _ = doc.expansion; _ = doc.baseImage; _ = doc.expandsCanvas; _ = doc.textLines
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -403,6 +403,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         window?.makeFirstResponder(self)
         stateBeforeDrag = doc.annotations
         doc.isInteracting = true
+        doc.placedID = nil  // a new click ends the "just placed" object
         // "Inverse arrow direction" puts the head where the drag started; ⌥ flips the setting for this arrow.
         arrowAnchor = p
 
@@ -501,7 +502,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             }
             var a = Annotation(kind: kind, start: p, end: p, color: style.color, thickness: style.thickness)
             switch kind {
-            case .redact: a.variant = doc.redactMode.rawValue; a.amount = doc.redactAmount
+            case .redact: a.variant = doc.redactMode.rawValue; a.amount = doc.redactAmount; a.redactTextOnly = doc.redactTextOnly ? true : nil
             case .spotlight:
                 a.variant = doc.spotlightShape.rawValue
                 a.spotBrightness = doc.spotlightBrightness
@@ -698,9 +699,9 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
             case .line, .arrow: hypot(a.end.x - a.start.x, a.end.y - a.start.y) < 4
             default: a.rect.width < 4 || a.rect.height < 4
             }
-            if tooSmall { doc.annotations.removeAll { $0.id == id } } else if selectPlaced { doc.selectedID = id }
+            if tooSmall { doc.annotations.removeAll { $0.id == id } } else if selectPlaced { doc.selectedID = id } else { doc.placedID = id }
         }
-        if let id = placedID, selectPlaced { doc.selectedID = id }
+        if let id = placedID { if selectPlaced { doc.selectedID = id } else { doc.placedID = id } }
         placedID = nil
         alignTarget = nil
         if case .resizing(let id, _) = dragState { normalize(id) }
@@ -953,6 +954,15 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         return false
     }
 
+    /// A click beside the canvas (the workspace around it): ends text editing and clears the selection.
+    func clickedOutside() {
+        guard !doc.isCropping else { return }
+        if textView != nil { endTextEditing() }
+        doc.selectedID = nil
+        doc.placedID = nil
+        window?.makeFirstResponder(self)
+    }
+
     func endTextEditing() {
         guard let tv = textView, let id = doc.editingTextID else { return }
         tv.removeFromSuperview()
@@ -965,6 +975,7 @@ final class AnnotationCanvasView: NSView, NSTextViewDelegate {
         } else if !Defaults[Prefs.annotateSelectPlaced], placedTextID == id, doc.selectedID == id {
             // A new text stays unselected once it's written, like other new objects.
             doc.selectedID = nil
+            doc.placedID = id
         }
         placedTextID = nil
         if doc.annotations != stateBeforeDrag { registerUndo(from: stateBeforeDrag, name: "Text") }

@@ -27,7 +27,9 @@ struct AnnotateBottomBar: View {
     }
 
     let model: AnnotateBottomBarModel
+    let doc: AnnotationDocument
     let actions: Actions
+    @State private var showsLinks = false
 
     var body: some View {
         ZStack {
@@ -73,6 +75,17 @@ struct AnnotateBottomBar: View {
                 Spacer()
 
                 HStack(spacing: 8) {
+                    if !doc.links.isEmpty {
+                        Button { showsLinks.toggle() } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "link").font(.system(size: 13, weight: .semibold))
+                                Text("\(doc.links.count)").monospacedDigit()
+                            }
+                        }
+                        .buttonStyle(BarButtonStyle(isOn: showsLinks))
+                        .help(doc.links.count == 1 ? "1 link found in the image" : "\(doc.links.count) links found in the image")
+                        .popover(isPresented: $showsLinks, arrowEdge: .top) { LinksList(links: doc.links) }
+                    }
                     BarIconButton(symbol: "pin.fill", help: "Pin to the screen", action: actions.pin)
                     BarIconButton(symbol: "doc.on.doc.fill", help: "Copy to clipboard (⇧⌘C)", action: actions.copy)
                 }
@@ -88,6 +101,74 @@ struct AnnotateBottomBar: View {
             Rectangle().fill(Color(white: 0x30 / 255.0)).frame(height: 1)
         }
         .environment(\.colorScheme, .dark)
+    }
+}
+
+/// The links found in the image: open or copy each, or copy them all.
+private struct LinksList: View {
+    let links: [URL]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(links.count == 1 ? "1 Link" : "\(links.count) Links").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                if links.count > 1 {
+                    Button("Copy All") { copy(links.map(Self.display).joined(separator: "\n")) }
+                        .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            Divider()
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(links, id: \.self) { LinkRow(url: $0, title: Self.display($0)) }
+                }
+                .padding(6)
+            }
+            .frame(maxHeight: 280)
+        }
+        .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Mail links without "mailto:".
+    static func display(_ url: URL) -> String {
+        url.scheme?.lowercased() == "mailto" ? String(url.absoluteString.dropFirst("mailto:".count)) : url.absoluteString
+    }
+
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func copy(_ text: String) { Self.copy(text) }
+}
+
+private struct LinkRow: View {
+    let url: URL
+    let title: String
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: url.scheme?.lowercased() == "mailto" ? "envelope" : "globe")
+                .font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+            Text(title).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(title)
+            Button { LinksList.copy(title) } label: { Image(systemName: "doc.on.doc") }
+                .buttonStyle(.borderless).help("Copy link")
+            Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.right.square") }
+                .buttonStyle(.borderless).help("Open link")
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2) { NSWorkspace.shared.open(url) }
     }
 }
 

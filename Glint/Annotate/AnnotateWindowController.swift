@@ -178,6 +178,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         let clip = CenteringClipView()
         clip.drawsBackground = false
+        clip.onClickOutside = { [weak self] in self?.canvas.clickedOutside() }
         scrollView.contentView = clip
         scrollView.documentView = canvas
         scrollView.drawsBackground = false
@@ -207,7 +208,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         buttons.sizingOptions = [.intrinsicContentSize]
         let head = EditorHeadBar(center: tools, centerInset: Self.sideWidth, trailing: buttons)
 
-        let bar = NSHostingView(rootView: AnnotateBottomBar(model: bottomModel, actions: bottomActions))
+        let bar = NSHostingView(rootView: AnnotateBottomBar(model: bottomModel, doc: doc, actions: bottomActions))
         bottomBar = bar
         bar.translatesAutoresizingMaskIntoConstraints = false
 
@@ -662,6 +663,14 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
 
 /// Keeps the canvas centered when it is smaller than the visible area.
 final class CenteringClipView: NSClipView {
+    /// A click on the workspace around the canvas.
+    var onClickOutside: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        if let documentView, !documentView.frame.contains(convert(event.locationInWindow, from: nil)) { onClickOutside?() }
+        super.mouseDown(with: event)
+    }
+
     override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
         var rect = super.constrainBoundsRect(proposedBounds)
         guard let documentView else { return rect }
@@ -746,6 +755,7 @@ extension AnnotateWindowController {
             setArrowStyle: { [weak self] style in self?.doc.arrowStyle = style; self?.restyleSelection() },
             setTextStyle: { [weak self] style in self?.doc.textStyle = style; self?.restyleSelection() },
             setRedactMode: { [weak self] mode in self?.doc.redactMode = mode; self?.restyleSelection() },
+            setRedactTextOnly: { [weak self] on in self?.doc.redactTextOnly = on; self?.restyleSelection() },
             setSpotlightShape: { [weak self] shape in self?.doc.spotlightShape = shape; self?.restyleSelection() },
             setCounterStyle: { [weak self] style in self?.doc.changeCounter { $0.style = style } },
             setCounterStart: { [weak self] start in self?.doc.counter.start = start },
@@ -790,7 +800,7 @@ extension AnnotateWindowController {
 
     /// Applies the sidebar's options to the selected object (the options shown are always the selection's).
     fileprivate func restyleSelection() {
-        if doc.selected != nil || doc.editingTextID != nil { canvas.styleChanged() }
+        if doc.styleTarget != nil || doc.editingTextID != nil { canvas.styleChanged() }
     }
 }
 

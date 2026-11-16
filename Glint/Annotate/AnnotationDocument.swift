@@ -18,11 +18,14 @@ final class AnnotationDocument {
     private(set) var expansion = BackgroundStyle.Insets()
     /// "Grow canvas": annotations past the screenshot widen the canvas; off, their outside parts are cut off.
     var expandsCanvas = Defaults[Prefs.annotateExpandCanvas] { didSet { if expandsCanvas != oldValue { updateExpansion() } } }
-    var selectedID: UUID? { didSet { if selectedID != oldValue { onSelectionChange?() } } }
+    var selectedID: UUID? { didSet { if selectedID != nil { placedID = nil }; if selectedID != oldValue { onSelectionChange?() } } }
+    /// The object just placed while placed objects stay unselected (Settings): it shows no handles, but the toolbar's
+    /// options still change it until something else is selected or drawn, the tool changes or the canvas is clicked.
+    @ObservationIgnored var placedID: UUID?
     /// Lets the toolbar follow the selection (it shows the selected object's options).
     @ObservationIgnored var onSelectionChange: (() -> Void)?
     var editingTextID: UUID?
-    var tool: AnnotateTool = .highlighter
+    var tool: AnnotateTool = .highlighter { didSet { if tool != oldValue { placedID = nil } } }
     var color: AnnotationColor = .red
     var thickness = AnnotationStyle.defaultThickness
     var fontSize: CGFloat = 30
@@ -104,6 +107,7 @@ final class AnnotationDocument {
     // Per-tool options (toolbar menus).
     var redactMode: RedactMode = .pixelate
     var redactAmount: CGFloat = 0.5
+    var redactTextOnly = false
     var spotlightShape: SpotlightShape = .rounded
     /// Spotlight: brightness inside it (125% brightens it a little) and of everything else.
     var spotlightBrightness: CGFloat = 1.25
@@ -170,13 +174,23 @@ final class AnnotationDocument {
     var canvasUnlocked = !Defaults[Prefs.annotateLockCanvas]
     /// Outside Annotate mode the tools rest: the canvas works like the Select tool.
     var toolsResting = false
-    /// Text line boxes found in the screenshot (for the highlighter), filled in shortly after opening.
-    @ObservationIgnored private(set) var textLines: [CGRect] = []
+    /// Text line boxes found in the screenshot (for the highlighter and Redact's Text only), filled in shortly after
+    /// opening. Observed: Text only redactions draw again once they're known.
+    private(set) var textLines: [CGRect] = [] { didSet { effects.textLines = textLines } }
+
+    /// Web and mail links in the screenshot's text and QR codes (the bottom bar's Links list).
+    private(set) var links: [URL] = []
 
     func detectText() {
         let image = baseImage, scale = scale
         Task {
-            textLines = await TextRecognizer.recognize(image, scale: scale, accurate: false).map(\.rect)  // only the line boxes
+            // The accurate recognizer: links need every character right.
+            async let recognized = TextRecognizer.recognize(image, scale: scale)
+            async let codes = TextRecognizer.barcodes(image)
+            let (lines, payloads) = await (recognized, codes)
+            guard image === baseImage else { return }  // cropped meanwhile: that image's own detection follows
+            textLines = lines.map(\.rect)
+            links = TextCapture.links(in: lines, codes: payloads)
         }
     }
 
@@ -199,6 +213,13 @@ final class AnnotationDocument {
             guard let newValue, let i = annotations.firstIndex(where: { $0.id == newValue.id }) else { return }
             annotations[i] = newValue
         }
+    }
+
+    /// What the toolbar's options change: the selection, else the object just placed.
+    var styleTarget: Annotation? {
+        if let selected { return selected }
+        guard let placedID else { return nil }
+        return annotations.first { $0.id == placedID }
     }
 
     var nextCounter: Int {
@@ -247,7 +268,10 @@ final class AnnotationDocument {
         // A counter's size is shared by all counters, not stored per object.
         if tool.usesThickness, tool != .counter { thickness = a.thickness }
         switch a.kind {
-        case .redact: redactMode = RedactMode(rawValue: a.variant) ?? redactMode; redactAmount = a.amount
+        case .redact:
+            redactMode = RedactMode(rawValue: a.variant) ?? redactMode
+            redactAmount = a.amount
+            redactTextOnly = a.redactTextOnly ?? false
         case .spotlight:
             spotlightShape = SpotlightShape(rawValue: a.variant) ?? spotlightShape
             spotlightBrightness = a.spotInside
@@ -295,15 +319,15 @@ final class AnnotationDocument {
         selected = a
     }
 
-    /// Applies the toolbar's color/thickness/size to the selected object.
+    /// Applies the toolbar's color/thickness/size to the selected object (or the one just placed).
     func applyStyleToSelection() {
-        guard var a = selected else { return }
+        guard var a = styleTarget, let index = annotations.firstIndex(where: { $0.id == a.id }) else { return }
         checkpoint("Change Style")
         a.color = color
         a.thickness = thickness
         a.fontSize = fontSize
         switch a.kind {
-        case .redact: a.variant = redactMode.rawValue; a.amount = redactAmount
+        case .redact: a.variant = redactMode.rawValue; a.amount = redactAmount; a.redactTextOnly = redactTextOnly ? true : nil
         case .spotlight:
             a.variant = spotlightShape.rawValue
             a.spotBrightness = spotlightBrightness
@@ -321,7 +345,7 @@ final class AnnotationDocument {
         default: break
         }
         applySketch(to: &a, tool: AnnotateTool(drawing: a.kind))
-        selected = a
+        annotations[index] = a
     }
 
     // MARK: Magnifiers
@@ -483,6 +507,7 @@ final class AnnotationDocument {
         baseImage = image
         imageSize = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         effects = RedactEffects(base: image, scale: scale)
+        textLines = []
         isDirty = true
         detectText()
     }

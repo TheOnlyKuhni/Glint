@@ -176,6 +176,31 @@ enum TextCapture {
                    link: payloads.lazy.compactMap(Self.link).first ?? textLink)
     }
 
+    /// Every web and mail link in recognized lines and code contents (codes first, then reading order), once each.
+    static func links(in lines: [TextRecognizer.Line], codes: [String]) -> [URL] {
+        var seen = Set<String>(), found: [URL] = []
+        func add(_ url: URL) { if seen.insert(url.absoluteString.lowercased()).inserted { found.append(url) } }
+        codes.compactMap(link).forEach(add)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return found }
+        let ordered = lines.sorted { a, b in
+            abs(a.rect.midY - b.rect.midY) < min(a.rect.height, b.rect.height) / 2 ? a.rect.minX < b.rect.minX : a.rect.midY < b.rect.midY
+        }
+        for line in ordered {
+            for match in detector.matches(in: line.text, range: NSRange(line.text.startIndex..., in: line.text)) {
+                guard var url = match.url, ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { continue }
+                // Written without a scheme ("www.apple.com"): https, not the detector's http.
+                let written = (line.text as NSString).substring(with: match.range).lowercased()
+                if url.scheme?.lowercased() == "http", !written.hasPrefix("http"),
+                   var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                    parts.scheme = "https"
+                    url = parts.url ?? url
+                }
+                add(url)
+            }
+        }
+        return found
+    }
+
     private static func firstLink(in text: String) -> URL? {
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
         let match = detector.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))

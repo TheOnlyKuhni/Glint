@@ -36,6 +36,7 @@ enum OptionGlyph {
         case .pixelate: return ToolGlyph.image(for: .redact)
         case .blurSmooth: return symbol("drop.fill", 13)
         case .blackOut: return symbol("moon.fill", 13)
+        case .erase: return symbol("eraser.fill", 13)
         case .blurSecure:
             return template(CGSize(width: 16, height: 16)) { ctx in
                 guard let drop = symbolImage("drop.fill", 13), let lock = symbolImage("lock.fill", 7.5) else { return }

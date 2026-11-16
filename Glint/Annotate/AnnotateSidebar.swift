@@ -110,6 +110,7 @@ struct AnnotateSidebarActions {
     var setArrowStyle: (ArrowStyle) -> Void
     var setTextStyle: (TextStyle) -> Void
     var setRedactMode: (RedactMode) -> Void
+    var setRedactTextOnly: (Bool) -> Void
     var setSpotlightShape: (SpotlightShape) -> Void
     var setCounterStyle: (CounterStyle) -> Void
     var setCounterStart: (Int) -> Void
@@ -229,7 +230,7 @@ struct AnnotateOptionsPanel: View {
             if tool == .text { fontSizeSection }
             if hasThickness { thicknessSection }
             styleSection
-            if tool == .redact { amountSection }
+            if tool == .redact { redactTextOnlySection; if doc.redactMode.hasStrength { amountSection } }
             if tool == .spotlight { spotlightSection }
             if tool == .magnifier { magnifierSection }
             if HandDrawn.tools.contains(tool) { handDrawnSection }
@@ -388,6 +389,15 @@ struct AnnotateOptionsPanel: View {
         default:
             EmptyView()
         }
+    }
+
+    private var redactTextOnlySection: some View {
+        Toggle(isOn: Binding(get: { doc.redactTextOnly }, set: actions.setRedactTextOnly)) {
+            Text("Text only").font(.system(size: 13.5)).foregroundStyle(.white)
+        }
+        .toggleStyle(.checkbox)
+        .padding(.top, 6)
+        .help("Covers only the text found inside the box; the rest stays visible. With no text found, the whole box is covered.")
     }
 
     private var amountSection: some View {

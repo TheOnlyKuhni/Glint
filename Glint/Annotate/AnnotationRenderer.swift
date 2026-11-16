@@ -369,14 +369,24 @@ struct AnnotationRenderer {
         let r = a.rect.intersection(CGRect(origin: .zero, size: imageSize))
         guard !r.isEmpty else { return }
         let mode = RedactMode(rawValue: a.variant) ?? .pixelate
+        // Text only: just the text lines inside the box (all of it when none were found).
+        let parts = a.redactTextOnly == true ? effects?.textParts(in: r) ?? [r] : [r]
         ctx.saveGState()
-        if mode == .blackOut {
+        switch mode {
+        case .blackOut:
+            // Square corners: rounded ones left a pixel of what's under each corner showing.
             ctx.setFillColor(NSColor.black.cgColor)
-            ctx.addPath(Self.roundedRect(r, radius: 3))
-            ctx.fillPath()
-        } else if let image = effects?.image(mode, amount: a.amount) {
-            ctx.clip(to: r)
-            Self.drawImage(image, in: CGRect(origin: .zero, size: imageSize), ctx: ctx)
+            ctx.fill(parts)
+        case .erase:
+            for part in parts {
+                ctx.setFillColor(effects?.surroundingColor(of: part) ?? NSColor.white.cgColor)
+                ctx.fill(part)
+            }
+        default:
+            if let image = effects?.image(mode, amount: a.amount) {
+                ctx.clip(to: parts)
+                Self.drawImage(image, in: CGRect(origin: .zero, size: imageSize), ctx: ctx)
+            }
         }
         ctx.restoreGState()
     }
