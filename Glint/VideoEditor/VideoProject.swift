@@ -35,14 +35,17 @@ extension VideoZoom {
 /// full-size ones.
 struct CameraLayout: Equatable, Identifiable, Codable {
     enum Kind: String, Codable, CaseIterable {
-        case full, bubble, hidden
+        case full, bubble, split, hidden
         var title: String {
             switch self {
             case .full: "Full Size"
             case .bubble: "Resize"
+            case .split: "Split"
             case .hidden: "Hidden"
             }
         }
+        /// For the inspector's four buttons ("Full Size" doesn't fit there).
+        var shortTitle: String { self == .full ? "Full" : title }
     }
 
     var id = UUID()
@@ -53,6 +56,8 @@ struct CameraLayout: Equatable, Identifiable, Codable {
     var size: Double = 1
     var shape = 0
     var position: OverlayCorner = .bottomRight
+    /// Split screen's side, size and how the screen fits (`kind == .split`).
+    var split = CameraSplit()
 
     static let shapeTitles = ["Circle", "Square", "Rectangle", "Vertical"]
     var title: String { kind.title }
@@ -63,7 +68,7 @@ extension CameraLayout {
         let c = try decoder.container(keyedBy: CodingKeys.self), d = CameraLayout(start: 0, end: 0)
         self.init(id: c.value(.id, or: UUID()), start: try c.decode(Double.self, forKey: .start), end: try c.decode(Double.self, forKey: .end),
                   kind: c.value(.kind, or: d.kind), size: c.value(.size, or: d.size), shape: c.value(.shape, or: d.shape),
-                  position: c.value(.position, or: d.position))
+                  position: c.value(.position, or: d.position), split: c.value(.split, or: d.split))
     }
 }
 
@@ -151,10 +156,55 @@ final class VideoProject: ObservableObject {
     @Published var edit = VideoEdit() { didSet { if edit != oldValue { changed() } } }
     /// A Studio Mode recording's pointer, keys and camera (nil for ordinary recordings).
     private(set) var studio: StudioRecording?
+    /// Split screen's "Auto color" bars, found once per video (`autoBarsColorIfNeeded`).
+    private var autoBarsColor: CGColor?
+    private var findingAutoBarsColor = false
+    /// Part of the preview's look: it redraws once the auto color is known.
+    var knowsAutoBarsColor: Bool { autoBarsColor != nil }
     private(set) var cursorImages: [CGImage?] = []
     private(set) var cameraAsset: AVURLAsset?
     var isStudio: Bool { studio != nil }
     var hasCamera: Bool { cameraAsset != nil }
+    /// The bars' auto color when some split screen uses it. Found in the background the first time: the Background
+    /// tool's inset color (most common color of the outer pixel ring) of four frames, the one most of them have, so
+    /// it's one steady color for the whole video. The preview redraws once it's known.
+    private func autoBarsColorIfNeeded() -> CGColor? {
+        let wanted = (edit.camera.splitScreen && edit.camera.split.barsAuto) || edit.cameraLayouts.contains { $0.kind == .split && $0.split.barsAuto }
+        guard wanted, autoBarsColor == nil, !findingAutoBarsColor, sourceDuration > 0 else { return autoBarsColor }
+        findingAutoBarsColor = true
+        let asset = self.asset, duration = sourceDuration
+        Task { [weak self] in
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 800, height: 800)
+            generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+            var colors: [CGColor] = []
+            for f in [0.0, 0.25, 0.5, 0.75] {
+                let time = CMTime(seconds: min(duration * f, max(duration - 0.05, 0)), preferredTimescale: 600)
+                if let image = try? await generator.image(at: time).image { colors.append(BackgroundStyle.edgeColor(of: image)) }
+            }
+            guard let self else { return }
+            // The color most frames share (coarse buckets, like the inset's vote); the first one on a tie.
+            func key(_ c: CGColor) -> Int {
+                let p = c.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil)?.components ?? [1, 1, 1]
+                return p.prefix(3).reduce(0) { $0 << 4 | Int(($1 * 255).rounded()) >> 4 }
+            }
+            let best = colors.max { a, b in
+                colors.filter { key($0) == key(a) }.count < colors.filter { key($0) == key(b) }.count
+            }
+            self.autoBarsColor = best ?? NSColor.black.cgColor
+            self.findingAutoBarsColor = false
+            self.revision += 1
+        }
+        return nil
+    }
+
+    /// Split screen somewhere in the video: then the editor's preview is the whole canvas as rendered (the camera
+    /// and the screen share the frame), not the video with layers around it.
+    var usesSplitScreen: Bool {
+        isStudio && hasCamera && edit.camera.show && (edit.camera.splitScreen || edit.cameraLayouts.contains { $0.kind == .split })
+    }
     var clips: [VideoClip] { get { edit.clips } set { edit.clips = newValue } }
     var zooms: [VideoZoom] { get { edit.zooms } set { edit.zooms = newValue } }
     var cameraLayouts: [CameraLayout] { get { edit.cameraLayouts } set { edit.cameraLayouts = newValue } }
@@ -474,7 +524,8 @@ final class VideoProject: ObservableObject {
                                    shadow: background.isVisible ? background.shadow : 0,
                                    cornerRadius: background.corners * VideoBackground.maxCornerFraction * min(canvas.card.width, canvas.card.height),
                                    zooms: zooms, animation: zoomAnimation, motionBlur: Double(motionBlur) / 3, outputScale: outputScale,
-                                   overlay: makeOverlay(), captions: includeCaptions ? makeCaptions() : nil)
+                                   overlay: makeOverlay(), captions: includeCaptions ? makeCaptions() : nil,
+                                   autoBarsColor: autoBarsColorIfNeeded())
     }
 
     /// The captions on the output timeline: each word at its output time; words in cut parts are left out.
@@ -664,6 +715,8 @@ struct VideoRenderSettings: @unchecked Sendable {
     var overlay: StudioOverlay?
     /// Captions (drawn on the video, above the overlays).
     var captions: CaptionRenderer?
+    /// Split screen's "Auto color" bars: the color found most along the recording's edges (nil until known).
+    var autoBarsColor: CGColor?
 }
 
 /// Draws one output frame: zoom into the video, then place it on the background (corners, shadow).
@@ -673,6 +726,8 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
     /// The static layers, made once per settings: backdrop + shadow, and the corner mask.
     private var base: CIImage?
     private var mask: CIImage?
+    /// The plain background (split screen's bars when the screen is shrunk), nil without a background.
+    private var backdropImage: CIImage?
 
     init(_ settings: VideoRenderSettings) { self.settings = settings }
 
@@ -681,6 +736,8 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
         self.settings = settings
         base = nil
         mask = nil
+        backdropImage = nil
+        splitLayers = [:]
         lock.unlock()
     }
 
@@ -761,7 +818,7 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
         lock.lock()
         let s = settings
         if base == nil { makeLayers(s) }
-        let base = self.base, mask = self.mask
+        let base = self.base, mask = self.mask, backdropImage = self.backdropImage
         lock.unlock()
 
         // Zoom: crop around the center and scale back up to the video's size.
@@ -798,28 +855,165 @@ nonisolated final class VideoFrameRenderer: @unchecked Sendable {
             video = zoomed(zoom.rect)
         }
 
-        if let overlay = s.overlay {
-            video = overlay.draw(on: video, size: CGSize(width: w, height: h), zoom: zoom.rect, time: time, camera: camera)
-                .cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+        // The screen with its cursor, keystrokes and captions; the camera bubble only outside split screen.
+        let frameRect = CGRect(x: 0, y: 0, width: w, height: h)
+        let zoomedVideo = video
+        func decorated(withCamera: Bool) -> CIImage {
+            var v = zoomedVideo
+            if let overlay = s.overlay {
+                v = overlay.draw(on: v, size: frameRect.size, zoom: zoom.rect, time: time, camera: withCamera ? camera : nil).cropped(to: frameRect)
+            }
+            if let captions = s.captions { v = captions.draw(on: v, size: frameRect.size, time: time).cropped(to: frameRect) }
+            return v
         }
-        if let captions = s.captions {
-            video = captions.draw(on: video, size: CGSize(width: w, height: h), time: time).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
-        }
+        let split = camera == nil ? nil : s.overlay?.split(at: time)
+        let amount = split?.amount ?? 0
 
-        var output = video
-        if let base, let mask {
-            let k = s.card.width / max(s.sourceSize.width, 1)
-            let placed = video.transformed(by: CGAffineTransform(scaleX: k, y: k).concatenating(CGAffineTransform(translationX: s.card.minX, y: s.card.minY)))
-            output = placed.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: base, kCIInputMaskImageKey: mask])
+        var output = CIImage.empty()
+        if amount < 0.999 {
+            video = decorated(withCamera: true)
+            output = video
+            if let base, let mask {
+                let k = s.card.width / max(s.sourceSize.width, 1)
+                let placed = video.transformed(by: CGAffineTransform(scaleX: k, y: k).concatenating(CGAffineTransform(translationX: s.card.minX, y: s.card.minY)))
+                output = placed.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: base, kCIInputMaskImageKey: mask])
+            }
+        }
+        if let split, amount > 0.001, let camera, let overlay = s.overlay {
+            let frame = splitFrame(screen: decorated(withCamera: false), camera: camera, split: split.split, overlay: overlay,
+                                   settings: s, zoom: zoom.rect, time: time, backdrop: backdropImage)
+            output = amount >= 0.999 ? frame
+                : output.applyingFilter("CIDissolveTransition", parameters: [kCIInputTargetImageKey: frame, kCIInputTimeKey: Double(amount)])
         }
         if s.outputScale < 0.999 { output = output.transformed(by: CGAffineTransform(scaleX: s.outputScale, y: s.outputScale)) }
         let size = CGSize(width: (s.canvasSize.width * s.outputScale / 2).rounded() * 2, height: (s.canvasSize.height * s.outputScale / 2).rounded() * 2)
         return output.cropped(to: CGRect(origin: .zero, size: size))
     }
 
-    private func makeLayers(_ s: VideoRenderSettings) {
-        guard let backdrop = s.backdrop else { base = nil; mask = nil; return }
+    // MARK: Split screen
+
+    /// Where the camera and the screen go on the canvas (y-up pixels). Together they're one card: with a background,
+    /// `padding` goes around it (the frame keeps its size; the card gets smaller).
+    static func splitRects(_ split: CameraSplit, canvas: CGSize, source: CGSize, padding p: CGFloat = 0) -> (camera: CGRect, screen: CGRect) {
+        let region = CGRect(origin: .zero, size: canvas).insetBy(dx: p, dy: p)
+        let vertical = split.side.isVertical
+        let total = vertical ? region.height : region.width
+        let aspect = source.width / max(source.height, 1)
+        var share: CGFloat = switch split.size {
+        case .half: total / 2
+        case .third: total / 3
+        case .quarter: total / 4
+        // The screen part gets the recording's own shape; the camera what's left.
+        case .fit: vertical ? total - region.width / aspect : total - region.height * aspect
+        }
+        share = min(max(share, total * 0.15), total * 0.85).rounded()
+        let rest = total - share
+        switch split.side {
+        case .top:
+            return (CGRect(x: region.minX, y: region.maxY - share, width: region.width, height: share),
+                    CGRect(x: region.minX, y: region.minY, width: region.width, height: rest))
+        case .bottom:
+            return (CGRect(x: region.minX, y: region.minY, width: region.width, height: share),
+                    CGRect(x: region.minX, y: region.maxY - rest, width: region.width, height: rest))
+        case .left:
+            return (CGRect(x: region.minX, y: region.minY, width: share, height: region.height),
+                    CGRect(x: region.maxX - rest, y: region.minY, width: rest, height: region.height))
+        case .right:
+            return (CGRect(x: region.maxX - share, y: region.minY, width: share, height: region.height),
+                    CGRect(x: region.minX, y: region.minY, width: rest, height: region.height))
+        }
+    }
+
+    /// Split screen's static layers for one layout: the background with the card's shadow, and the card's rounded
+    /// mask (nil without a background: the card then fills the frame edge to edge).
+    private struct SplitLayers { var base: CIImage; var mask: CIImage? }
+    private var splitLayers: [String: SplitLayers] = [:]
+
+    private func layers(for split: CameraSplit, _ s: VideoRenderSettings, backdrop: CIImage?) -> (SplitLayers, camera: CGRect, screen: CGRect) {
         let canvas = CGRect(origin: .zero, size: s.canvasSize)
+        // The background's padding, as around the plain video (the card's distance from the nearer edge).
+        let padding = backdrop == nil ? 0 : min(s.card.minX, s.card.minY)
+        let (cameraRect, screenRect) = Self.splitRects(split, canvas: s.canvasSize, source: s.sourceSize, padding: padding)
+        let key = "\(split.side)-\(split.size)"
+        lock.lock()
+        let cached = splitLayers[key]
+        lock.unlock()
+        if let cached { return (cached, cameraRect, screenRect) }
+        var made = SplitLayers(base: CIImage(color: .black).cropped(to: canvas))
+        if let backdrop {
+            // The camera and the screen as one card, with the plain video's corner rounding (relative to the card's
+            // shorter side) and shadow.
+            let card = cameraRect.union(screenRect)
+            let radius = s.cornerRadius / max(min(s.card.width, s.card.height), 1) * min(card.width, card.height)
+            let path = CGPath(roundedRect: card, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            var base = backdrop
+            let k = min(card.width, card.height) / BackgroundShadow.measuredShortSide
+            for l in BackgroundShadow.layers(s.shadow) {
+                guard let shadow = Self.shape(path, size: s.canvasSize, color: CGColor(gray: 0, alpha: l.opacity)) else { continue }
+                base = shadow.clampedToExtent().applyingGaussianBlur(sigma: l.sigma * k)
+                    .transformed(by: CGAffineTransform(translationX: 0, y: -l.offset * k)).cropped(to: canvas).composited(over: base)
+            }
+            made = SplitLayers(base: base, mask: Self.shape(path, size: s.canvasSize, color: CGColor(gray: 1, alpha: 1)))
+        }
+        lock.lock()
+        splitLayers[key] = made
+        lock.unlock()
+        return (made, cameraRect, screenRect)
+    }
+
+    /// The whole canvas in split screen: the camera fills its part; the screen (with its overlays) fills the other,
+    /// cropped around the cursor, or shrunk to show all of it with bars (a color, or the screen blurred).
+    private func splitFrame(screen: CIImage, camera: CIImage, split: CameraSplit, overlay: StudioOverlay, settings s: VideoRenderSettings,
+                            zoom: CGRect, time: Double, backdrop: CIImage?) -> CIImage {
+        let canvas = CGRect(origin: .zero, size: s.canvasSize)
+        let (layers, cameraRect, screenRect) = layers(for: split, s, backdrop: backdrop)
+        let w = s.sourceSize.width, h = s.sourceSize.height
+        var part: CIImage
+        switch split.screen {
+        case .crop:
+            let k = max(screenRect.width / w, screenRect.height / h)
+            // The visible window (source pixels, y-up) centered on the cursor as the zoomed frame shows it.
+            let vw = screenRect.width / k, vh = screenRect.height / k
+            var cx = w / 2, cy = h / 2
+            if let p = overlay.splitFocus(at: time) {
+                cx = (p.x - zoom.minX) / max(zoom.width, 0.01) * w
+                cy = h - (p.y - zoom.minY) / max(zoom.height, 0.01) * h
+            }
+            cx = min(max(cx, vw / 2), w - vw / 2)
+            cy = min(max(cy, vh / 2), h - vh / 2)
+            part = screen.transformed(by: CGAffineTransform(translationX: -(cx - vw / 2), y: -(cy - vh / 2))
+                .concatenating(CGAffineTransform(scaleX: k, y: k))
+                .concatenating(CGAffineTransform(translationX: screenRect.minX, y: screenRect.minY)))
+                .cropped(to: screenRect)
+        case .shrink:
+            let k = min(screenRect.width / w, screenRect.height / h)
+            let x = screenRect.minX + (screenRect.width - w * k) / 2, y = screenRect.minY + (screenRect.height - h * k) / 2
+            let bars: CIImage
+            if split.barsBlurred {
+                // The screen itself, filling the part and blurred.
+                let f = max(screenRect.width / w, screenRect.height / h)
+                bars = screen.transformed(by: CGAffineTransform(scaleX: f, y: f)
+                    .concatenating(CGAffineTransform(translationX: screenRect.midX - w * f / 2, y: screenRect.midY - h * f / 2)))
+                    .clampedToExtent().applyingGaussianBlur(sigma: Double(min(screenRect.width, screenRect.height)) * 0.04)
+            } else if split.barsAuto {
+                bars = CIImage(color: CIColor(cgColor: s.autoBarsColor ?? NSColor.black.cgColor))
+            } else {
+                bars = CIImage(color: CIColor(color: BackgroundPalette.nsColor(split.barsColor)) ?? .black)
+            }
+            part = screen.transformed(by: CGAffineTransform(scaleX: k, y: k).concatenating(CGAffineTransform(translationX: x, y: y)))
+                .cropped(to: screenRect).composited(over: bars.cropped(to: screenRect))
+        }
+        let card = overlay.cameraPicture(camera, filling: cameraRect).composited(over: part)
+        let output = layers.mask.map {
+            card.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: layers.base, kCIInputMaskImageKey: $0])
+        } ?? card.composited(over: layers.base)
+        return output.cropped(to: canvas)
+    }
+
+    private func makeLayers(_ s: VideoRenderSettings) {
+        guard let backdrop = s.backdrop else { base = nil; mask = nil; backdropImage = nil; return }
+        let canvas = CGRect(origin: .zero, size: s.canvasSize)
+        backdropImage = CIImage(cgImage: backdrop).cropped(to: canvas)
         var layer = CIImage(cgImage: backdrop).cropped(to: canvas)
         let shape = CGPath(roundedRect: s.card, cornerWidth: s.cornerRadius, cornerHeight: s.cornerRadius, transform: nil)
         // The screenshot Background tool's shadow, scaled to the video's card.

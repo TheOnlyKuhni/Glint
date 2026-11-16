@@ -277,12 +277,14 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     func rebuild(force: Bool) {
         // The preview is the video with its zooms only, at most ~1600px wide (the export uses full size and bakes
         // the background in). Background, padding, corners and shadow are layers in the editor (instant).
-        let source = project.sourceSize
-        let previewScale = min(1, 1600 / max(source.width, 1))
-        let settings = project.renderSettings(outputScale: previewScale, includeBackground: false)
+        // Split screen: the preview is the whole canvas as rendered (at most ~1600px on its longer side).
+        let split = project.usesSplitScreen
+        let source = split ? project.renderSize : project.sourceSize
+        let previewScale = min(1, 1600 / max(split ? max(source.width, source.height) : source.width, 1))
+        let settings = project.renderSettings(outputScale: previewScale, includeBackground: split)
         let renderSize = CGSize(width: (source.width * previewScale / 2).rounded() * 2, height: (source.height * previewScale / 2).rounded() * 2)
-        let key = "\(project.clips.map { "\($0.start)-\($0.end)" })"
-        let look = "\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)|\(project.edit.removedEvents)|\(project.edit.captions.hashValue)|\(project.edit.captionStyle)|\(project.edit.showCaptions)"
+        let key = "\(project.clips.map { "\($0.start)-\($0.end)" })|\(split ? "split \(renderSize)" : "")"
+        let look = "\(split ? "\(project.background)|\(project.knowsAutoBarsColor)|" : "")\(project.zooms)|\(project.zoomAnimation)|\(project.motionBlur)|\(project.edit.cursor)|\(project.edit.keystrokes)|\(project.edit.camera)|\(project.cameraLayouts)|\(project.edit.removedEvents)|\(project.edit.captions.hashValue)|\(project.edit.captionStyle)|\(project.edit.showCaptions)"
         if !force, key == structureKey, let renderer, let item = player.currentItem, let composition = item.videoComposition {
             if look != renderKey {
                 renderKey = look

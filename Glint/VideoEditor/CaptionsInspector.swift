@@ -149,25 +149,26 @@ struct CaptionsInspector: View {
 
     // MARK: Look
 
+    /// The look, in groups like the other sections: style, how the words show, the text, the box, the position.
     private var lookSection: some View {
         let s = project.edit.captionStyle
         return VStack(alignment: .leading, spacing: 10) {
             InspectorHeader("Style").padding(.top, 8)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+            HStack(spacing: 10) {
                 ForEach(CaptionPreset.allCases, id: \.self) { preset in
-                    Button {
+                    StyleTile(title: preset == .social ? "Social" : preset.title, selected: s.preset == preset, help: preset.help) {
+                        PresetSample(preset: preset)
+                    } pick: {
                         // A preset replaces the look but keeps where the captions are.
                         var next = CaptionStyle.preset(preset)
                         if preset != .social { next.position = s.position; next.offset = s.offset }
                         style.wrappedValue = next
-                    } label: {
-                        PresetSample(preset: preset, selected: s.preset == preset)
                     }
-                    .buttonStyle(HoverButtonStyle())
-                    .help(preset.help)
                 }
             }
-            InspectorHeader("Show").padding(.top, 8)
+            divider
+
+            InspectorHeader("Show")
             ChoiceButtons(titles: CaptionMode.allCases.map(\.title), selected: s.mode == .phrases ? 0 : 1,
                           helps: ["Whole phrases, up to two lines (more formal)", "A few words at a time, each appearing as it's said"]) {
                 style.wrappedValue.mode = $0 == 0 ? .phrases : .words
@@ -186,47 +187,63 @@ struct CaptionsInspector: View {
                 StepSlider(value: Binding(get: { Double(s.lineLength) }, set: { style.wrappedValue.lineLength = Int($0.rounded()) }),
                            range: 20...60, step: 2, ticks: 5)
             }
-            Toggle(isOn: style.highlightWord) {
-                Text(s.mode == .phrases ? "Highlight the spoken word" : "Highlight the newest word").font(.system(size: 12.5)).foregroundStyle(.white)
-            }
-            .toggleStyle(.checkbox)
-
-            InspectorHeader("Text").padding(.top, 8)
             HStack {
-                Picker("", selection: style.font) { ForEach(CaptionFont.allCases, id: \.self) { Text($0.title).tag($0) } }
-                    .labelsHidden().frame(maxWidth: 130)
+                Toggle(isOn: style.highlightWord) {
+                    Text(s.mode == .phrases ? "Highlight the spoken word" : "Highlight the newest word").font(.system(size: 12.5)).foregroundStyle(.white)
+                }
+                .toggleStyle(.checkbox)
                 Spacer()
-                ColorWell(hex: style.textColor, help: "Text color")
-                ColorWell(hex: style.highlightColor, help: "Highlight color")
+                if s.highlightWord { ColorWell(hex: style.highlightColor, help: "Highlight color") }
             }
+            .padding(.top, 2)
+            divider
+
+            row("Font") {
+                Picker("", selection: style.font) { ForEach(CaptionFont.allCases, id: \.self) { Text($0.title).tag($0) } }
+                    .labelsHidden().fixedSize()
+            }
+            row("Color") { ColorWell(hex: style.textColor, help: "Text color") }
             InspectorHeader("Size", percent: Binding(get: { s.size }, set: { style.wrappedValue.size = $0 }), range: 0.5...2.5).padding(.top, 4)
             StepSlider(value: style.size, range: 0.5...2.5, ticks: 5)
-            HStack(spacing: 14) {
-                Toggle(isOn: style.bold) { Text("Bold").font(.system(size: 12.5)).foregroundStyle(.white) }
-                Toggle(isOn: style.uppercase) { Text("Capitals").font(.system(size: 12.5)).foregroundStyle(.white) }
-                Toggle(isOn: style.outline) { Text("Outline").font(.system(size: 12.5)).foregroundStyle(.white) }
+            HStack(spacing: 10) {
+                ToggleButton(title: "Bold", isOn: style.bold, help: "Heavier letters")
+                ToggleButton(title: "Capitals", isOn: style.uppercase, help: "Every letter as a capital")
+                ToggleButton(title: "Outline", isOn: style.outline, help: "A dark outline around the letters")
             }
-            .toggleStyle(.checkbox)
+            .padding(.top, 4)
+            divider
 
             HStack {
                 Toggle(isOn: style.box) { Text("Box").font(.system(size: 13.5)).foregroundStyle(.white) }.toggleStyle(BlueSwitch())
+                    .help("A box behind the text")
                 Spacer()
                 if s.box { ColorWell(hex: style.boxColor, help: "Box color") }
             }
-            .padding(.top, 8)
             if s.box {
-                InspectorHeader("Box opacity", percent: style.boxOpacity, range: 0...1)
+                InspectorHeader("Box opacity", percent: style.boxOpacity, range: 0...1).padding(.top, 4)
                 StepSlider(value: style.boxOpacity, range: 0...1, ticks: 5)
             }
+            divider
 
-            InspectorHeader("Position").padding(.top, 8)
-            ChoiceButtons(titles: CaptionPosition.allCases.map(\.title), selected: CaptionPosition.allCases.firstIndex(of: s.position) ?? 2) {
-                style.wrappedValue.position = CaptionPosition.allCases[$0]
+            InspectorHeader("Position", value: s.position.title)
+            CaptionPositionPicker(selected: s.position) {
+                style.wrappedValue.position = $0
                 style.wrappedValue.offset = 0
             }
             InspectorHeader("Move up or down", percent: style.offset, range: -0.45...0.45).padding(.top, 4)
             StepSlider(value: style.offset, range: -0.45...0.45, ticks: 3)
                 .help("Fine placement from the chosen position")
+        }
+    }
+
+    private var divider: some View { Divider().overlay(W.line).padding(.vertical, 6) }
+
+    /// A label on the left and its control on the right (like the Language row).
+    private func row(_ title: String, @ViewBuilder control: () -> some View) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
+            Spacer()
+            control()
         }
     }
 
@@ -407,25 +424,69 @@ private struct CaptionRow: View {
     }
 }
 
-/// A preset's tile: "Aa" in its look on a dark sample.
+/// A preset's picture: "Aa" in its look (inside a style tile).
 private struct PresetSample: View {
     let preset: CaptionPreset
-    let selected: Bool
 
     var body: some View {
         let s = CaptionStyle.preset(preset)
-        VStack(spacing: 4) {
-            Text(s.uppercase ? "AA" : "Aa")
-                .font(.system(size: 14, weight: s.bold ? .heavy : .semibold))
-                .foregroundStyle(Color(nsColor: CaptionRenderer.color(s.textColor)))
-                .shadow(color: s.outline ? .black : .clear, radius: 0, x: 1, y: 1)
-                .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(RoundedRectangle(cornerRadius: 4).fill(s.box ? Color(nsColor: CaptionRenderer.color(s.boxColor)).opacity(s.boxOpacity) : .clear))
-            Text(preset.title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white)
+        Text(s.uppercase ? "AA" : "Aa")
+            .font(.system(size: 14, weight: s.bold ? .heavy : .semibold))
+            .foregroundStyle(Color(nsColor: CaptionRenderer.color(s.textColor)))
+            .shadow(color: s.outline ? .black : .clear, radius: 0, x: 1, y: 1)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 4).fill(s.box ? Color(nsColor: CaptionRenderer.color(s.boxColor)).opacity(s.boxOpacity) : .clear))
+    }
+}
+
+/// An on/off choice that looks like the choice buttons (blue = on).
+private struct ToggleButton: View {
+    let title: String
+    @Binding var isOn: Bool
+    let help: String
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            Text(title).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(isOn ? W.blue : W.box))
+                .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity).frame(height: 54)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(white: 0.3)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(selected ? W.blue : .clear, lineWidth: 2))
+        .buttonStyle(HoverButtonStyle())
+        .help(help)
+    }
+}
+
+/// Where the captions sit, like the camera's position picker: a line at the top, middle or bottom of a small frame.
+private struct CaptionPositionPicker: View {
+    let selected: CaptionPosition
+    let pick: (CaptionPosition) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset: CGFloat = 10, size = CGSize(width: 70, height: 12)
+            ZStack(alignment: .topLeading) {
+                ForEach(CaptionPosition.allCases, id: \.self) { position in
+                    let y: CGFloat = switch position {
+                    case .top: inset
+                    case .middle: (geo.size.height - size.height) / 2
+                    case .bottom: geo.size.height - inset - size.height
+                    }
+                    Button { pick(position) } label: {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(position == selected ? W.blue : Color.white.opacity(0.14))
+                            .frame(width: size.width, height: size.height)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(HoverButtonStyle())
+                    .help("Captions at the \(position == .middle ? "middle" : position.rawValue)")
+                    .offset(x: (geo.size.width - size.width) / 2, y: y)
+                }
+            }
+        }
+        .frame(height: 92)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(W.box))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(W.line, lineWidth: 1))
     }
 }
 

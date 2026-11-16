@@ -76,7 +76,8 @@ private struct PlayerSurface: NSViewRepresentable {
     @ObservedObject var project: VideoProject
     func makeNSView(context: Context) -> PreviewCanvasView { PreviewCanvasView(player: player) }
     func updateNSView(_ view: PreviewCanvasView, context: Context) {
-        view.update(background: project.background, sourceSize: project.sourceSize, backdrop: { project.previewBackdrop() })
+        view.update(background: project.background, sourceSize: project.sourceSize, baked: project.usesSplitScreen,
+                    backdrop: { project.previewBackdrop() })
     }
 }
 
@@ -89,6 +90,8 @@ final class PreviewCanvasView: NSView {
     private let playerLayer = AVPlayerLayer()
     private var background = VideoBackground()
     private var sourceSize = CGSize(width: 16, height: 9)
+    /// The player shows the whole canvas, background included (split screen): no layers around it.
+    private var baked = false
     private var backdropFill: Glint.BackgroundStyle.Fill?
 
     init(player: AVPlayer) {
@@ -113,15 +116,17 @@ final class PreviewCanvasView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func update(background: VideoBackground, sourceSize: CGSize, backdrop image: () -> CGImage?) {
-        guard background != self.background || sourceSize != self.sourceSize || backdropFill == nil else { return }
+    func update(background: VideoBackground, sourceSize: CGSize, baked: Bool, backdrop image: () -> CGImage?) {
+        guard background != self.background || sourceSize != self.sourceSize || baked != self.baked || backdropFill == nil else { return }
         self.background = background
         self.sourceSize = sourceSize
+        self.baked = baked
+        // Drawn once a background shows (remembering the fill only then: a ratio picked with the default fill
+        // showed an empty backdrop before).
         if background.isVisible, backdropFill != background.fill {
             backdropFill = background.fill
             backdrop.contents = image()
         }
-        if backdropFill == nil { backdropFill = background.fill }
         layoutLayers()
     }
 
@@ -134,11 +139,12 @@ final class PreviewCanvasView: NSView {
         guard sourceSize.width > 0, bounds.width > 0 else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let canvas = VideoFrameRenderer.canvas(for: sourceSize, background: background)
+        var canvas = VideoFrameRenderer.canvas(for: sourceSize, background: background)
+        if baked { canvas.card = CGRect(origin: .zero, size: canvas.size) }
         let k = min(bounds.width / canvas.size.width, bounds.height / canvas.size.height)
         let fit = CGRect(x: (bounds.width - canvas.size.width * k) / 2, y: (bounds.height - canvas.size.height * k) / 2,
                          width: canvas.size.width * k, height: canvas.size.height * k)
-        let visible = background.isVisible
+        let visible = background.isVisible && !baked
         backdrop.isHidden = !visible
         backdrop.frame = fit
         // The canvas (y-up, like the layers here) scaled into the view.

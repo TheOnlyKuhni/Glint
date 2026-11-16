@@ -153,6 +153,22 @@ struct CameraInspector: View {
             } else {
                 MainSwitch(title: "Show camera", isOn: $project.edit.camera.show, help: "Show the camera in the video")
                 VStack(alignment: .leading, spacing: 10) {
+                    InspectorHeader("Layout").padding(.top, 8)
+                    ChoiceButtons(titles: ["Bubble", "Split Screen"], selected: camera.splitScreen ? 1 : 0,
+                                  helps: ["The camera floats in a corner of the video",
+                                          "The camera takes one side of the frame and the screen the rest (for vertical videos, pick 9:16 under Background)"]) {
+                        project.edit.camera.splitScreen = $0 == 1
+                    }
+                    if camera.splitScreen {
+                        SplitControls(split: camera.split) { project.edit.camera.split = $0 }
+                        Divider().overlay(W.line).padding(.vertical, 6)
+                        Check(title: "Flip camera", isOn: $project.edit.camera.flip, help: "Mirror the camera picture, like a mirror")
+                    }
+                }
+                .disabled(!camera.show)
+                .opacity(camera.show ? 1 : 0.45)
+                if !camera.splitScreen {
+                VStack(alignment: .leading, spacing: 10) {
                     InspectorHeader("Size", percent: $project.edit.camera.size, range: 0.5...2).padding(.top, 8)
                     StepSlider(value: $project.edit.camera.size, range: 0.5...2, ticks: 7)
                         .help("How big the camera is (100% = the recorder's Medium)")
@@ -168,6 +184,7 @@ struct CameraInspector: View {
                 }
                 .disabled(!camera.show)
                 .opacity(camera.show ? 1 : 0.45)
+                }
             }
         }
     }
@@ -189,9 +206,9 @@ struct CameraLayoutInspector: View {
         VStack(alignment: .leading, spacing: 10) {
             let kinds = CameraLayout.Kind.allCases
             InspectorHeader("Camera action")
-            ChoiceButtons(titles: kinds.map(\.title), selected: kinds.firstIndex(of: layout.kind) ?? 0,
+            ChoiceButtons(titles: kinds.map(\.shortTitle), selected: kinds.firstIndex(of: layout.kind) ?? 0,
                           helps: ["The camera fills the whole video", "The camera gets its own size, shape and corner here",
-                                  "No camera here"]) { i in edit { $0.kind = kinds[i] } }
+                                  "The camera takes one side of the frame and the screen the rest", "No camera here"]) { i in edit { $0.kind = kinds[i] } }
             LengthPicker(length: layout.end - layout.start) { project.setLength(cameraAction: layout.id, $0) }
                 .padding(.top, 8)
             if layout.kind == .bubble {
@@ -204,11 +221,13 @@ struct CameraLayoutInspector: View {
                 InspectorHeader("Position", value: layout.position.title).padding(.top, 8)
                 PositionPicker(options: [.topLeft, .topRight, .bottomLeft, .bottomRight], selected: layout.position,
                                spot: CGSize(width: 18, height: 18), round: layout.shape == 0) { corner in edit { $0.position = corner } }
-            } else {
+            } else if layout.kind == .split {
+                SplitControls(split: layout.split) { split in edit { $0.split = split } }
             }
             InfoBox {
                 Text(layout.kind == .full ? "While this action lasts, the camera fills the video. Afterwards the default camera settings apply again."
                      : layout.kind == .hidden ? "While this action lasts, the camera is hidden. Afterwards the default camera settings apply again."
+                     : layout.kind == .split ? "While this action lasts, the camera and the screen share the frame. Afterwards the default camera settings apply again."
                      : "While this action lasts, the camera has this size, shape and position. Afterwards the default camera settings apply again.")
             }
             .padding(.top, 4)
@@ -280,7 +299,7 @@ private struct Check: View {
 }
 
 /// A style choice: a picture in a #2A2A2A tile (blue ring when selected) with its name under it.
-private struct StyleTile<Content: View>: View {
+struct StyleTile<Content: View>: View {
     let title: String
     let selected: Bool
     let help: String
@@ -386,5 +405,91 @@ private struct PositionPicker: View {
         case .bottom: CGPoint(x: (size.width - spot.width) / 2, y: bottom)
         case .bottomRight: CGPoint(x: right, y: bottom)
         }
+    }
+}
+
+/// Split screen's options, laid out like the bubble's: where the camera sits (a picture to click), how much of the
+/// frame it takes (a menu), how the screen fits the rest, and, when the screen is shrunk, the bars' color.
+struct SplitControls: View {
+    let split: CameraSplit
+    let change: (CameraSplit) -> Void
+
+    private func edit(_ body: (inout CameraSplit) -> Void) { var s = split; body(&s); change(s) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Position", value: split.side.title).padding(.top, 8)
+            SplitSidePicker(selected: split.side) { side in edit { $0.side = side } }
+            InspectorHeader("Camera size").padding(.top, 8)
+            Picker("", selection: Binding(get: { split.size }, set: { size in edit { $0.size = size } })) {
+                ForEach(CameraSplit.Size.allCases, id: \.self) { Text($0.menuTitle).tag($0) }
+            }
+            .labelsHidden()
+            .help("How much of the frame the camera takes")
+            InspectorHeader("Screen").padding(.top, 8)
+            ChoiceButtons(titles: CameraSplit.Screen.allCases.map(\.title), selected: split.screen == .crop ? 0 : 1,
+                          helps: ["The screen fills its part; what doesn't fit is cut off, following the cursor",
+                                  "The whole screen shows, smaller, with bars where the shapes differ"]) { i in
+                edit { $0.screen = i == 0 ? .crop : .shrink }
+            }
+            if split.screen == .shrink {
+                InspectorHeader("Bars next to the screen").padding(.top, 8)
+                ForEach([BackgroundPalette.colorsDark, BackgroundPalette.colorsLight], id: \.self) { row in
+                    HStack(spacing: 9) {
+                        ForEach(row, id: \.self) { hex in
+                            Button { edit { $0.barsColor = hex; $0.barsBlurred = false; $0.barsAuto = false } } label: {
+                                Circle().fill(Color(nsColor: BackgroundPalette.nsColor(hex))).frame(width: 19, height: 19)
+                                    .overlay(Circle().strokeBorder(!split.barsBlurred && !split.barsAuto && split.barsColor == hex ? W.blue : .clear,
+                                                                   lineWidth: 2).padding(-3))
+                            }
+                            .buttonStyle(HoverButtonStyle(lift: 1.18))
+                            .help("Bars in this color")
+                        }
+                    }
+                }
+                // Instead of a color from the rows above (none of the two is blue then).
+                ChoiceButtons(titles: ["Blur", "Auto Color"], selected: split.barsBlurred ? 0 : split.barsAuto ? 1 : -1,
+                              helps: ["A blurred copy of the screen fills the bars",
+                                      "The color found most along the recording's edges, like the screenshot Background tool's inset"]) { i in
+                    edit { $0.barsBlurred = i == 0; $0.barsAuto = i == 1 }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+}
+
+/// Split screen's side, like the bubble's position picker: a spot on each edge of a small frame; the selected one is blue.
+private struct SplitSidePicker: View {
+    let selected: CameraSplit.Side
+    let pick: (CameraSplit.Side) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset: CGFloat = 10, long: CGFloat = 46, short: CGFloat = 16
+            ZStack(alignment: .topLeading) {
+                ForEach(CameraSplit.Side.allCases, id: \.self) { side in
+                    let size = side.isVertical ? CGSize(width: long, height: short) : CGSize(width: short, height: long)
+                    let origin: CGPoint = switch side {
+                    case .top: CGPoint(x: (geo.size.width - size.width) / 2, y: inset)
+                    case .bottom: CGPoint(x: (geo.size.width - size.width) / 2, y: geo.size.height - inset - size.height)
+                    case .left: CGPoint(x: inset, y: (geo.size.height - size.height) / 2)
+                    case .right: CGPoint(x: geo.size.width - inset - size.width, y: (geo.size.height - size.height) / 2)
+                    }
+                    Button { pick(side) } label: {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(side == selected ? W.blue : Color.white.opacity(0.14))
+                            .frame(width: size.width, height: size.height)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(HoverButtonStyle())
+                    .help("Camera at the \(side.rawValue)")
+                    .offset(x: origin.x, y: origin.y)
+                }
+            }
+        }
+        .frame(height: 92)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(W.box))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(W.line, lineWidth: 1))
     }
 }

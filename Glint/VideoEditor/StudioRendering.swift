@@ -151,6 +151,52 @@ struct KeystrokeSettings: Equatable, Codable {
     var excluded: [ExcludedKey] = []
 }
 
+/// Split screen (Studio Mode, for vertical social videos and the like): the camera takes one side of the frame and
+/// the screen recording the rest. The frame is the Background's canvas (its ratio, e.g. 9:16).
+struct CameraSplit: Equatable, Codable {
+    enum Side: String, Codable, CaseIterable {
+        case top, bottom, left, right
+        var title: String { rawValue.capitalized }
+        var isVertical: Bool { self == .top || self == .bottom }
+    }
+    /// The camera's share of the frame; `fit` gives the screen part exactly the recording's shape.
+    enum Size: String, Codable, CaseIterable {
+        case half, third, quarter, fit
+        var menuTitle: String {
+            switch self {
+            case .half: "Half"
+            case .third: "A third"
+            case .quarter: "A quarter"
+            case .fit: "Fit the screen (keeps its shape)"
+            }
+        }
+    }
+    /// Crop: the screen fills its part (the rest is cut off, following the cursor). Shrink: the whole screen, with
+    /// bars of the background (or black) where the shapes differ.
+    enum Screen: String, Codable, CaseIterable {
+        case crop, shrink
+        var title: String { rawValue.capitalized }
+    }
+
+    var side: Side = .bottom
+    var size: Size = .half
+    var screen: Screen = .crop
+    /// Shrink's bars, where the screen's shape and its part differ: the screen blurred, the color found most along
+    /// the recording's edges (like the screenshot Background tool's inset), or a plain color (hex).
+    var barsBlurred = false
+    var barsAuto = false
+    var barsColor: UInt32 = 0x111111
+}
+
+extension CameraSplit {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = CameraSplit()
+        self.init(side: c.value(.side, or: d.side), size: c.value(.size, or: d.size), screen: c.value(.screen, or: d.screen),
+                  barsBlurred: c.value(.barsBlurred, or: d.barsBlurred), barsAuto: c.value(.barsAuto, or: d.barsAuto),
+                  barsColor: c.value(.barsColor, or: d.barsColor))
+    }
+}
+
 struct CameraSettings: Equatable, Codable {
     var show = true
     /// 0.5…2 (relative to the recorder's Medium).
@@ -160,6 +206,9 @@ struct CameraSettings: Equatable, Codable {
     var position: OverlayCorner = .bottomRight
     var flip = true
     var shrinkOnZoom = true
+    /// Split screen for the whole video instead of the bubble (camera actions can still change it for a while).
+    var splitScreen = false
+    var split = CameraSplit()
 }
 
 extension KeyedDecodingContainer {
@@ -197,7 +246,8 @@ extension CameraSettings {
         let c = try decoder.container(keyedBy: CodingKeys.self), d = CameraSettings()
         self.init(show: c.value(.show, or: d.show), size: c.value(.size, or: d.size), shape: c.value(.shape, or: d.shape),
                   position: c.value(.position, or: d.position), flip: c.value(.flip, or: d.flip),
-                  shrinkOnZoom: c.value(.shrinkOnZoom, or: d.shrinkOnZoom))
+                  shrinkOnZoom: c.value(.shrinkOnZoom, or: d.shrinkOnZoom), splitScreen: c.value(.splitScreen, or: d.splitScreen),
+                  split: c.value(.split, or: d.split))
     }
 }
 
@@ -822,6 +872,8 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
             case .full: CameraLook(rect: CGRect(origin: .zero, size: size), radius: 0, alpha: 1)
             case .bubble: bubbleLook(size: l.size, shape: l.shape, position: l.position, in: size, zoom: zoom)
             case .hidden: CameraLook(rect: base.rect, radius: base.radius, alpha: 0)
+            // Split screen is drawn by the frame renderer; here (blending into or out of it) the bubble stays.
+            case .split: base
             }
         }
         guard let i = cameraLayouts.firstIndex(where: { t >= $0.start && t <= $0.end }) else { return base }
@@ -840,6 +892,62 @@ nonisolated final class StudioOverlay: @unchecked Sendable {
             return target.blended(to: base, ease((t - (layout.end - ramp)) / ramp))
         }
         return target
+    }
+
+    // MARK: Split screen
+
+    /// Split screen at output time `t`: its settings and how far it's blended in (0…1, over the same time as the
+    /// other camera actions); nil when there's none. From the Camera section (the whole video) or split actions.
+    func split(at t: Double) -> (split: CameraSplit, amount: CGFloat)? {
+        guard camera.show else { return nil }
+        let base: CameraSplit? = camera.splitScreen ? camera.split : nil
+        func target(_ l: CameraLayout) -> CameraSplit? { l.kind == .split ? l.split : nil }
+        func mix(_ a: CameraSplit?, _ b: CameraSplit?, _ f: CGFloat) -> (split: CameraSplit, amount: CGFloat)? {
+            switch (a, b) {
+            case (nil, nil): nil
+            case let (a?, nil): (a, 1 - f)
+            case let (nil, b?): (b, f)
+            case let (a?, b?): (f < 0.5 ? a : b, 1)  // one split to another: it switches halfway
+            }
+        }
+        guard let i = cameraLayouts.firstIndex(where: { t >= $0.start && t <= $0.end }) else { return base.map { ($0, 1) } }
+        let layout = cameraLayouts[i]
+        let ramp = min(Self.cameraBlend, (layout.end - layout.start) / 3)
+        func ease(_ p: Double) -> CGFloat { let p = min(max(p, 0), 1); return CGFloat(p * p * (3 - 2 * p)) }
+        let previous = i > 0 && cameraLayouts[i - 1].end > layout.start - 0.01 ? cameraLayouts[i - 1] : nil
+        let next = i + 1 < cameraLayouts.count && cameraLayouts[i + 1].start < layout.end + 0.01 ? cameraLayouts[i + 1] : nil
+        let into = target(layout)
+        if layout.start > 0.01, t < layout.start + ramp {
+            return mix(previous.map(target) ?? base, into, ease((t - layout.start) / ramp))
+        }
+        if next == nil, layout.end < duration - 0.01, t > layout.end - ramp {
+            return mix(into, base, ease((t - (layout.end - ramp)) / ramp))
+        }
+        return into.map { ($0, 1) }
+    }
+
+    /// Where split screen's crop looks (0…1 of the recorded area, top-left origin): the cursor, averaged over
+    /// ±0.6 s so the crop glides along instead of following every twitch.
+    func splitFocus(at t: Double) -> CGPoint? {
+        let src = sourceTime(t)
+        var x = 0.0, y = 0.0, n = 0.0
+        for k in -6...6 {
+            guard let p = path.at(src + Double(k) * 0.1)?.point else { continue }
+            x += p.x; y += p.y; n += 1
+        }
+        return n > 0 ? CGPoint(x: x / n, y: y / n) : nil
+    }
+
+    /// The camera picture aspect-filled into `rect` (y-up pixels), mirrored when that's on.
+    func cameraPicture(_ frame: CIImage, filling rect: CGRect) -> CIImage {
+        var picture = frame.transformed(by: CGAffineTransform(translationX: -frame.extent.minX, y: -frame.extent.minY))
+        let fw = picture.extent.width, fh = picture.extent.height
+        guard fw > 0, fh > 0, rect.width > 0, rect.height > 0 else { return CIImage.empty() }
+        if camera.flip { picture = picture.transformed(by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -fw, y: 0)) }
+        let s = max(rect.width / fw, rect.height / fh)
+        return picture.transformed(by: CGAffineTransform(scaleX: s, y: s))
+            .transformed(by: CGAffineTransform(translationX: rect.minX - (fw * s - rect.width) / 2, y: rect.minY - (fh * s - rect.height) / 2))
+            .cropped(to: rect)
     }
 
     /// The camera: its picture aspect-filled into the look's rectangle, clipped round, with a soft shadow.

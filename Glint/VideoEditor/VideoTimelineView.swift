@@ -870,6 +870,7 @@ final class VideoTimelineView: NSView {
         switch l.kind {
         case .full: "rectangle.inset.filled"
         case .hidden: "video.slash.fill"
+        case .split: l.split.side.isVertical ? "rectangle.split.1x2.fill" : "rectangle.split.2x1.fill"
         case .bubble: ["circle.fill", "square.fill", "rectangle.fill", "rectangle.portrait.fill"][min(max(l.shape, 0), 3)]
         }
     }
