@@ -67,9 +67,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         urls.forEach { AnnotateWindowController.open(url: $0) }
     }
 
-    /// Opening Glint again (Spotlight, Finder, the Dock) opens its menu bar menu, editors open or not; Settings only
-    /// when the menu bar icon is hidden, so there's still a way in.
+    /// Opening Glint again (Spotlight, Finder, the Dock) opens its menu bar menu; Settings only when the menu bar
+    /// icon is hidden, so there's still a way in. With an editor open, that editor comes forward instead (as any
+    /// app's windows do), and the menu stays closed.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let editors = NSApp.windows.filter { window in
+            (window.windowController is AnnotateWindowController || window.windowController is VideoEditorWindowController
+                || window.windowController is GIFTrimmer) && (window.isVisible || window.isMiniaturized)
+        }
+        if !editors.isEmpty {
+            NSApp.bringToFront()
+            let window = editors.first { $0.isVisible } ?? editors[0]
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            return false
+        }
         if statusItemController?.openMenu() != true { SettingsWindowController.shared.show() }
         return true
     }
@@ -132,7 +144,15 @@ enum MainMenu {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About Glint", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(AppMenuTarget.checkForUpdates), keyEquivalent: "").target = AppMenuTarget.shared
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(AppMenuTarget.openSettings), keyEquivalent: ",").target = AppMenuTarget.shared
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Glint", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+            .keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Glint", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -147,6 +167,7 @@ enum MainMenu {
         updateNewTabShortcut()
         file.addItem(.separator())
         file.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        // Both editors: Save; Save As… (the video editor's Export…).
         file.addItem(withTitle: "Save", action: #selector(AnnotateWindowController.saveDocument(_:)), keyEquivalent: "s")
         file.addItem(withTitle: "Save As…", action: #selector(AnnotateWindowController.saveDocumentAs(_:)), keyEquivalent: "S")
         file.addItem(withTitle: "Copy Screenshot", action: #selector(AnnotateWindowController.copyScreenshot(_:)), keyEquivalent: "C")
@@ -167,9 +188,22 @@ enum MainMenu {
         editItem.submenu = edit
         main.addItem(editItem)
 
+        // The screenshot editor's zoom (the same shortcuts as its zoom menu).
+        let viewItem = NSMenuItem()
+        let view = NSMenu(title: "View")
+        view.addItem(withTitle: "Zoom In", action: #selector(AnnotateWindowController.zoomInFromMenu(_:)), keyEquivalent: "+")
+        view.addItem(withTitle: "Zoom Out", action: #selector(AnnotateWindowController.zoomOutFromMenu(_:)), keyEquivalent: "-")
+        view.addItem(withTitle: "Actual Size", action: #selector(AnnotateWindowController.actualSizeFromMenu(_:)), keyEquivalent: "0")
+        view.addItem(withTitle: "Zoom to Fit", action: #selector(AnnotateWindowController.zoomToFitFromMenu(_:)), keyEquivalent: "9")
+        viewItem.submenu = view
+        main.addItem(viewItem)
+
         let windowItem = NSMenuItem()
         let window = NSMenu(title: "Window")
         window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        window.addItem(.separator())
+        window.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         windowItem.submenu = window
         main.addItem(windowItem)
         // AppKit adds the tab commands (Show Tab Bar, Show All Tabs, Merge All Windows…) to the Window menu.
@@ -191,5 +225,6 @@ enum MainMenu {
 final class AppMenuTarget: NSObject {
     static let shared = AppMenuTarget()
     @objc func openSettings() { SettingsWindowController.shared.show() }
+    @objc func checkForUpdates() { Updater.shared.checkForUpdates() }
     @objc func openAnnotate() { AnnotateWindowController.openFromPanel() }
 }

@@ -634,6 +634,13 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc func delete(_ sender: Any?) { doc.deleteSelected() }
 
+    // MARK: View menu
+
+    @objc func zoomInFromMenu(_ sender: Any?) { handle("zoomIn") }
+    @objc func zoomOutFromMenu(_ sender: Any?) { handle("zoomOut") }
+    @objc func actualSizeFromMenu(_ sender: Any?) { handle("zoom100") }
+    @objc func zoomToFitFromMenu(_ sender: Any?) { handle("zoomFit") }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(undo(_:)):

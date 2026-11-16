@@ -303,6 +303,16 @@ final class QuickAccessManager {
             let inside = bar.frame.contains(mouse) && bar.isTopmost(at: mouse)
             if bar.state.hovering != inside { bar.state.hovering = inside }
         }
+        // And the cards': one that slid in under a pointer that was already there, or that another window covered
+        // the moment the pointer arrived, never got "entered", so its buttons didn't show until the pointer left
+        // and came back.
+        for entry in entries {
+            let panel = entry.panel
+            let inside = !isCollapsed && !isHidden && panel.isVisible && panel.frame.contains(mouse) && panel.isTopmost(at: mouse)
+            guard entry.hover.isHovering != inside else { continue }
+            entry.hover.isHovering = inside
+            hoverChanged(entry, hovering: inside)
+        }
         if isCollapsed, let tab = restoreTab {
             // The tab's place, a little taller, down to the screen edge.
             let zone = tab.frame.insetBy(dx: -8, dy: -12)

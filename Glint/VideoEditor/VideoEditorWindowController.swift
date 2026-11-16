@@ -39,6 +39,12 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
     static var hasOpenEditors: Bool { !open.isEmpty }
 
     let project: VideoProject
+    /// Edit → Undo / Redo's history: the project's (see `ProjectUndoManager`).
+    private lazy var projectUndo: ProjectUndoManager = {
+        let manager = ProjectUndoManager()
+        manager.project = project
+        return manager
+    }()
     let state = VideoEditorState()
     let player = AVPlayer()
     private var renderer: VideoFrameRenderer?
@@ -559,7 +565,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Export
 
-    private func showExport() {
+    fileprivate func showExport() {
         guard let window else { return }
         player.pause()
         state.isPlaying = false
@@ -756,4 +762,27 @@ enum SavedEdit {
         try? FileManager.default.createDirectory(at: settings(for: url).deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(edit).write(to: settings(for: url))
     }
+}
+
+// MARK: - Menu bar
+
+/// File → Save and Save As… (the Export sheet). Edit → Undo / Redo go through the window's undo manager
+/// (`ProjectUndoManager`), whichever view has the keyboard; ⌘Z itself is handled by the key monitor (also on QWERTZ).
+extension VideoEditorWindowController {
+    @objc func saveDocument(_ sender: Any?) { save() }
+    @objc func saveDocumentAs(_ sender: Any?) { showExport() }
+
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { projectUndo }
+}
+
+/// The window's undo history is the project's (its edits are snapshots, `VideoProject.undo`), so Edit → Undo works.
+/// Typing in a text field (a caption) registers its own steps here first; those are undone before the project's.
+final class ProjectUndoManager: UndoManager {
+    weak var project: VideoProject?
+    override var canUndo: Bool { super.canUndo || (project?.canUndo ?? false) }
+    override var canRedo: Bool { super.canRedo || (project?.canRedo ?? false) }
+    override func undo() { if super.canUndo { super.undo() } else { project?.undo() } }
+    override func redo() { if super.canRedo { super.redo() } else { project?.redo() } }
+    override var undoMenuItemTitle: String { super.canUndo ? super.undoMenuItemTitle : "Undo" }
+    override var redoMenuItemTitle: String { super.canRedo ? super.redoMenuItemTitle : "Redo" }
 }
