@@ -117,7 +117,7 @@ enum TextCapture {
         guard Permissions.ensureScreenRecording() else { return }
         Task {
             // Glint's own selection, the same as Capture Area's.
-            let overlay = SelectionOverlay(mode: .area)
+            let overlay = SelectionOverlay(mode: .area, hints: .captureText)
             guard let result = await withCheckedContinuation({ cont in overlay.begin { cont.resume(returning: $0) } }) else {
                 glintLog("ocr: no selection"); CLIReply.cancelled(); return
             }

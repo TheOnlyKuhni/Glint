@@ -45,7 +45,7 @@ enum ScreenHint {
     }
 }
 
-private struct ScreenHintPill: View {
+struct ScreenHintPill: View {
     let text: String
     var body: some View {
         Text(text)

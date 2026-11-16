@@ -348,7 +348,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         Task {
             try? await Task.sleep(for: .milliseconds(150))
             // Glint's own selection, as in Capture Area.
-            let overlay = SelectionOverlay(mode: .area)
+            let overlay = SelectionOverlay(mode: .area, hints: .addToEditor)
             let result = await withCheckedContinuation { cont in overlay.begin { cont.resume(returning: $0) } }
             var image: CGImage?
             if let result {

@@ -59,7 +59,8 @@ final class RegionSelector {
         ShortcutManager.shared.setEscapeHandler { [weak self] in self?.cancel() }
         if let initial, initial.width > 20, initial.height > 20 { set(initial) }
         NSAnimationContext.runAnimationGroup { $0.duration = 0.12; window.animator().alphaValue = 1 }
-        NSCursor.arrow.set()
+        GlintCrosshair.cursor.set()
+        view.pointerMoved(to: view.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))
     }
 
     /// The panel shown with the selection (SwiftUI content gets its own hosting view).
@@ -205,6 +206,8 @@ final class RegionSelector {
 }
 
 /// Dims the screen except the selection and draws the corner brackets and edge handles (flipped coordinates).
+/// While an area is being picked it looks like the screenshot overlay (`SelectionChrome`): crosshair cursor, the
+/// coordinate pill, a white border around the area and the guide lines.
 private final class RegionView: NSView {
     weak var owner: RegionSelector?
     var selection: CGRect = .zero { didSet { needsDisplay = true; updateHint() } }
@@ -212,24 +215,24 @@ private final class RegionView: NSView {
     var showsChrome = false { didSet { needsDisplay = true } }
     var ratio: CGFloat?
     var dim: CGFloat = 0.6
-    private let hintView: NSView
+    private let hint: CaptureHintView
+    private let sizeLabel = SizeLabelView()
+    /// The pointer (view coordinates); off-screen until it's known.
+    private var mouse = CGPoint(x: -1000, y: -1000)
+    private var isCommandHeld = false
     private var windows = WindowInfo.onScreen()
     private var windowMode = false
     private var hoveredWindow: CGRect?
     private enum Drag { case create(CGPoint), move(CGPoint, CGRect), resize(Edge, CGRect) }
     private struct Edge: OptionSet { let rawValue: Int; static let left = Edge(rawValue: 1), right = Edge(rawValue: 2), top = Edge(rawValue: 4), bottom = Edge(rawValue: 8) }
     private var drag: Drag?
-    private var hintHovered = false
 
     init(frame: CGRect, hint: String) {
-        let pill = PassThroughHostingView(rootView: HintPill(text: hint))
-        pill.sizingOptions = [.intrinsicContentSize]
-        pill.wantsLayer = true
-        hintView = pill
+        self.hint = CaptureHintView(text: hint)
         super.init(frame: frame)
-        addSubview(pill)
-        let size = pill.fittingSize
-        pill.frame = CGRect(x: (frame.width - size.width) / 2, y: (frame.height - size.height) / 2, width: size.width, height: size.height)
+        addSubview(self.hint)
+        addSubview(sizeLabel)
+        sizeLabel.isHidden = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -238,22 +241,42 @@ private final class RegionView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     private func updateHint() {
-        hintView.isHidden = !selection.isEmpty || drag != nil
-        if hintView.isHidden { hintHovered = false; hintView.alphaValue = 1 }
+        hint.setShown(selection.isEmpty && drag == nil)
     }
 
-    /// The hint fades almost away (to 10%) while the pointer is near it: its hover zone
-    /// reaches ~52pt past the pill's sides and bottom and ~65pt above it. The fade starts at once and takes 0.1 s.
-    private func updateHintHover(_ p: CGPoint) {
-        let zone = hintView.frame.insetBy(dx: -52, dy: -57).offsetBy(dx: 2, dy: -8)
-        let hovered = !hintView.isHidden && zone.contains(p)
-        guard hovered != hintHovered else { return }
-        hintHovered = hovered
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
-            hintView.animator().alphaValue = hovered ? 0.1 : 1
-        }
+    private var isCreating: Bool { if case .create = drag { true } else { false } }
+
+    /// Picking an area (nothing selected yet, or a new one being dragged out), as opposed to editing one.
+    private var isPicking: Bool { !windowMode && (selection.isEmpty || isCreating) }
+
+    private var showsLines: Bool { isPicking && bounds.contains(mouse) && SelectionGuides.showsLines(commandHeld: isCommandHeld) }
+
+    /// The pointer moved (view coordinates): the hint fades near it, the guide lines and coordinate pill follow.
+    func pointerMoved(to p: CGPoint) {
+        let hadLines = showsLines, old = mouse
+        mouse = p
+        hint.pointerMoved(to: p)
+        if hadLines { SelectionGuides.lineStrips(through: old, in: bounds).forEach { setNeedsDisplay($0) } }
+        if showsLines { SelectionGuides.lineStrips(through: p, in: bounds).forEach { setNeedsDisplay($0) } }
+        updateSizeLabel()
     }
+
+    /// "x, y" while picking, "W × H" while a new area is dragged out (the panel's fields take over after that).
+    private func updateSizeLabel() {
+        guard isPicking, bounds.contains(mouse) else { sizeLabel.isHidden = true; return }
+        sizeLabel.text = isCreating && !selection.isEmpty ? "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded()))"
+                                                          : "\(Int(mouse.x.rounded())), \(Int(mouse.y.rounded()))"
+        sizeLabel.isHidden = false
+        SelectionGuides.place(sizeLabel, near: mouse, offset: CGPoint(x: 14, y: 16), in: bounds)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        isCommandHeld = event.modifierFlags.contains(.command)
+        needsDisplay = true
+    }
+
+    /// Scrolling reaches the window underneath (the area stays where it is).
+    override func scrollWheel(with event: NSEvent) { ScrollPassThrough.forward(event) }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -272,6 +295,12 @@ private final class RegionView: NSView {
             ctx.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor)
             ctx.fill(w)
         }
+        if !selection.isEmpty {
+            ctx.setStrokeColor(SelectionGuides.borderColor.cgColor)
+            ctx.setLineWidth(1)
+            ctx.stroke(selection.insetBy(dx: -0.5, dy: -0.5))
+        }
+        if showsLines { SelectionGuides.drawLines(through: mouse, in: bounds, ctx: ctx) }
         guard !selection.isEmpty, showsChrome else { return }
         // Corner brackets (3pt, 16pt arms) just outside the area and short bars centered on each edge.
         let r = selection, t: CGFloat = 3, arm: CGFloat = 16
@@ -325,13 +354,13 @@ private final class RegionView: NSView {
         }
         if let position { NSCursor.frameResize(position: position, directions: .all).set() }
         else if showsChrome, selection.contains(p) { NSCursor.openHand.set() }
-        else { NSCursor.arrow.set() }
+        else { GlintCrosshair.cursor.set() }  // dragging here picks a new area
     }
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         updateCursor(p)
-        updateHintHover(p)
+        pointerMoved(to: p)
         updateHoveredWindow(at: p)
     }
 
@@ -360,6 +389,7 @@ private final class RegionView: NSView {
         if !e.isEmpty { drag = .resize(e, selection) }
         else if showsChrome, selection.contains(p) { drag = .move(p, selection); NSCursor.closedHand.set() }
         else { drag = .create(p); updateHint() }
+        updateSizeLabel()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -369,6 +399,7 @@ private final class RegionView: NSView {
         case .create(let start):
             showsChrome = false
             selection = ratio.map { constrained(from: start, to: c, ratio: $0) } ?? CGRect(corner: start, c)
+            pointerMoved(to: c)
             owner?.selectionChanged(selection, dragging: true)
             return
         case .move(let start, let original):
@@ -400,6 +431,8 @@ private final class RegionView: NSView {
         updateHint()
         owner?.selectionChanged(selection, dragging: false)
         updateCursor(convert(event.locationInWindow, from: nil))
+        updateSizeLabel()
+        needsDisplay = true  // the guide lines go once an area is there
     }
 
     // MARK: Ratio
@@ -449,24 +482,11 @@ private final class RegionView: NSView {
             windowMode.toggle()
             windows = WindowInfo.onScreen()
             hoveredWindow = nil
+            updateSizeLabel()
             // The window under the pointer is picked right away, without waiting for the mouse to move.
             if let window { updateHoveredWindow(at: convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)) }
             needsDisplay = true
         default: super.keyDown(with: event)
         }
-    }
-}
-
-/// The light hint pill in the middle of the screen ("Drag to record a part of the screen. …").
-private struct HintPill: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(Color(white: 0.12))
-            .padding(.horizontal, 28)
-            .frame(height: 60)
-            .background(Capsule().fill(Color(white: 0.84).opacity(0.97)))
-            .fixedSize()
     }
 }

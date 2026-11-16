@@ -66,9 +66,21 @@ enum MissionControl {
 final class SelectionOverlay {
     enum Mode { case area, window }
 
+    /// The hint in the middle of each screen until a drag starts (window mode: until a window is clicked).
+    struct Hints {
+        var area = "Drag to capture an area. Press Space to select a window."
+        var window = "Click a window to capture it. Press Space to drag an area."
+        static let captureText = Hints(area: "Drag over the text to copy it. Press Space to select a window.",
+                                       window: "Click a window to copy its text. Press Space to drag an area.")
+        static let addToEditor = Hints(area: "Drag to add a screenshot of an area. Press Space to select a window.",
+                                       window: "Click a window to add a screenshot of it. Press Space to drag an area.")
+    }
+
     fileprivate(set) var mode: Mode
     fileprivate let snapshots: [CGDirectDisplayID: CGImage]
     fileprivate let showsSnapshot: Bool
+    fileprivate let hints: Hints
+    fileprivate var hintText: String { mode == .area ? hints.area : hints.window }
     fileprivate private(set) var windows: [WindowInfo]
     private var windowsRead = Date()
     private var overlayWindows: [OverlayWindow] = []
@@ -82,10 +94,11 @@ final class SelectionOverlay {
     /// - Parameters:
     ///   - snapshots: per-display images for freezing the screen and the magnifier.
     ///   - showsSnapshot: draw the snapshot under the overlay (freeze screen).
-    init(mode: Mode, snapshots: [CGDirectDisplayID: CGImage] = [:], showsSnapshot: Bool = false) {
+    init(mode: Mode, snapshots: [CGDirectDisplayID: CGImage] = [:], showsSnapshot: Bool = false, hints: Hints = Hints()) {
         self.mode = mode
         self.snapshots = snapshots
         self.showsSnapshot = showsSnapshot
+        self.hints = hints
         self.windows = WindowInfo.onScreen(ownWindows: true)
     }
 
@@ -97,7 +110,10 @@ final class SelectionOverlay {
             let view = SelectionView(overlay: self, screen: screen, snapshot: snapshots[screen.displayID])
             window.contentView = view
             overlayWindows.append(window)
+            // Fades in like the recording overlay (a frozen screen shows at once, so nothing seems to jump).
+            if !showsSnapshot { window.alphaValue = 0 }
             window.orderFrontRegardless()
+            if !showsSnapshot { NSAnimationContext.runAnimationGroup { $0.duration = 0.12; window.animator().alphaValue = 1 } }
         }
         ShortcutManager.shared.setEscapeHandler { [weak self] in self?.finish(nil) }
         QuickAccessManager.shared.activateForCapture()
@@ -286,15 +302,18 @@ private final class SelectionView: NSView {
     private let crosshairLayer = CAShapeLayer()
     private let sizeLabel = SizeLabelView()
     private let magnifier: MagnifierView?
+    private let hint: CaptureHintView
 
     init(overlay: SelectionOverlay, screen: NSScreen, snapshot: CGImage?) {
         self.overlay = overlay
         self.screen = screen
         self.snapshot = snapshot
         magnifier = (Defaults[Prefs.showMagnifier] && snapshot != nil) ? MagnifierView(image: snapshot!, scale: screen.backingScaleFactor) : nil
+        hint = CaptureHintView(text: overlay.hintText)
         super.init(frame: CGRect(origin: .zero, size: screen.frame.size))
         wantsLayer = true
         setUpLayers()
+        addSubview(hint)
         addSubview(sizeLabel)
         sizeLabel.isHidden = true
         if let magnifier { addSubview(magnifier); magnifier.isHidden = true }
@@ -317,12 +336,13 @@ private final class SelectionView: NSView {
             layer.addSublayer(snapshotLayer)
         }
         dimLayer.fillRule = .evenOdd
-        dimLayer.fillColor = NSColor.black.withAlphaComponent(0.32).cgColor
+        // The recording overlay's dimming (60%), from the start: every capture mode looks alike.
+        dimLayer.fillColor = NSColor.black.withAlphaComponent(0.6).cgColor
         highlightLayer.fillColor = NSColor.systemBlue.withAlphaComponent(0.22).cgColor
         highlightLayer.strokeColor = NSColor.systemBlue.withAlphaComponent(0.6).cgColor
         highlightLayer.lineWidth = 1
         borderLayer.fillColor = nil
-        borderLayer.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        borderLayer.strokeColor = SelectionGuides.borderColor.cgColor
         borderLayer.lineWidth = 1
         crosshairLayer.strokeColor = NSColor.white.withAlphaComponent(0.75).cgColor
         crosshairLayer.lineWidth = 1
@@ -377,8 +397,16 @@ private final class SelectionView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         mouse = convert(event.locationInWindow, from: nil)
+        hint.pointerMoved(to: mouse)
         updateHover()
         render()
+    }
+
+    /// Scrolling reaches the window underneath, so its content can be moved into place (not on a frozen screen,
+    /// which wouldn't change).
+    override func scrollWheel(with event: NSEvent) {
+        guard !overlay.showsSnapshot else { return }
+        ScrollPassThrough.forward(event)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -485,13 +513,7 @@ private final class SelectionView: NSView {
 
     // MARK: Rendering
 
-    private var showsCrosshair: Bool {
-        switch Defaults[Prefs.crosshairMode] {
-        case .disabled: false
-        case .always: true
-        case .holdingShift: isCommandHeld
-        }
-    }
+    private var showsCrosshair: Bool { SelectionGuides.showsLines(commandHeld: isCommandHeld) }
 
     private func render() {
         CATransaction.begin()
@@ -499,19 +521,20 @@ private final class SelectionView: NSView {
         defer { CATransaction.commit() }
 
         let mouseInside = bounds.contains(mouse)
+        hint.text = overlay.hintText
+        hint.setShown(overlay.mode == .window || (dragStart == nil && selection == nil))
+        // The whole screen is dimmed except the selected area or the window under the pointer.
+        let dim = CGMutablePath()
+        dim.addRect(bounds)
+        dimLayer.isHidden = false
         switch overlay.mode {
         case .area:
             highlightLayer.isHidden = true
             if let selection {
-                let dim = CGMutablePath()
-                dim.addRect(bounds)
                 dim.addRect(selection)
-                dimLayer.path = dim
-                dimLayer.isHidden = false
                 borderLayer.path = CGPath(rect: selection.insetBy(dx: -0.5, dy: -0.5), transform: nil)
                 borderLayer.isHidden = false
             } else {
-                dimLayer.isHidden = true
                 borderLayer.isHidden = true
             }
         case .window:
@@ -519,13 +542,14 @@ private final class SelectionView: NSView {
             if let hovered = hoveredWindow, mouseInside {
                 let r = local(hovered.frame)
                 let path = CGPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), cornerWidth: 10, cornerHeight: 10, transform: nil)
+                dim.addPath(path)
                 highlightLayer.path = path
                 highlightLayer.isHidden = false
             } else {
                 highlightLayer.isHidden = true
             }
-            dimLayer.isHidden = true
         }
+        dimLayer.path = dim
 
         // Crosshair lines across the display.
         if showsCrosshair, mouseInside, overlay.mode == .area {
@@ -603,7 +627,7 @@ enum GlintCrosshair {
 
 /// Dark rounded pill beside the cursor with the position ("x, y") or the selection size ("W × H"), in the
 /// editor's toolbar type: 12pt medium, tabular digits.
-private final class SizeLabelView: NSView {
+final class SizeLabelView: NSView {
     private let label = NSTextField(labelWithString: "")
 
     var text: String {
