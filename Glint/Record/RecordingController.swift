@@ -42,8 +42,8 @@ final class RecordingController {
             CLIReply.cancelled()
         }
         selector.onConfirm = { [weak self] option in self?.start(option ? .gif : studio ? .studio : .video) }
-        // Without "Remember last selection" every recording starts freeform with no area (the other options —
-        // microphone, camera, clicks… — always keep their last state).
+        // "Remember last configuration" keeps the ratio; without it every recording starts freeform. The other
+        // options (microphone, camera, clicks…) always keep their last state, and the area is always drawn anew.
         let remember = Defaults[Prefs.recRememberSelection]
         if !remember { Defaults[Prefs.recRatio] = "" }
         selector.ratio = RecordRatio.value(Defaults[Prefs.recRatio])
@@ -74,9 +74,8 @@ final class RecordingController {
         self.selector = selector
         areaBeforeFullScreen = nil
         WebcamOverlay.shared.attach(to: selector)
-        // It starts with the hint unless "Remember last selection" is on.
-        let last = initial ?? (remember ? CGRect(storageString: Defaults[Prefs.recLastArea]) : nil)
-        selector.begin(initial: last)
+        // It starts with the hint (an area only when one is handed over, e.g. from All-In-One).
+        selector.begin(initial: initial)
     }
 
     func togglePause() { session?.togglePause() }

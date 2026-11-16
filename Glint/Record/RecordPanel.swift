@@ -387,8 +387,12 @@ private struct StudioInfo: View {
 
 /// The native menus of the ratio, microphone and camera cells, opening just below the cell.
 enum RecordMenus {
+    /// While the menu is open, Esc closes it (the overlay's own Esc waits: it closed the overlay once the menu was
+    /// clicked away instead).
     private static func popUp(_ menu: NSMenu, below view: NSView) {
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 6 : -6), in: view)
+        ShortcutManager.shared.withoutEscape {
+            _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 6 : -6), in: view)
+        }
     }
 
     private static func header(_ title: String) -> NSMenuItem { .sectionHeader(title: title) }
@@ -404,7 +408,13 @@ enum RecordMenus {
         for group in [RecordRatio.landscape, RecordRatio.portrait] {
             for r in group {
                 let item = ClosureMenuItem(title: r.title) { set(r.key) }
-                item.toolTip = SocialRatio.hint(r.key)
+                // Where the shape is used ("9 : 16 · Stories, Reels, TikTok, Shorts"), in gray after the ratio.
+                if let hint = SocialRatio.hint(r.key) {
+                    let title = NSMutableAttributedString(string: r.title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+                    title.append(NSAttributedString(string: "  ·  " + hint, attributes: [.font: NSFont.menuFont(ofSize: 0),
+                                                                                       .foregroundColor: NSColor.secondaryLabelColor]))
+                    item.attributedTitle = title
+                }
                 item.state = r.key == current ? .on : .off
                 menu.addItem(item)
             }

@@ -29,7 +29,10 @@ struct RecordingSettingsView: View {
         Form {
             Section("General") {
                 Toggle("Show controls while recording", isOn: $showControls)
-                Toggle("Remember last selection", isOn: $rememberSelection)
+                Toggle(isOn: $rememberSelection) {
+                    Text("Remember last configuration")
+                    Text("Keeps the aspect ratio for the next recording. The area is drawn anew each time.")
+                }
                 Toggle("Display recording time in menu bar", isOn: $timeInMenuBar)
                 Toggle("Dim screen while recording", isOn: $dimScreen)
                 Toggle("Show countdown", isOn: $countdown)

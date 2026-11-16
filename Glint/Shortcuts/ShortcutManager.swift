@@ -75,6 +75,19 @@ final class ShortcutManager {
         if RegisterEventHotKey(UInt32(kVK_Escape), 0, id, GetApplicationEventTarget(), 0, &ref) == noErr { escapeRef = ref }
     }
 
+    /// Runs `body` (a menu that's open until it returns) without the overlay's Esc, so Esc reaches the menu.
+    func withoutEscape(_ body: () -> Void) {
+        guard let ref = escapeRef else { body(); return }
+        UnregisterEventHotKey(ref)
+        escapeRef = nil
+        body()
+        // Back, unless the overlay ended meanwhile.
+        guard escapeHandler != nil, escapeRef == nil else { return }
+        var newRef: EventHotKeyRef?
+        let id = EventHotKeyID(signature: OSType(0x474C_4E54), id: Self.escapeID)
+        if RegisterEventHotKey(UInt32(kVK_Escape), 0, id, GetApplicationEventTarget(), 0, &newRef) == noErr { escapeRef = newRef }
+    }
+
     fileprivate func fire(id: UInt32) {
         if id == Self.escapeID { escapeHandler?(); return }
         guard let action = AppAction.allCases.first(where: { Self.hotKeyID($0) == id }) else { return }
