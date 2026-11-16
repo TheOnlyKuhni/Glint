@@ -99,6 +99,9 @@ final class ScrollingRun {
     private var scrollTimer: DispatchSourceTimer?
     private var autoScrolling = false
     private var finished = false
+    private var scrollMonitors: [Any] = []
+    /// Marks Auto-Scroll's own events (counted where they're posted, so the scroll monitor skips them).
+    nonisolated static let autoScrollMarker: Int64 = 0x676C_6E74
 
     init(rect: CGRect, screen: NSScreen) {
         self.rect = rect
@@ -112,6 +115,10 @@ final class ScrollingRun {
         showFrame()
         showControls()
         showPreview()
+        // How far the content is scrolled (the stitcher needs it to get across blank stretches).
+        let counted: (NSEvent) -> Void = { [weak self] event in self?.scrollEvent(event) }
+        scrollMonitors = [NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: counted),
+                          NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { counted($0); return $0 }].compactMap { $0 }
         ShortcutManager.shared.setEscapeHandler { [weak self] in self?.finish(save: false) }
         captureTask = Task { [weak self] in
             // Let the selection overlay leave the screen before the first frame.
@@ -127,14 +134,24 @@ final class ScrollingRun {
         }
     }
 
+    /// A scroll inside the area: its distance in capture pixels (forward > 0). Wheel steps count as 16pt lines.
+    private func scrollEvent(_ event: NSEvent) {
+        guard !finished, appKitRect.contains(NSEvent.mouseLocation),
+              event.cgEvent?.getIntegerValueField(.eventSourceUserData) != Self.autoScrollMarker else { return }
+        let delta = model.horizontal ? event.scrollingDeltaX : event.scrollingDeltaY
+        let points = event.hasPreciseScrollingDeltas ? delta : delta * 16
+        stitcher.scrolled(-points * screen.backingScaleFactor)
+    }
+
     private var lastPreview = Date.distantPast
 
     /// At most every 0.4s: the preview re-stitches the whole capture.
     private func updatePreview() {
         guard Date().timeIntervalSince(lastPreview) > 0.4 else { return }
-        lastPreview = Date()
         let maxSize = model.horizontal ? CGSize(width: 2000, height: 300) : CGSize(width: 600, height: 20_000)
+        // No frame yet: the first one shows as soon as it's there.
         guard let image = stitcher.preview(fitting: maxSize) else { return }
+        lastPreview = Date()
         model.preview = NSImage(cgImage: image, size: CGSize(width: CGFloat(image.width) / 2, height: CGFloat(image.height) / 2))
         if !model.horizontal { layoutVerticalPreview(aspect: CGFloat(image.height) / CGFloat(max(image.width, 1))) }
     }
@@ -165,8 +182,12 @@ final class ScrollingRun {
         autoScrolling = true
         fadeOut(autoScrollPanel)
         fadeOut(sideToggle)
+        let scale = screen.backingScaleFactor
         scrollTimer = Self.autoScrollTimer(area: rect, horizontal: model.horizontal) { [weak self] inside in
-            Task { @MainActor in self?.pointerInside(inside) }
+            Task { @MainActor in
+                self?.pointerInside(inside)
+                if inside { self?.stitcher.scrolled(61 * scale) }  // one step: 61pt forward
+            }
         }
     }
 
@@ -191,6 +212,7 @@ final class ScrollingRun {
             else { return }
             // Without a location the event only reaches the frontmost app; posted with one, they land under the pointer.
             event.location = mouse
+            event.setIntegerValueField(.eventSourceUserData, value: ScrollingRun.autoScrollMarker)
             event.post(tap: .cghidEventTap)
         }
         timer.resume()
@@ -215,6 +237,8 @@ final class ScrollingRun {
         finished = true
         captureTask?.cancel()
         scrollTimer?.cancel()
+        scrollMonitors.forEach(NSEvent.removeMonitor)
+        scrollMonitors = []
         ShortcutManager.shared.setEscapeHandler(nil)
         for window in [frameWindow, controls, previewPanel, autoScrollPanel, sideToggle, pauseHint] { window?.orderOut(nil) }
         if !save { CLIReply.cancelled() }
@@ -302,13 +326,25 @@ final class ScrollingRun {
     }
 
     /// Vertical: 300pt wide beside the area (right, or left when there's no room), aligned to its bottom.
-    /// Horizontal: a strip inside the area's bottom-right corner.
+    /// Horizontal: a strip as wide as the area outside it, so it never covers what's captured: below the area (under
+    /// Cancel / Done), above it when there's no room, inside its bottom only when neither fits.
     private func showPreview() {
         let area = appKitRect, visible = screen.visibleFrame
         let frame: CGRect
         if model.horizontal {
-            let size = CGSize(width: area.width - 30, height: min(150, area.height / 3))
-            frame = CGRect(x: area.maxX - 15 - size.width, y: area.minY + 15, width: size.width, height: size.height)
+            let gap: CGFloat = 10, wanted: CGFloat = 150, least: CGFloat = 70
+            // Below the buttons when they're under the area; they sit inside it when there's no room below.
+            let belowTop = min(area.minY, controls.map { $0.frame.minY } ?? area.minY) - gap
+            let roomBelow = belowTop - visible.minY - gap, roomAbove = visible.maxY - gap - (area.maxY + gap)
+            if roomBelow >= least {
+                let height = min(wanted, roomBelow)
+                frame = CGRect(x: area.minX, y: belowTop - height, width: area.width, height: height)
+            } else if roomAbove >= least {
+                frame = CGRect(x: area.minX, y: area.maxY + gap, width: area.width, height: min(wanted, roomAbove))
+            } else {
+                let size = CGSize(width: area.width - 30, height: min(wanted, area.height / 3))
+                frame = CGRect(x: area.maxX - 15 - size.width, y: area.minY + 15, width: size.width, height: size.height)
+            }
         } else {
             // Starts with the area's own shape; `layoutVerticalPreview` grows it with the capture.
             let size = CGSize(width: 300, height: min(300 * area.height / max(area.width, 1), visible.maxY - area.minY))
@@ -318,9 +354,11 @@ final class ScrollingRun {
         }
         let panel = panel(frame)
         panel.hasShadow = true
-        // Scrolling over the preview (it sits inside the area sideways) reaches the content below.
+        // Scrolling over the preview (when it has to sit inside the area) reaches the content below.
         panel.ignoresMouseEvents = true
         let host = NSHostingView(rootView: ScrollingPreview(model: model))
+        // The panel keeps the frame set here (its content would size it: nothing at first, then the image's size).
+        host.sizingOptions = []
         host.frame = CGRect(origin: .zero, size: frame.size)
         panel.contentView = host
         panel.orderFrontRegardless()
@@ -464,6 +502,12 @@ final class Stitcher {
     /// True once the content moved (the direction is settled).
     var hasScrolled: Bool { pieces.count > 1 }
 
+    /// How far the content was scrolled (pixels along the axis, > 0 = forward) since the last frame was added.
+    private var scrolledSinceLast: CGFloat = 0
+
+    /// A scroll by the user or Auto-Scroll, in pixels (> 0 = forward). Only used to bridge blank stretches.
+    func scrolled(_ pixels: CGFloat) { scrolledSinceLast += pixels }
+
     /// Only look for movement along one axis.
     func lock(horizontal: Bool) { axis = horizontal ? .horizontal : .vertical }
 
@@ -487,18 +531,47 @@ final class Stitcher {
         guard last.image.width == image.width, last.image.height == image.height else { return false }
         let dy = axis != .horizontal ? Self.offset(last.rows, frame.rows) : nil
         let dx = axis != .vertical ? Self.offset(last.columns, frame.columns) : nil
-        let pick: (Axis, Int)? = switch (dy, dx) {
+        var pick: (Axis, Int)? = switch (dy, dx) {
         case let (y?, x?): y >= x ? (.vertical, y) : (.horizontal, x)
         case let (y?, nil): (.vertical, y)
         case let (nil, x?): (.horizontal, x)
         default: nil
         }
+        if pick == nil, let axis, let moved = acrossBlank(last, frame, axis: axis) { pick = (axis, moved) }
         guard let (direction, moved) = pick, moved > 0 else { return false }
         axis = direction
         if pieces.count == 1 { pieces[0].newPixels = direction == .vertical ? image.height : image.width }
         pieces.append((image, moved))
         self.last = frame
+        scrolledSinceLast = 0
         return true
+    }
+
+    /// Content coming back after a blank stretch (a white part of a page). Flat lines have no fingerprint, so once
+    /// a whole frame was blank, nothing matched the last frame with content again and the capture stopped growing.
+    /// Here the new content is placed by how far it was scrolled meanwhile (an error only changes the blank gap's
+    /// height), never overlapping what was already captured; the gap is filled with the blank color.
+    private func acrossBlank(_ last: Frame, _ frame: Frame, axis: Axis) -> Int? {
+        let prev = axis == .vertical ? last.rows : last.columns
+        let cur = axis == .vertical ? frame.rows : frame.columns
+        guard let length = prev.first?.count, length > 0 else { return nil }
+        // Bands that stayed in place (a fixed sidebar) don't tell whether the content is blank.
+        let bands = prev.indices.filter { b in
+            let filled = prev[b].indices.filter { prev[b][$0] != 0 }
+            guard !filled.isEmpty else { return true }
+            let same = filled.filter { cur[b][$0] == prev[b][$0] }.count
+            return same * 10 < filled.count * 9
+        }
+        guard !bands.isEmpty else { return nil }
+        func hasContent(_ lines: [[UInt64]], _ i: Int) -> Bool { bands.contains { lines[$0][i] != 0 } }
+        // Still blank: wait for content.
+        guard let firstContent = (0..<length).first(where: { hasContent(cur, $0) }) else { return nil }
+        let lastContent = (0..<length).last(where: { hasContent(prev, $0) }) ?? -1
+        // Only across a blank stretch: the last frame ended blank and the new one starts blank.
+        guard firstContent >= length / 10, length - 1 - lastContent >= length / 10 else { return nil }
+        let estimate = Int(scrolledSinceLast.rounded())
+        guard estimate > 0 else { return nil }
+        return max(estimate, lastContent - firstContent + 1, 1)
     }
 
     /// The scroll distance (> 0 = content moved forward) with the most matching fingerprints over all bands,
@@ -563,7 +636,18 @@ final class Stitcher {
         ctx.draw(first, in: vertical ? CGRect(x: 0, y: h - first.height, width: first.width, height: first.height)
                                      : CGRect(x: 0, y: 0, width: first.width, height: first.height))
         for piece in pieces.dropFirst() {
+            let before = end
             end += piece.newPixels
+            // Placed after a blank stretch longer than a frame: the gap gets the piece's own blank edge.
+            let length = vertical ? piece.image.height : piece.image.width
+            if piece.newPixels > length {
+                let gap = min(end - length, vertical ? h : w) - before
+                if gap > 0, let edge = piece.image.cropping(to: CGRect(x: 0, y: 0, width: vertical ? piece.image.width : 1,
+                                                                        height: vertical ? 1 : piece.image.height)) {
+                    ctx.draw(edge, in: vertical ? CGRect(x: 0, y: h - before - gap, width: w, height: gap)
+                                                : CGRect(x: before, y: 0, width: gap, height: h))
+                }
+            }
             if vertical {
                 let top = end - piece.image.height
                 ctx.draw(piece.image, in: CGRect(x: 0, y: h - top - piece.image.height, width: piece.image.width, height: piece.image.height))
