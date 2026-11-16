@@ -4,16 +4,17 @@ import SwiftUI
 private typealias W = VideoEditorWindowController
 
 /// What the screenshot editor's left side shows: the mode rail picks one, the sidebar holds its settings. The
-/// drawing tools stay in the toolbar in every mode except Crop (they rest while cropping).
+/// drawing tools stay in the toolbar in every mode except Crop and Resize (they rest meanwhile).
 enum AnnotateMode: CaseIterable {
-    case annotate, background, add, crop
+    case annotate, background, add, crop, resize
 
     var title: String {
         switch self {
         case .annotate: "Annotate"
         case .background: "Background"
         case .add: "Add Image"
-        case .crop: "Crop & Resize"
+        case .crop: "Crop"
+        case .resize: "Resize"
         }
     }
 
@@ -23,6 +24,7 @@ enum AnnotateMode: CaseIterable {
         case .background: "photo.artframe"
         case .add: "photo.badge.plus"
         case .crop: "crop"
+        case .resize: "arrow.up.left.and.arrow.down.right"
         }
     }
 
@@ -31,7 +33,8 @@ enum AnnotateMode: CaseIterable {
         case .annotate: "Annotate: color, size and style of the tool or the selected object"
         case .background: "Background (B): put the screenshot on a backdrop"
         case .add: "Add Image: a screenshot or an image file on top"
-        case .crop: "Crop & Resize (K)"
+        case .crop: "Crop (K): keep part of the screenshot, rotate or flip it"
+        case .resize: "Resize: change how many pixels the screenshot has"
         }
     }
 }
@@ -134,13 +137,16 @@ struct AnnotateSidebarActions {
     var flip: () -> Void
     var cancelCrop: () -> Void
     var applyCrop: () -> Void
+    var cancelResize: () -> Void
+    var applyResize: () -> Void
 }
 
 struct AnnotateSidebar: View {
     let model: AnnotateEditorModel
     let doc: AnnotationDocument
-    /// Crop & Resize's state while cropping.
+    /// Crop's state while cropping, Resize's while resizing.
     let crop: () -> CropState?
+    let resize: () -> CropState?
     let actions: AnnotateSidebarActions
 
     var body: some View {
@@ -151,6 +157,8 @@ struct AnnotateSidebar: View {
             case .add: scrolling { AddImagePanel(actions: actions) }
             case .crop:
                 if let state = crop() { CropPanel(state: state, doc: doc, imageFill: { $0.color(for: doc.baseImage) }, actions: actions) }
+            case .resize:
+                if let state = resize() { ResizePanel(state: state, actions: actions) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -677,8 +685,9 @@ private struct BigActionButton: View {
 
 // MARK: Crop
 
-/// Crop & Resize mode, in the order it's used: rotate or flip first, then the crop (ratio, snapping), the fill
-/// around it, and the result's size; Cancel or Apply at the bottom. Explanations are tooltips.
+/// Crop mode: which part of the screenshot to keep. In the order it's used: rotate or flip first, then the frame's
+/// shape (ratio, snapping), the fill where it reaches past the screenshot, and the size that's kept; Cancel or Crop at
+/// the bottom. Changing the number of pixels is Resize mode's job. Explanations are tooltips.
 private struct CropPanel: View {
     @Bindable var state: CropState
     let doc: AnnotationDocument
@@ -693,7 +702,7 @@ private struct CropPanel: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    PanelTitle(title: "Crop & Resize", subtitle: "Drag the frame or its handles. Past the screenshot's edge adds room around it.")
+                    PanelTitle(title: "Crop", subtitle: "Drag the frame or its handles to choose the part to keep. Past the screenshot's edge adds room around it.")
                     HStack(spacing: 6) {
                         TileButton(selected: false, height: 32, help: "Rotate 90° (annotations turn along)", action: actions.rotate) {
                             Label("Rotate", systemImage: "rotate.right").font(.system(size: 12.5, weight: .medium))
@@ -757,12 +766,9 @@ private struct CropPanel: View {
                     .help("Shows where the frame reaches past the screenshot")
                     divider
 
-                    InspectorHeader("Size", value: "\(Int(state.outputPixels.width.rounded())) × \(Int(state.outputPixels.height.rounded())) px")
-                    imageSize
-                    ChoiceButtons(titles: ["Pixels", "Percent"], selected: state.outputInPercent ? 1 : 0,
-                                  helps: ["Type the size in pixels", "Type the size in percent, e.g. 50% turns a Retina screenshot into standard size"]) {
-                        state.outputInPercent = $0 == 1
-                    }
+                    // What's kept, in pixels (Resize changes the number of pixels afterwards).
+                    InspectorHeader("Kept area", value: "\(Int(state.outputPixels.width.rounded())) × \(Int(state.outputPixels.height.rounded())) px")
+                        .help("The size of the part inside the frame. To make the whole image bigger or smaller, use Resize.")
                 }
                 .padding(EdgeInsets(top: 22, leading: 22, bottom: 16, trailing: 22))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -770,11 +776,11 @@ private struct CropPanel: View {
             .scrollIndicators(.never)
             Rectangle().fill(W.line).frame(height: 1)
             HStack(spacing: 8) {
-                TileButton(selected: false, height: 32, help: "Leave Crop & Resize without changes (Esc)", action: actions.cancelCrop) {
+                TileButton(selected: false, height: 32, help: "Leave Crop without changes (Esc)", action: actions.cancelCrop) {
                     Text("Cancel").font(.system(size: 13.5, weight: .medium))
                 }
-                TileButton(selected: true, height: 32, help: "Apply the crop and size (Return)", action: actions.applyCrop) {
-                    Text("Apply").font(.system(size: 13.5, weight: .semibold))
+                TileButton(selected: true, height: 32, help: "Keep the part inside the frame (Return)", action: actions.applyCrop) {
+                    Text("Crop").font(.system(size: 13.5, weight: .semibold))
                 }
             }
             .padding(14)
@@ -811,20 +817,56 @@ private struct CropPanel: View {
         .buttonStyle(HoverButtonStyle(lift: 1.12))
         .help(fill == .auto ? "Auto: the screenshot's edge color" : fill.title)
     }
+}
 
-    /// Width and height of the result with the lock that keeps their ratio, evenly across the panel.
-    private var imageSize: some View {
-        HStack(spacing: 6) {
-            sizeField(width: true)
-            Button { state.lockOutputRatio.toggle() } label: {
-                Image(systemName: state.lockOutputRatio ? "lock.fill" : "lock.open").font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(state.lockOutputRatio ? W.blue : W.box))
+/// Resize mode: how many pixels the whole screenshot has. Keep proportions scales it up or down evenly; off, width and
+/// height change on their own (stretch or squash). Cancel or Resize at the bottom.
+private struct ResizePanel: View {
+    @Bindable var state: CropState
+    let actions: AnnotateSidebarActions
+
+    private var current: CGSize { CGSize(width: state.rect.width * state.pixelScale, height: state.rect.height * state.pixelScale) }
+    private func pixels(_ size: CGSize) -> String { "\(Int(size.width.rounded())) × \(Int(size.height.rounded())) px" }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    PanelTitle(title: "Resize", subtitle: "Make the whole screenshot bigger or smaller. To keep only part of it, use Crop.")
+                    InspectorHeader("Current size", value: pixels(current)).padding(.top, 4)
+                    Rectangle().fill(W.line).frame(height: 1).padding(.vertical, 6)
+
+                    InspectorHeader("New size", value: pixels(state.outputPixels))
+                    HStack(spacing: 6) {
+                        sizeField(width: true)
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Color(white: 0.45))
+                        sizeField(width: false)
+                    }
+                    ChoiceButtons(titles: ["Pixels", "Percent"], selected: state.outputInPercent ? 1 : 0,
+                                  helps: ["Type the size in pixels", "Type the size in percent, e.g. 50% turns a Retina screenshot into standard size"]) {
+                        state.outputInPercent = $0 == 1
+                    }
+                    Toggle(isOn: $state.lockOutputRatio) {
+                        Text("Keep proportions").font(.system(size: 13.5)).foregroundStyle(.white)
+                    }
+                    .toggleStyle(BlueSwitch())
+                    .padding(.top, 6)
+                    .help("On: width and height change together, so the screenshot only gets bigger or smaller. Off: they change on their own, which stretches or squashes it.")
+                }
+                .padding(EdgeInsets(top: 22, leading: 22, bottom: 16, trailing: 22))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(HoverButtonStyle())
-            .help(state.lockOutputRatio ? "Unlock the ratio" : "Lock the ratio")
-            sizeField(width: false)
+            .scrollIndicators(.never)
+            Rectangle().fill(W.line).frame(height: 1)
+            HStack(spacing: 8) {
+                TileButton(selected: false, height: 32, help: "Leave Resize without changes (Esc)", action: actions.cancelResize) {
+                    Text("Cancel").font(.system(size: 13.5, weight: .medium))
+                }
+                TileButton(selected: true, height: 32, help: "Give the screenshot the new size (Return)", action: actions.applyResize) {
+                    Text("Resize").font(.system(size: 13.5, weight: .semibold))
+                }
+            }
+            .padding(14)
         }
     }
 
@@ -833,7 +875,7 @@ private struct CropPanel: View {
         let value = state.outputInPercent ? ((width ? state.outputScaleX : state.outputScaleY) * 100).rounded() : (width ? px.width : px.height)
         return HStack(spacing: 4) {
             Text(width ? "W" : "H").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color(white: 0.55))
-            CropDraftField(current: CropNumber.text(value), width: 44) { text in
+            CropDraftField(current: CropNumber.text(value), width: 48) { text in
                 guard let v = CropNumber.parse(text), v > 0 else { return }
                 state.setOutput(v, width: width)
             }
@@ -842,6 +884,6 @@ private struct CropPanel: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity).frame(height: 30)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
-        .help(width ? "The result's width" : "The result's height")
+        .help(width ? "The new width" : "The new height")
     }
 }

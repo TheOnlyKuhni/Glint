@@ -4,7 +4,7 @@ import SwiftUI
 /// The Annotate toolbar: one near-black dock (the canvas's black, with the bottom bar's hairline) holding the tools in
 /// four groups: select, shapes, marks, drawing. A blue pill slides to the selected tool (gray while the window is
 /// inactive); hovering lights a tool up on the buttons' gray. While cropping the tools rest: none is selected and they're
-/// dimmed and off until Crop & Resize ends.
+/// dimmed and off until Crop or Resize ends.
 struct ToolPicker: View {
     let doc: AnnotationDocument
     let onSelect: (AnnotateTool) -> Void

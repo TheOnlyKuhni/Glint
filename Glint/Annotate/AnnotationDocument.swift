@@ -130,8 +130,10 @@ final class AnnotationDocument {
 
     @ObservationIgnored let undoManager = UndoManager()
     @ObservationIgnored private(set) lazy var effects = RedactEffects(base: baseImage, scale: scale)
-    /// Crop & Resize mode is active (the toolbar and canvas switch to crop controls).
+    /// Crop mode is active (the toolbar and canvas switch to crop controls).
     var isCropping = false { didSet { updateExpansion() } }
+    /// Resize mode is open (the tools rest; Save as… and Done wait for Resize or Cancel).
+    var isResizing = false
 
     // Per-tool options (toolbar menus).
     var redactMode: RedactMode = .pixelate
@@ -465,7 +467,7 @@ final class AnnotationDocument {
         markSaved()
     }
 
-    // MARK: Crop & Resize
+    // MARK: Crop and Resize
 
     /// Replaces the screenshot with `image` (annotations already flattened into it), undoable.
     func replaceImage(_ image: CGImage, name: String) {

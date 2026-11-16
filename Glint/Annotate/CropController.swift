@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// State of Crop & Resize mode: crop rectangle (image points; it may lie anywhere, past the screenshot it's the
+/// State of Crop mode (and Resize mode, which uses the whole image as its frame): crop rectangle (image points; it may lie anywhere, past the screenshot it's the
 /// fill), ratio and output size.
 @Observable
 final class CropState {
@@ -161,8 +161,10 @@ final class CropState {
 
     /// Final size in pixels (Image size).
     var outputPixels: CGSize {
-        let w = (rect.width * pixelScale * outputScaleX).rounded(), h = (rect.height * pixelScale * outputScaleY).rounded()
-        return CGSize(width: min(max(w, 1), Self.maxPixels), height: min(max(h, 1), Self.maxPixels))
+        let w = rect.width * pixelScale * outputScaleX, h = rect.height * pixelScale * outputScaleY
+        // Past the limit both sides shrink alike, so the shape stays (each side capped on its own squashed it).
+        let down = min(1, Self.maxPixels / max(w, 1), Self.maxPixels / max(h, 1))
+        return CGSize(width: max((w * down).rounded(), 1), height: max((h * down).rounded(), 1))
     }
 
     /// Picks a ratio from the menu: the frame shrinks around its center to it. Custom Ratio takes the frame's

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The screenshot editor: the drawing tools, Share, Save as… and Done in the head bar (under the title bar and any
 /// tabs); on the left the mode rail (Annotate,
-/// Background, Add Image, Crop & Resize) and the sidebar with the mode's settings; the zoomable canvas; the bottom
+/// Background, Add Image, Crop, Resize) and the sidebar with the mode's settings; the zoomable canvas; the bottom
 /// action bar. Dark, in the video editor's design language.
 final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     private static var open: [AnnotateWindowController] = []
@@ -22,13 +22,16 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var defaultsObserver: NSObjectProtocol?
     private var exportCache: (key: ExportKey, url: URL)?
     private var crop: CropState?
+    /// Resize mode's state (a whole-image "crop" that only changes the number of pixels).
+    private var resize: CropState?
+    fileprivate var modeBeforeResize: AnnotateMode = .annotate
     private var cropOverlay: CropOverlayView?
     private var cropBackdrop: CropBackdropView?
     private var cropLens: CropLensView?
     private var cropScrollObserver: NSObjectProtocol?
     /// Rotations/flips done during this crop session (Cancel undoes them).
     fileprivate var cropImageEdits = 0
-    /// The mode rail's choice. Crop & Resize goes back to the mode before it.
+    /// The mode rail's choice. Crop and Resize go back to the mode before them.
     let editorModel = AnnotateEditorModel()
     fileprivate var modeBeforeCrop: AnnotateMode = .annotate
 
@@ -215,7 +218,7 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         let rail = NSHostingView(rootView: AnnotateModeRail(model: editorModel) { [weak self] mode in self?.setMode(mode) })
         rail.sizingOptions = []
         rail.translatesAutoresizingMaskIntoConstraints = false
-        let sidebar = NSHostingView(rootView: AnnotateSidebar(model: editorModel, doc: doc, crop: { [weak self] in self?.crop },
+        let sidebar = NSHostingView(rootView: AnnotateSidebar(model: editorModel, doc: doc, crop: { [weak self] in self?.crop }, resize: { [weak self] in self?.resize },
                                                               actions: sidebarActions))
         sidebar.sizingOptions = []
         sidebar.translatesAutoresizingMaskIntoConstraints = false
@@ -319,16 +322,18 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     // MARK: Modes
 
-    /// The mode rail: Annotate, Background, Add Image or Crop & Resize. Another mode while cropping cancels the crop.
+    /// The mode rail: Annotate, Background, Add Image, Crop or Resize. Another mode while cropping or resizing
+    /// cancels that first.
     func setMode(_ mode: AnnotateMode) {
         let current = editorModel.mode
-        if current == .crop {
-            guard mode != .crop else { return }
-            modeBeforeCrop = mode
-            cancelCrop()
+        if current == .crop || current == .resize {
+            guard mode != current else { return }
+            if current == .crop { cancelCrop() } else { cancelResize() }
+            if editorModel.mode != mode { setMode(mode) }
             return
         }
         if mode == .crop { beginCrop(); return }
+        if mode == .resize { beginResize(); return }
         editorModel.mode = mode
         // The tools work in Annotate mode only.
         doc.toolsResting = mode != .annotate
@@ -404,8 +409,8 @@ final class AnnotateWindowController: NSWindowController, NSWindowDelegate, NSMe
         case "close": window?.performClose(nil)
         case "crop": cropTapped()
         case "background": backgroundTapped()
-        case "applyCrop": applyCrop()
-        case "cancelCrop": cancelCrop()
+        case "applyCrop": if resize != nil { applyResize() } else { applyCrop() }
+        case "cancelCrop": if resize != nil { cancelResize() } else { cancelCrop() }
         case "zoom100": setZoom(1)
         case "zoomFit": zoomToFit()
         case "zoomIn": zoom(by: 1.25)
@@ -814,7 +819,9 @@ extension AnnotateWindowController {
             rotate: { [weak self] in self?.transformCropImage(rotate: true) },
             flip: { [weak self] in self?.transformCropImage(rotate: false) },
             cancelCrop: { [weak self] in self?.cancelCrop() },
-            applyCrop: { [weak self] in self?.applyCrop() }
+            applyCrop: { [weak self] in self?.applyCrop() },
+            cancelResize: { [weak self] in self?.cancelResize() },
+            applyResize: { [weak self] in self?.applyResize() }
         )
     }
 
@@ -846,10 +853,10 @@ extension SwatchImage {
     }
 }
 
-// MARK: - Crop & Resize mode
+// MARK: - Crop and Resize modes
 
 extension AnnotateWindowController {
-    /// Crop & Resize: the sidebar shows its settings, the tools rest; Cancel, Crop or another mode ends it.
+    /// Crop: the sidebar shows its settings, the tools rest; Cancel, Crop or another mode ends it.
     func beginCrop() {
         guard window != nil, !doc.isCropping else { return }
         canvas.endTextEditing()
@@ -933,6 +940,43 @@ extension AnnotateWindowController {
     private func hideCropLens() {
         guard let lens = cropLens else { return }
         NSAnimationContext.runAnimationGroup { $0.duration = 0.15; lens.animator().alphaValue = 0 }
+    }
+
+    // MARK: Resize
+
+    /// Resize mode: the tools rest, the sidebar shows the size; Cancel, Resize or another mode ends it.
+    func beginResize() {
+        guard window != nil, !doc.isCropping, resize == nil else { return }
+        canvas.endTextEditing()
+        doc.selectedID = nil
+        let state = CropState(imageSize: doc.imageSize)
+        state.pixelScale = doc.scale
+        state.fill = .transparent  // the whole image: nothing to fill (and transparent captures stay so)
+        resize = state
+        modeBeforeResize = editorModel.mode
+        doc.isResizing = true
+        doc.toolsResting = true
+        doc.isBackgroundPanelOpen = false
+        editorModel.mode = .resize
+        window?.makeFirstResponder(canvas)
+    }
+
+    func cancelResize() { endResize(apply: false) }
+    func applyResize() { endResize(apply: true) }
+
+    private func endResize(apply: Bool) {
+        guard let state = resize else { return }
+        if apply, state.outputPixels != CGSize(width: (state.rect.width * state.pixelScale).rounded(), height: (state.rect.height * state.pixelScale).rounded()),
+           let flat = doc.flattened(), let result = state.render(flat, scale: doc.scale) {
+            doc.replaceImage(result, name: "Resize")
+        }
+        resize = nil
+        doc.isResizing = false
+        editorModel.mode = modeBeforeResize
+        doc.isBackgroundPanelOpen = modeBeforeResize == .background
+        doc.toolsResting = modeBeforeResize != .annotate
+        window?.makeFirstResponder(canvas)
+        DispatchQueue.main.async { self.zoomToFit() }
     }
 
     func cancelCrop() { endCrop(apply: false) }
@@ -1164,8 +1208,8 @@ struct AnnotateHeadButtons: View {
     var body: some View {
         HStack(spacing: 8) {
             HeadShareButton(help: "Share", action: share)
-                .disabled(doc.isCropping)
-                .opacity(doc.isCropping ? 0.45 : 1)
+                .disabled(doc.isCropping || doc.isResizing)
+                .opacity(doc.isCropping || doc.isResizing ? 0.45 : 1)
             CropAwareBarButton(doc: doc, title: "Save as...", tip: "Save as... Choose export location and file name", prominent: false, action: saveAs)
             CropAwareBarButton(doc: doc, title: "Done", tip: "Finish editing and show it in Quick Access", prominent: true, action: done)
         }
@@ -1184,8 +1228,9 @@ struct CropAwareBarButton: View {
     var body: some View {
         Button(title, action: action)
             .buttonStyle(BarTextButtonStyle(prominent: prominent))
-            .help(doc.isCropping ? "Finish Crop & Resize first (Crop or Cancel in the sidebar)" : tip)
-            .disabled(doc.isCropping)
-            .opacity(doc.isCropping ? 0.45 : 1)
+            .help(doc.isCropping ? "Finish Crop first (Crop or Cancel in the sidebar)"
+                  : doc.isResizing ? "Finish Resize first (Resize or Cancel in the sidebar)" : tip)
+            .disabled(doc.isCropping || doc.isResizing)
+            .opacity(doc.isCropping || doc.isResizing ? 0.45 : 1)
     }
 }

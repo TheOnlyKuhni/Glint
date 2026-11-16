@@ -105,8 +105,8 @@ Everything Glint does, in short. The [feature tour](#feature-tour) shows six of 
   spotlight, a magnifier for enlarged callouts, a hand-drawn look for shapes, and added images.
 - **Backgrounds:** gradients, your wallpaper or any image, padding, inset, shadow, rounded corners, alignment,
   aspect ratios and presets.
-- **Crop & Resize:** ratios, exact sizes, rotate and flip, output size, and a zoom lens for placing handles to the
-  pixel. Saved edits stay editable.
+- **Crop and Resize:** crop with ratios, rotate and flip, and a zoom lens for placing handles to the pixel; resize
+  the whole screenshot in pixels or percent, keeping its proportions or not. Saved edits stay editable.
 - **Record:** screen or window as video or GIF, with microphone and system audio, camera overlay, highlighted clicks
   and keystrokes, and Do Not Disturb while recording.
 - **Video editor:** trim and cut, zooms, captions from your speech (transcribed on your Mac, as phrases or word by
