@@ -555,7 +555,9 @@ private struct AnimationInspector: View {
     private static let blurNames = ["Off", "Low", "Medium", "High"]
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            InspectorHeader("Motion Blur", value: Self.blurNames[project.motionBlur])
+            // Titled like the other sections.
+            InspectorHeader("Animation")
+            InspectorHeader("Motion Blur", value: Self.blurNames[project.motionBlur]).padding(.top, 8)
             StepSlider(value: Binding(get: { Double(project.motionBlur) }, set: { project.motionBlur = Int($0.rounded()) }),
                        range: 0...3, step: 1, ticks: 4)
                 .help("How much the picture blurs while a zoom moves")
@@ -581,11 +583,26 @@ private struct ZoomInspector: View {
         change(&project.zooms[i])
     }
 
+    /// "0:03.0 – 0:05.0"
+    private var span: String {
+        func stamp(_ t: Double) -> String {
+            let tenths = Int((t * 10).rounded())
+            return String(format: "%d:%02d.%d", tenths / 600, tenths / 10 % 60, tenths % 10)
+        }
+        return "\(stamp(zoom.start)) – \(stamp(zoom.end))"
+    }
+
+    private var divider: some View { Divider().overlay(W.line).padding(.vertical, 6) }
+
+    /// Laid out like a camera action: what it is and how long, its level, where it looks, then the shared settings.
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            InspectorHeader("Zoom", value: span)
             LengthPicker(length: zoom.end - zoom.start) { project.setLength(zoom: zoom.id, $0) }
+                .padding(.top, 8)
+            divider
             let level = Binding(get: { zoom.scale }, set: { v in edit { $0.scale = v } })
-            InspectorHeader("Zoom level", percent: level, range: 1...4).padding(.top, 14)
+            InspectorHeader("Zoom level", percent: level, range: 1...4)
             StepSlider(value: level, range: 1.0...4.0, step: 0.05, ticks: 7)
                 .help("How far this zoom magnifies (100–400%)")
             Button { let s = zoom.scale; for i in project.zooms.indices { project.zooms[i].scale = s } } label: {
@@ -594,7 +611,8 @@ private struct ZoomInspector: View {
             }
             .buttonStyle(HoverButtonStyle())
             .help("Give every zoom this zoom level")
-            InspectorHeader("Zoom mode").padding(.top, 14)
+            divider
+            InspectorHeader("Zoom mode")
             // Following the cursor needs the pointer positions a Studio Mode recording keeps.
             ChoiceButtons(titles: ["Follow Cursor", "Manual"], selected: zoom.follow && project.isStudio ? 0 : 1,
                           disabled: project.isStudio ? [] : [0],
@@ -610,7 +628,8 @@ private struct ZoomInspector: View {
                 .padding(.top, 4)
                 .help("Drag the dot to choose where the zoom looks")
             }
-            InspectorHeader("Animation").padding(.top, 14)
+            divider
+            // Like a camera action's "Default Camera Settings": the settings every zoom shares.
             Button {
                 state.selectedZoom = nil
                 state.section = .animation

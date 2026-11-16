@@ -103,7 +103,7 @@ struct CaptionsInspector: View {
             let firstTime = project.edit.captions.isEmpty
             generator.generate(project: project, language: language, microphoneOnly: microphoneOnly) { captions in
                 var next = project.edit
-                next.captions = captions
+                next.captions = Caption.separated(captions)
                 if firstTime { next.captionStyle = .standard; next.showCaptions = true }
                 project.edit = next
             }
@@ -133,7 +133,12 @@ struct CaptionsInspector: View {
             let t = project.locate(state.time)?.source ?? 0
             var next = project.edit
             if next.captions.isEmpty { next.captionStyle = .standard; next.showCaptions = true }
-            let caption = Caption(words: Caption.spread(["New", "caption"], from: t, to: min(t + 2, project.sourceDuration)))
+            // Into the free time at the playhead (after a caption that's showing there), up to two seconds.
+            let start = next.captions.first { t >= $0.start && t < $0.end }?.end ?? t
+            let following = next.captions.map(\.start).filter { $0 >= start }.min() ?? project.sourceDuration
+            let end = min(start + 2, following, project.sourceDuration)
+            guard end - start >= 0.3 else { NSSound.beep(); return }
+            let caption = Caption(words: Caption.spread(["New", "caption"], from: start, to: end))
             next.captions.append(caption)
             next.captions.sort { $0.start < $1.start }
             project.edit = next
@@ -144,7 +149,7 @@ struct CaptionsInspector: View {
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(W.box))
         }
         .buttonStyle(HoverButtonStyle())
-        .help("A two-second caption at the playhead")
+        .help("A caption of up to two seconds at the playhead, in the free time there")
     }
 
     // MARK: Look
@@ -409,8 +414,8 @@ private struct CaptionRow: View {
     }
 
     private func resetTiming() {
-        guard let i = index, let m = caption.matched, m.count == 2 else { return }
-        project.edit.captions[i].retime(start: m[0], end: m[1])
+        guard let i = index else { return }
+        project.edit.captions[i].resetTiming(among: project.edit.captions, duration: project.sourceDuration)
     }
 
     private func delete() {

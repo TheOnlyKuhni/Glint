@@ -48,6 +48,42 @@ struct Caption: Hashable, Identifiable, Codable, Sendable {
         }
     }
 
+    // MARK: No overlaps
+
+    // Captions never overlap: during an overlap only the earlier one showed, the other was simply hidden.
+
+    /// The free time around `caption` (source seconds): from where the one before it ends to where the one after it
+    /// starts (never narrower than the caption itself, should old edits overlap).
+    static func room(around caption: Caption, in captions: [Caption], duration: Double) -> (floor: Double, ceiling: Double) {
+        let others = captions.filter { $0.id != caption.id }
+        let floor = others.filter { $0.start < caption.start }.map(\.end).max() ?? 0
+        let ceiling = others.filter { $0.start >= caption.start }.map(\.start).min() ?? duration
+        return (min(floor, caption.start), max(ceiling, caption.end))
+    }
+
+    /// In order, with none overlapping: one that runs into the next ends where the next starts.
+    static func separated(_ captions: [Caption]) -> [Caption] {
+        var out = captions.sorted { $0.start < $1.start }
+        for i in out.indices.dropLast() where out[i].end > out[i + 1].start {
+            out[i].retime(start: out[i].start, end: max(out[i + 1].start, out[i].start + 0.1))
+            // Both start at almost the same moment: the next one moves along.
+            if out[i].end > out[i + 1].start {
+                let length = out[i + 1].end - out[i + 1].start
+                out[i + 1].retime(start: out[i].end, end: out[i].end + length)
+            }
+        }
+        return out
+    }
+
+    /// Back to where its words were said, within the room between its neighbors.
+    mutating func resetTiming(among captions: [Caption], duration: Double) {
+        guard let m = matched, m.count == 2 else { return }
+        let room = Self.room(around: self, in: captions, duration: duration)
+        let start = max(m[0], room.floor), end = min(m[1], room.ceiling)
+        guard end - start >= 0.1 else { NSSound.beep(); return }
+        retime(start: start, end: end)
+    }
+
     static func spread(_ tokens: [String], from start: Double, to end: Double) -> [CaptionWord] {
         let step = (end - start) / Double(max(tokens.count, 1))
         return tokens.enumerated().map { i, t in CaptionWord(text: t, start: start + Double(i) * step, end: start + Double(i + 1) * step) }

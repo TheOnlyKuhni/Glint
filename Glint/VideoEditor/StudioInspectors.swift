@@ -146,7 +146,7 @@ struct CameraInspector: View {
         VStack(alignment: .leading, spacing: 10) {
             InspectorHeader("Camera")
             if project.hasCamera {
-                InfoBox { Text("The default camera. Camera actions on the timeline go full size, resize or hide it for a while.") }
+                InfoBox { Text("The default camera. Camera actions on the timeline change it for a while: full size, resized, split or hidden.") }
             }
             if !project.hasCamera {
                 InfoBox { Text("Camera recording was disabled for this recording.") }

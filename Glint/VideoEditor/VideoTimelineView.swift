@@ -597,6 +597,7 @@ final class VideoTimelineView: NSView {
             NSBezierPath(rect: r.insetBy(dx: 6, dy: 0)).addClip()
             (c.text as NSString).draw(at: CGPoint(x: r.minX + 7, y: r.midY - 7), withAttributes: Self.captionFont)
             NSGraphicsContext.restoreGraphicsState()
+            drawCaptionGrips(c.id, in: r)
         }
     }
 
@@ -858,6 +859,23 @@ final class VideoTimelineView: NSView {
                 draw(icon, centeredIn: CGRect(x: r.midX - 6.5, y: r.minY, width: 13, height: r.height))
             }
             drawGrips(lane, span.id, in: r)
+        }
+    }
+
+    /// Like the zooms' and camera actions' grips: while a caption is hovered at an end or resized, white lines just
+    /// inside both ends; the end the pointer would grab is the bright, wider one.
+    private func drawCaptionGrips(_ id: UUID, in r: CGRect) {
+        var active: Bool?
+        if case .resizeCaption(let captionID, let leading) = drag, captionID == id { active = leading }
+        else if drag == nil, let hover = hoverCaptionEdge, hover.id == id, let edge = hover.edge { active = edge }
+        else { return }
+        guard r.width > 16 else { return }
+        for leading in [true, false] {
+            let grabbed = active == leading
+            let w: CGFloat = grabbed ? 3 : 2
+            let x = leading ? r.minX + 4 : r.maxX - 4 - w
+            NSColor(white: 1, alpha: grabbed ? 1 : 0.55).setFill()
+            NSBezierPath(roundedRect: CGRect(x: x, y: r.minY + 5, width: w, height: r.height - 10), xRadius: w / 2, yRadius: w / 2).fill()
         }
     }
 
@@ -1239,6 +1257,8 @@ final class VideoTimelineView: NSView {
     private var hoverGhost: (lane: Lane, start: Double, end: Double)?
     /// The zoom or camera action under the pointer and the end it would grab (its resize lines show).
     private var hoverSpanEdge: (lane: Lane, id: UUID, edge: Bool?)?
+    /// The caption under the pointer and the end it's near (nil = its middle).
+    private var hoverCaptionEdge: (id: UUID, edge: Bool?)?
     /// The cut tool: where a click would split, and the stretch a drag would cut out.
     private var hoverCut: Double?
     private var cutPreview: (Double, Double)?
@@ -1297,6 +1317,8 @@ final class VideoTimelineView: NSView {
         if ghost?.lane != hoverGhost?.lane || ghost?.start != hoverGhost?.start || ghost?.end != hoverGhost?.end { hoverGhost = ghost; needsDisplay = true }
         let over = spanHit(p).map { (lane: $0.lane, id: $0.span.id, edge: $0.edge) }
         if over?.lane != hoverSpanEdge?.lane || over?.id != hoverSpanEdge?.id || over?.edge != hoverSpanEdge?.edge { hoverSpanEdge = over; needsDisplay = true }
+        let caption = captionHit(p).map { (id: $0.caption.id, edge: $0.edge) }
+        if caption?.id != hoverCaptionEdge?.id || caption?.edge != hoverCaptionEdge?.edge { hoverCaptionEdge = caption; needsDisplay = true }
         let cut = scissorsTime(at: p)
         if cut != hoverCut { hoverCut = cut; needsDisplay = true }
         setHoveredItem(item(at: p))
@@ -1306,8 +1328,8 @@ final class VideoTimelineView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hoverEdge != nil || hoverGhost != nil || hoverCut != nil || hoverSpanEdge != nil {
-            hoverEdge = nil; hoverGhost = nil; hoverCut = nil; hoverSpanEdge = nil; needsDisplay = true
+        if hoverEdge != nil || hoverGhost != nil || hoverCut != nil || hoverSpanEdge != nil || hoverCaptionEdge != nil {
+            hoverEdge = nil; hoverGhost = nil; hoverCut = nil; hoverSpanEdge = nil; hoverCaptionEdge = nil; needsDisplay = true
         }
         setHoveredItem(nil)
         onHoverFrame?(nil)
@@ -1484,15 +1506,18 @@ final class VideoTimelineView: NSView {
             cutPreview = (min(start, t), max(start, t))
             hoverCut = t
         case .moveCaption(let id, let grab, let original):
+            // It stops at its neighbors (captions never overlap).
             guard let i = project.edit.captions.firstIndex(where: { $0.id == id }) else { return }
             let length = original.end - original.start
-            let start = min(max(original.start + (t - grab), 0), max(project.sourceDuration - length, 0))
+            let room = Caption.room(around: original, in: project.edit.captions, duration: project.sourceDuration)
+            let start = min(max(original.start + (t - grab), room.floor), max(room.ceiling - length, room.floor))
             project.edit.captions[i].retime(start: start, end: start + length)
         case .resizeCaption(let id, let leading):
             guard let i = project.edit.captions.firstIndex(where: { $0.id == id }), let source = project.locate(t)?.source else { return }
             let c = project.edit.captions[i]
-            if leading { project.edit.captions[i].retime(start: min(source, c.end - 0.2), end: c.end) }
-            else { project.edit.captions[i].retime(start: c.start, end: max(source, c.start + 0.2)) }
+            let room = Caption.room(around: c, in: project.edit.captions, duration: project.sourceDuration)
+            if leading { project.edit.captions[i].retime(start: min(max(source, room.floor), c.end - 0.2), end: c.end) }
+            else { project.edit.captions[i].retime(start: c.start, end: max(min(source, room.ceiling), c.start + 0.2)) }
         case nil:
             return
         }
@@ -1553,9 +1578,8 @@ final class VideoTimelineView: NSView {
             let id = hit.caption.id
             state.selectedCaption = id
             let back = ClosureMenuItem(title: "Back to Where It Was Said") { [weak self] in
-                guard let self, let i = self.project.edit.captions.firstIndex(where: { $0.id == id }),
-                      let m = self.project.edit.captions[i].matched, m.count == 2 else { return }
-                self.project.edit.captions[i].retime(start: m[0], end: m[1])
+                guard let self, let i = self.project.edit.captions.firstIndex(where: { $0.id == id }) else { return }
+                self.project.edit.captions[i].resetTiming(among: self.project.edit.captions, duration: self.project.sourceDuration)
             }
             back.isEnabled = hit.caption.matched != nil
             menu.autoenablesItems = false
